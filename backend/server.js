@@ -4,17 +4,12 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const cors = require('cors')
 const dotenv = require('dotenv')
-const dns = require('dns')
 const multer = require('multer')
 const sharp = require('sharp')
 const crypto = require('crypto')
 const nodemailer = require('nodemailer')
 
 dotenv.config()
-
-if (typeof dns.setDefaultResultOrder === 'function') {
-  dns.setDefaultResultOrder('ipv4first')
-}
 
 const app = express()
 const upload = multer({
@@ -123,51 +118,33 @@ const signupOtpStore = new Map()
 const forgotPasswordOtpStore = new Map()
 const passwordResetTokenStore = new Map()
 
-const EMAIL_HOST = process.env.EMAIL_HOST || 'smtp.gmail.com'
-const EMAIL_PORT = Number(process.env.EMAIL_PORT || 587)
-const EMAIL_SECURE = String(process.env.EMAIL_SECURE ?? 'false') === 'true'
-const EMAIL_USER = process.env.EMAIL_USER
-const EMAIL_PASS = process.env.EMAIL_PASS
+const EMAIL_USER = process.env.EMAIL || process.env.EMAIL_USER
+const EMAIL_PASS = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS
 const EMAIL_FROM = process.env.EMAIL_FROM || `"Innovative Science 2" <${EMAIL_USER}>`
-let mailTransporterPromise = null
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  family: 4, // Force IPv4 for Render and IPv6-related SMTP issues
+  connectionTimeout: 30000,
+  greetingTimeout: 30000,
+  socketTimeout: 30000,
+  auth: {
+    user: EMAIL_USER,
+    pass: EMAIL_PASS,
+  },
+})
 
-const resolveEmailHost = async (hostname) => {
-  try {
-    const ipv4Addresses = await dns.promises.resolve4(hostname)
-    return ipv4Addresses[0] || hostname
-  } catch (error) {
-    return hostname
-  }
-}
-
-const getMailTransporter = async () => {
-  if (!mailTransporterPromise) {
-    mailTransporterPromise = (async () => {
-      const resolvedHost = await resolveEmailHost(EMAIL_HOST)
-
-      return nodemailer.createTransport({
-        host: resolvedHost,
-        port: EMAIL_PORT,
-        secure: EMAIL_SECURE,
-        family: 4,
-        tls: {
-          servername: EMAIL_HOST,
-        },
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        socketTimeout: 20000,
-        auth: {
-          user: EMAIL_USER,
-          pass: EMAIL_PASS,
-        },
-      })
-    })().catch((error) => {
-      mailTransporterPromise = null
-      throw error
-    })
-  }
-
-  return mailTransporterPromise
+if (EMAIL_USER && EMAIL_PASS) {
+  transporter.verify((err) => {
+    if (err) {
+      console.error('SMTP Error:', err)
+    } else {
+      console.log('SMTP Connected')
+    }
+  })
+} else {
+  console.warn('SMTP credentials are not configured. Add EMAIL and EMAIL_PASSWORD in Render.')
 }
 
 const normalizeEmail = (email = '') => email.toLowerCase().trim()
@@ -175,7 +152,7 @@ const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 const createOtp = () => crypto.randomInt(100000, 1000000).toString()
 const createResetToken = () => crypto.randomBytes(32).toString('hex')
 
-const hasEmailConfig = () => Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS)
+const hasEmailConfig = () => Boolean(EMAIL_USER && EMAIL_PASS)
 
 const storeOtp = (store, email, payload = {}) => {
   store.set(email, {
@@ -215,10 +192,8 @@ const verifyStoredOtp = (store, email, otp) => {
 
 const sendEmail = async ({ to, subject, text, html }) => {
   if (!hasEmailConfig()) {
-    throw new Error('Email is not configured. Add EMAIL_USER and EMAIL_PASS in backend/.env.')
+    throw new Error('Email is not configured. Add EMAIL and EMAIL_PASSWORD in backend/.env or Render env vars.')
   }
-
-  const transporter = await getMailTransporter()
 
   await transporter.sendMail({
     from: EMAIL_FROM,
@@ -1554,6 +1529,8 @@ app.post('/api/auth/signup/send-otp', async (req, res) => {
       message: 'OTP sent successfully. Please check your inbox and Spam folder.',
     })
   } catch (error) {
+    console.error('SIGNUP OTP ERROR:', error)
+
     res.status(500).json({ message: error.message || 'Could not send signup OTP.' })
   }
 })
@@ -1658,6 +1635,8 @@ app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
       message: 'OTP sent successfully. Please check your inbox and Spam folder.',
     })
   } catch (error) {
+    console.error('FORGOT PASSWORD OTP ERROR:', error)
+
     res.status(500).json({ message: error.message || 'Could not send password reset OTP.' })
   }
 })
