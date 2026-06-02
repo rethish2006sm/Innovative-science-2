@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const cors = require('cors')
 const dotenv = require('dotenv')
+const dns = require('dns')
 const multer = require('multer')
 const sharp = require('sharp')
 const crypto = require('crypto')
@@ -129,6 +130,9 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 30000,
   greetingTimeout: 30000,
   socketTimeout: 30000,
+  lookup(hostname, options, callback) {
+    return dns.lookup(hostname, { family: 4 }, callback)
+  },
   auth: {
     user: EMAIL_USER,
     pass: EMAIL_PASS,
@@ -195,13 +199,22 @@ const sendEmail = async ({ to, subject, text, html }) => {
     throw new Error('Email is not configured. Add EMAIL and EMAIL_PASSWORD in backend/.env or Render env vars.')
   }
 
-  await transporter.sendMail({
+  const mailOptions = {
     from: EMAIL_FROM,
     to,
     subject,
     text,
     html,
-  })
+  }
+
+  try {
+    const info = await transporter.sendMail(mailOptions)
+    console.log('Mail sent:', info.messageId)
+    return info
+  } catch (error) {
+    console.error('sendMail error:', error)
+    throw error
+  }
 }
 
 const sendOtpEmail = async ({ email, otp, purpose }) => {
