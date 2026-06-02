@@ -40,15 +40,30 @@ const MAX_OTP_ATTEMPTS = 5
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-lite'
 const MAX_COMPLETION_TOKENS = Number(process.env.MAX_COMPLETION_TOKENS || 1800)
 const allowedOrigins = [
-  process.env.CLIENT_URL || 'http://localhost:5173',
+  ...(process.env.CLIENT_URL || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ]
 
+const isAllowedOrigin = (origin) => {
+  if (!origin) {
+    return true
+  }
+
+  if (allowedOrigins.includes(origin)) {
+    return true
+  }
+
+  return /^https:\/\/[^/]+\.onrender\.com$/i.test(origin)
+}
+
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true)
         return
       }
@@ -113,6 +128,9 @@ const mailTransporter = nodemailer.createTransport({
   port: Number(process.env.EMAIL_PORT || 465),
   secure: String(process.env.EMAIL_SECURE ?? 'true') !== 'false',
   family: 4,
+  lookup(hostname, options, callback) {
+    return dns.lookup(hostname, { ...options, family: 4 }, callback)
+  },
   connectionTimeout: 15000,
   greetingTimeout: 15000,
   socketTimeout: 20000,

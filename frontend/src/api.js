@@ -1,6 +1,22 @@
 import { clearAuth, getStoredAuth } from './authStorage'
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const normalizeBaseUrl = (value) => String(value || '').replace(/\/$/, '')
+
+const resolveApiBaseUrl = () => {
+  const configured = normalizeBaseUrl(import.meta.env.VITE_API_URL)
+
+  if (configured) {
+    return configured
+  }
+
+  if (import.meta.env.PROD && typeof window !== 'undefined') {
+    return window.location.origin
+  }
+
+  return 'http://localhost:5000'
+}
+
+export const API_BASE_URL = resolveApiBaseUrl()
 
 export const assetUrl = (path) => {
   if (!path) {
