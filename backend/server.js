@@ -124,8 +124,8 @@ const forgotPasswordOtpStore = new Map()
 const passwordResetTokenStore = new Map()
 
 const EMAIL_HOST = process.env.EMAIL_HOST || 'smtp.gmail.com'
-const EMAIL_PORT = Number(process.env.EMAIL_PORT || 465)
-const EMAIL_SECURE = String(process.env.EMAIL_SECURE ?? 'true') !== 'false'
+const EMAIL_PORT = Number(process.env.EMAIL_PORT || 587)
+const EMAIL_SECURE = String(process.env.EMAIL_SECURE ?? 'false') === 'true'
 const EMAIL_USER = process.env.EMAIL_USER
 const EMAIL_PASS = process.env.EMAIL_PASS
 const EMAIL_FROM = process.env.EMAIL_FROM || `"Innovative Science 2" <${EMAIL_USER}>`
