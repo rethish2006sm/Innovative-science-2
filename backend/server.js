@@ -123,22 +123,52 @@ const signupOtpStore = new Map()
 const forgotPasswordOtpStore = new Map()
 const passwordResetTokenStore = new Map()
 
-const mailTransporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  port: Number(process.env.EMAIL_PORT || 465),
-  secure: String(process.env.EMAIL_SECURE ?? 'true') !== 'false',
-  family: 4,
-  lookup(hostname, options, callback) {
-    return dns.lookup(hostname, { ...options, family: 4 }, callback)
-  },
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-})
+const EMAIL_HOST = process.env.EMAIL_HOST || 'smtp.gmail.com'
+const EMAIL_PORT = Number(process.env.EMAIL_PORT || 465)
+const EMAIL_SECURE = String(process.env.EMAIL_SECURE ?? 'true') !== 'false'
+const EMAIL_USER = process.env.EMAIL_USER
+const EMAIL_PASS = process.env.EMAIL_PASS
+const EMAIL_FROM = process.env.EMAIL_FROM || `"Innovative Science 2" <${EMAIL_USER}>`
+let mailTransporterPromise = null
+
+const resolveEmailHost = async (hostname) => {
+  try {
+    const ipv4Addresses = await dns.promises.resolve4(hostname)
+    return ipv4Addresses[0] || hostname
+  } catch (error) {
+    return hostname
+  }
+}
+
+const getMailTransporter = async () => {
+  if (!mailTransporterPromise) {
+    mailTransporterPromise = (async () => {
+      const resolvedHost = await resolveEmailHost(EMAIL_HOST)
+
+      return nodemailer.createTransport({
+        host: resolvedHost,
+        port: EMAIL_PORT,
+        secure: EMAIL_SECURE,
+        family: 4,
+        tls: {
+          servername: EMAIL_HOST,
+        },
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 20000,
+        auth: {
+          user: EMAIL_USER,
+          pass: EMAIL_PASS,
+        },
+      })
+    })().catch((error) => {
+      mailTransporterPromise = null
+      throw error
+    })
+  }
+
+  return mailTransporterPromise
+}
 
 const normalizeEmail = (email = '') => email.toLowerCase().trim()
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
@@ -188,8 +218,10 @@ const sendEmail = async ({ to, subject, text, html }) => {
     throw new Error('Email is not configured. Add EMAIL_USER and EMAIL_PASS in backend/.env.')
   }
 
-  await mailTransporter.sendMail({
-    from: `"Innovative Science 2" <${process.env.EMAIL_USER}>`,
+  const transporter = await getMailTransporter()
+
+  await transporter.sendMail({
+    from: EMAIL_FROM,
     to,
     subject,
     text,

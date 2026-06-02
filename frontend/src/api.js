@@ -10,7 +10,7 @@ const resolveApiBaseUrl = () => {
   }
 
   if (import.meta.env.PROD && typeof window !== 'undefined') {
-    return window.location.origin
+    return 'https://innovative-science-2-backend.onrender.com'
   }
 
   return 'http://localhost:5000'
