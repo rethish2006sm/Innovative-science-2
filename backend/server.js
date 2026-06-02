@@ -4,12 +4,17 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const cors = require('cors')
 const dotenv = require('dotenv')
+const dns = require('dns')
 const multer = require('multer')
 const sharp = require('sharp')
 const crypto = require('crypto')
 const nodemailer = require('nodemailer')
 
 dotenv.config()
+
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first')
+}
 
 const app = express()
 const upload = multer({
@@ -104,7 +109,13 @@ const forgotPasswordOtpStore = new Map()
 const passwordResetTokenStore = new Map()
 
 const mailTransporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+  port: Number(process.env.EMAIL_PORT || 465),
+  secure: String(process.env.EMAIL_SECURE ?? 'true') !== 'false',
+  family: 4,
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 20000,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
