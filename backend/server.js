@@ -4,11 +4,8 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const cors = require('cors')
 const dotenv = require('dotenv')
-const dns = require('dns')
 const multer = require('multer')
 const sharp = require('sharp')
-const crypto = require('crypto')
-const nodemailer = require('nodemailer')
 
 dotenv.config()
 
@@ -31,8 +28,6 @@ const ADMIN_EMAIL = 'rethish.2006sm@gmail.com'
 const ADMIN_PASSWORD = '1234567'
 const PYQ_FIXED_TITLE = 'Class 10 Science 2'
 const PYQ_FIXED_SUBJECT = 'Science 2'
-const OTP_TTL_MS = 10 * 60 * 1000
-const MAX_OTP_ATTEMPTS = 5
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-lite'
 const MAX_COMPLETION_TOKENS = Number(process.env.MAX_COMPLETION_TOKENS || 1800)
 const allowedOrigins = [
@@ -91,9 +86,13 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    password: {
+      type: String,
+      default: '',
+    },
     passwordHash: {
       type: String,
-      required: true,
+      default: '',
     },
     profileImage: {
       data: Buffer,
@@ -115,175 +114,22 @@ const userSchema = new mongoose.Schema(
 
 const User = mongoose.model('User', userSchema)
 
-const signupOtpStore = new Map()
-const forgotPasswordOtpStore = new Map()
-const passwordResetTokenStore = new Map()
-
-const EMAIL_USER = process.env.EMAIL || process.env.EMAIL_USER
-const EMAIL_PASS = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS
-const EMAIL_FROM = process.env.EMAIL_FROM || `"Innovative Science 2" <${EMAIL_USER}>`
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
-  family: 4, // Force IPv4 for Render and IPv6-related SMTP issues
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
-  lookup(hostname, options, callback) {
-    return dns.lookup(hostname, { family: 4 }, callback)
-  },
-  auth: {
-    user: EMAIL_USER,
-    pass: EMAIL_PASS,
-  },
-})
-
-if (EMAIL_USER && EMAIL_PASS) {
-  transporter.verify((err) => {
-    if (err) {
-      console.error('SMTP Error:', err)
-    } else {
-      console.log('SMTP Connected')
-    }
-  })
-} else {
-  console.warn('SMTP credentials are not configured. Add EMAIL and EMAIL_PASSWORD in Render.')
-}
-
 const normalizeEmail = (email = '') => email.toLowerCase().trim()
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-const createOtp = () => crypto.randomInt(100000, 1000000).toString()
-const createResetToken = () => crypto.randomBytes(32).toString('hex')
+const getStoredPassword = (user) => String(user?.password || user?.passwordHash || '')
+const passwordMatches = async (plainPassword, user) => {
+  const storedPassword = getStoredPassword(user)
 
-const hasEmailConfig = () => Boolean(EMAIL_USER && EMAIL_PASS)
+  if (!storedPassword) {
+    return false
+  }
 
-const storeOtp = (store, email, payload = {}) => {
-  store.set(email, {
-    otp: createOtp(),
-    expiresAt: Date.now() + OTP_TTL_MS,
-    attempts: 0,
-    ...payload,
-  })
+  if (storedPassword.startsWith('$2')) {
+    return bcrypt.compare(String(plainPassword || ''), storedPassword)
+  }
 
-  return store.get(email).otp
+  return storedPassword === String(plainPassword || '')
 }
-
-const verifyStoredOtp = (store, email, otp) => {
-  const record = store.get(email)
-
-  if (!record) {
-    return { ok: false, status: 400, message: 'Please request a new OTP first.' }
-  }
-
-  if (Date.now() > record.expiresAt) {
-    store.delete(email)
-    return { ok: false, status: 400, message: 'OTP expired. Please request a new one.' }
-  }
-
-  if (record.attempts >= MAX_OTP_ATTEMPTS) {
-    store.delete(email)
-    return { ok: false, status: 429, message: 'Too many wrong attempts. Please request a new OTP.' }
-  }
-
-  if (record.otp !== String(otp).trim()) {
-    record.attempts += 1
-    return { ok: false, status: 400, message: 'Invalid OTP.' }
-  }
-
-  return { ok: true, record }
-}
-
-const sendEmail = async ({ to, subject, text, html }) => {
-  if (!hasEmailConfig()) {
-    throw new Error('Email is not configured. Add EMAIL and EMAIL_PASSWORD in backend/.env or Render env vars.')
-  }
-
-  const mailOptions = {
-    from: EMAIL_FROM,
-    to,
-    subject,
-    text,
-    html,
-  }
-
-  try {
-    const info = await transporter.sendMail(mailOptions)
-    console.log('Mail sent:', info.messageId)
-    return info
-  } catch (error) {
-    console.error('sendMail error:', error)
-    throw error
-  }
-}
-
-const sendOtpEmail = async ({ email, otp, purpose }) => {
-  const isSignup = purpose === 'signup'
-  const title = isSignup ? 'Verify your account' : 'Reset your password'
-  const preheader = isSignup
-    ? 'Use this secure OTP to complete your Innovative Science 2 signup.'
-    : 'Use this secure OTP to reset your Innovative Science 2 password.'
-  const action = isSignup ? 'complete your signup' : 'reset your password'
-  const signature = 'Rethish Sir'
-  const otpDigits = String(otp)
-    .split('')
-    .map((digit) => `
-      <span style="display:inline-block;width:38px;height:46px;line-height:46px;margin:0 3px;border-radius:10px;background:#ffffff;color:#0f172a;font-size:24px;font-weight:800;text-align:center;box-shadow:0 10px 24px rgba(15,23,42,0.14);border:1px solid #dbeafe">${digit}</span>
-    `)
-    .join('')
-
-  await sendEmail({
-    to: email,
-    subject: `Innovative Science 2 secure OTP: ${otp}`,
-    text: `Dear student, your Innovative Science 2 OTP is ${otp}. Use it within 10 minutes to ${action}. This secure message is from ${signature}. If you cannot find this email, please check your Spam folder.`,
-    html: `
-      <div style="margin:0;padding:0;background:#eef2ff;font-family:Arial,Helvetica,sans-serif;color:#0f172a">
-        <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden">${preheader}</span>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#eef2ff;padding:28px 0">
-          <tr>
-            <td align="center" style="padding:28px 14px">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;border-collapse:separate;border-spacing:0;background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 24px 70px rgba(15,23,42,0.16)">
-                <tr>
-                  <td style="padding:0;background:#111827">
-                    <div style="padding:30px 32px;background:linear-gradient(135deg,#111827 0%,#164e63 54%,#0f766e 100%)">
-                      <div style="display:inline-block;padding:7px 11px;border:1px solid rgba(255,255,255,0.26);border-radius:999px;color:#d1fae5;font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase">Innovative Science 2</div>
-                      <h1 style="margin:18px 0 8px;color:#ffffff;font-size:28px;line-height:1.18;font-weight:800;letter-spacing:0">${title}</h1>
-                      <p style="margin:0;color:#dbeafe;font-size:15px;line-height:1.65">A secure verification code from ${signature} for your learning account.</p>
-                    </div>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:32px">
-                    <p style="margin:0 0 18px;color:#334155;font-size:16px;line-height:1.7">Dear student, use this 6 digit OTP to ${action}.</p>
-                    <div style="margin:24px 0;padding:26px 18px;border-radius:18px;background:linear-gradient(180deg,#f8fafc 0%,#ecfeff 100%);border:1px solid #dbeafe;text-align:center">
-                      <div style="margin:0 0 14px;color:#64748b;font-size:12px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase">Secure OTP</div>
-                      <div style="white-space:nowrap">${otpDigits}</div>
-                    </div>
-                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:24px 0">
-                      <tr>
-                        <td style="padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;color:#334155;font-size:14px;line-height:1.6">
-                          This OTP expires in <strong style="color:#0f172a">10 minutes</strong>. For your security, do not share it with anyone.
-                        </td>
-                      </tr>
-                    </table>
-                    <p style="margin:0;color:#475569;font-size:14px;line-height:1.7">If you cannot find this email later, please check your Spam folder.</p>
-                    <p style="margin:24px 0 0;color:#0f172a;font-size:15px;line-height:1.6">Regards,<br><strong>${signature}</strong><br><span style="color:#64748b">Innovative Science 2</span></p>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:18px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px;line-height:1.6;text-align:center">
-                    This message was sent because an OTP was requested for ${email}.
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </div>
-    `,
-  })
-}
-
 
 const chapterSchema = new mongoose.Schema(
   {
@@ -767,12 +613,50 @@ const PracticeAttempt = mongoose.model('PracticeAttempt', practiceAttemptSchema)
 const Report = mongoose.model('Report', reportSchema)
 const Message = mongoose.model('Message', messageSchema)
 const Pyq = mongoose.model('Pyq', pyqSchema)
+const ContactMessage = mongoose.model(
+  'ContactMessage',
+  new mongoose.Schema(
+    {
+      name: {
+        type: String,
+        required: true,
+        trim: true,
+        maxlength: 120,
+      },
+      email: {
+        type: String,
+        required: true,
+        trim: true,
+        maxlength: 180,
+      },
+      subject: {
+        type: String,
+        trim: true,
+        maxlength: 180,
+        default: '',
+      },
+      message: {
+        type: String,
+        required: true,
+        trim: true,
+        maxlength: 2000,
+      },
+      status: {
+        type: String,
+        enum: ['open', 'seen', 'resolved'],
+        default: 'open',
+      },
+    },
+    { timestamps: true },
+  ),
+)
 
-const publicUser = (user) => ({
+const publicUser = (user, { includePassword = false } = {}) => ({
   id: user._id.toString(),
   name: user.name,
   email: user.email,
   phoneNumber: user.phoneNumber || '',
+  ...(includePassword ? { password: user.password || user.passwordHash || '' } : {}),
   isAdmin: Boolean(user.isAdmin),
   classId: user.classId?._id?.toString?.() || user.classId?.toString?.() || '',
   className: user.classId?.name || '',
@@ -1029,6 +913,7 @@ const buildProgressRowsForUsers = async (users = []) => {
       id: String(user._id),
       name: user.name,
       email: user.email,
+      password: user.password || user.passwordHash || '',
       classId: classDoc?._id ? String(classDoc._id) : String(user.classId || ''),
       className: classDoc?.name || '',
       isAdmin: Boolean(user.isAdmin),
@@ -1505,7 +1390,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' })
 })
 
-app.post('/api/auth/signup/send-otp', async (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   try {
     const { name, email, phoneNumber = '', password } = req.body
     const normalizedEmail = normalizeEmail(email)
@@ -1529,56 +1414,15 @@ app.post('/api/auth/signup/send-otp', async (req, res) => {
       return res.status(409).json({ message: 'An account with this email already exists.' })
     }
 
-    const passwordHash = await bcrypt.hash(password, 12)
-    const otp = storeOtp(signupOtpStore, normalizedEmail, {
-      name: name.trim(),
-      phoneNumber: normalizedPhoneNumber,
-      passwordHash,
-    })
-
-    await sendOtpEmail({ email: normalizedEmail, otp, purpose: 'signup' })
-
-    res.json({
-      message: 'OTP sent successfully. Please check your inbox and Spam folder.',
-    })
-  } catch (error) {
-    console.error('SIGNUP OTP ERROR:', error)
-
-    res.status(500).json({ message: error.message || 'Could not send signup OTP.' })
-  }
-})
-
-app.post('/api/auth/signup/verify-otp', async (req, res) => {
-  try {
-    const { email, otp } = req.body
-    const normalizedEmail = normalizeEmail(email)
-
-    if (!normalizedEmail || !otp) {
-      return res.status(400).json({ message: 'Email and OTP are required.' })
-    }
-
-    const verification = verifyStoredOtp(signupOtpStore, normalizedEmail, otp)
-
-    if (!verification.ok) {
-      return res.status(verification.status).json({ message: verification.message })
-    }
-
-    const existingUser = await User.findOne({ email: normalizedEmail })
-
-    if (existingUser) {
-      signupOtpStore.delete(normalizedEmail)
-      return res.status(409).json({ message: 'An account with this email already exists.' })
-    }
-
     const user = await User.create({
-      name: verification.record.name,
+      name: name.trim(),
       email: normalizedEmail,
-      phoneNumber: verification.record.phoneNumber || '',
-      passwordHash: verification.record.passwordHash,
+      phoneNumber: normalizedPhoneNumber,
+      password: String(password),
+      passwordHash: '',
     })
     await user.populate('classId')
     const token = createToken(user)
-    signupOtpStore.delete(normalizedEmail)
 
     res.status(201).json({
       token,
@@ -1586,25 +1430,26 @@ app.post('/api/auth/signup/verify-otp', async (req, res) => {
       user: publicUser(user),
     })
   } catch (error) {
-    res.status(500).json({ message: 'Could not verify OTP and create account.' })
+    res.status(500).json({ message: error.message || 'Could not create account.' })
   }
 })
 
 app.post('/api/auth/signin', async (req, res) => {
   try {
     const { email, password } = req.body
+    const normalizedEmail = normalizeEmail(email)
 
-    if (!email || !password) {
+    if (!normalizedEmail || !password) {
       return res.status(400).json({ message: 'Email and password are required.' })
     }
 
-    const user = await User.findOne({ email })
+    const user = await User.findOne({ email: normalizedEmail })
 
     if (!user) {
       return res.status(404).json({ message: 'No account found with this email.' })
     }
 
-    const isPasswordCorrect = await bcrypt.compare(password, user.passwordHash)
+    const isPasswordCorrect = await passwordMatches(password, user)
 
     if (!isPasswordCorrect) {
       return res.status(401).json({ message: 'Password is wrong.' })
@@ -1622,109 +1467,28 @@ app.post('/api/auth/signin', async (req, res) => {
   }
 })
 
-app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
-  try {
-    const { email } = req.body
-    const normalizedEmail = normalizeEmail(email)
-
-    if (!normalizedEmail) {
-      return res.status(400).json({ message: 'Email is required.' })
-    }
-
-    if (!isValidEmail(normalizedEmail)) {
-      return res.status(400).json({ message: 'Please enter a valid email address.' })
-    }
-
-    const user = await User.findOne({ email: normalizedEmail })
-
-    if (!user) {
-      return res.status(404).json({ message: 'No account found with this email.' })
-    }
-
-    const otp = storeOtp(forgotPasswordOtpStore, normalizedEmail)
-    await sendOtpEmail({ email: normalizedEmail, otp, purpose: 'forgot-password' })
-
-    res.json({
-      message: 'OTP sent successfully. Please check your inbox and Spam folder.',
-    })
-  } catch (error) {
-    console.error('FORGOT PASSWORD OTP ERROR:', error)
-
-    res.status(500).json({ message: error.message || 'Could not send password reset OTP.' })
-  }
-})
-
-app.post('/api/auth/forgot-password/verify-otp', async (req, res) => {
-  try {
-    const { email, otp } = req.body
-    const normalizedEmail = normalizeEmail(email)
-
-    if (!normalizedEmail || !otp) {
-      return res.status(400).json({ message: 'Email and OTP are required.' })
-    }
-
-    const verification = verifyStoredOtp(forgotPasswordOtpStore, normalizedEmail, otp)
-
-    if (!verification.ok) {
-      return res.status(verification.status).json({ message: verification.message })
-    }
-
-    const user = await User.findOne({ email: normalizedEmail })
-
-    if (!user) {
-      forgotPasswordOtpStore.delete(normalizedEmail)
-      return res.status(404).json({ message: 'No account found with this email.' })
-    }
-
-    const resetToken = createResetToken()
-    passwordResetTokenStore.set(resetToken, {
-      email: normalizedEmail,
-      expiresAt: Date.now() + OTP_TTL_MS,
-    })
-    forgotPasswordOtpStore.delete(normalizedEmail)
-
-    res.json({
-      resetToken,
-      message: 'OTP verified. Please set a new password.',
-    })
-  } catch (error) {
-    res.status(500).json({ message: error.message || 'Could not verify OTP.' })
-  }
-})
-
 app.post('/api/auth/forgot-password/reset', async (req, res) => {
   try {
-    const { resetToken, newPassword } = req.body
+    const { email, newPassword } = req.body
+    const normalizedEmail = normalizeEmail(email)
 
-    if (!resetToken || !newPassword) {
-      return res.status(400).json({ message: 'Reset token and new password are required.' })
+    if (!normalizedEmail || !newPassword) {
+      return res.status(400).json({ message: 'Email and new password are required.' })
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters.' })
     }
 
-    const resetRecord = passwordResetTokenStore.get(resetToken)
-
-    if (!resetRecord) {
-      return res.status(400).json({ message: 'Invalid reset session. Please request a new OTP.' })
-    }
-
-    if (Date.now() > resetRecord.expiresAt) {
-      passwordResetTokenStore.delete(resetToken)
-      return res.status(400).json({ message: 'Reset session expired. Please request a new OTP.' })
-    }
-
-    const user = await User.findOne({ email: resetRecord.email })
+    const user = await User.findOne({ email: normalizedEmail })
 
     if (!user) {
-      passwordResetTokenStore.delete(resetToken)
       return res.status(404).json({ message: 'No account found with this email.' })
     }
 
-    user.passwordHash = await bcrypt.hash(newPassword, 12)
+    user.password = String(newPassword)
+    user.passwordHash = ''
     await user.save()
-    passwordResetTokenStore.delete(resetToken)
 
     res.json({ message: 'Password updated successfully. Please sign in with your new password.' })
   } catch (error) {
@@ -1763,7 +1527,7 @@ app.patch('/api/auth/update-email', authRequired, async (req, res) => {
       return res.status(400).json({ message: 'New email and current password are required.' })
     }
 
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, req.user.passwordHash)
+    const isPasswordCorrect = await passwordMatches(currentPassword, req.user)
 
     if (!isPasswordCorrect) {
       return res.status(401).json({ message: 'Current password is incorrect.' })
@@ -1801,13 +1565,14 @@ app.patch('/api/auth/update-password', authRequired, async (req, res) => {
       return res.status(400).json({ message: 'New password must be at least 6 characters.' })
     }
 
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, req.user.passwordHash)
+    const isPasswordCorrect = await passwordMatches(currentPassword, req.user)
 
     if (!isPasswordCorrect) {
       return res.status(401).json({ message: 'Current password is incorrect.' })
     }
 
-    req.user.passwordHash = await bcrypt.hash(newPassword, 12)
+    req.user.password = String(newPassword)
+    req.user.passwordHash = ''
     await req.user.save()
     res.json({ message: 'Password updated successfully.' })
   } catch (error) {
@@ -2957,7 +2722,7 @@ app.get('/api/admin/students/:id', authRequired, adminRequired, async (req, res)
 
     const progress = await buildUserProgress(user)
     res.json({
-      user: publicUser(user),
+      user: publicUser(user, { includePassword: true }),
       progress,
     })
   } catch (error) {
@@ -3123,12 +2888,30 @@ app.get('/api/admin/reports', authRequired, adminRequired, async (req, res) => {
     const reports = await Report.find()
       .sort({ createdAt: -1 })
       .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
-      .populate('user objectiveType chapterId questionId')
+      .populate([
+        { path: 'user' },
+        { path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter' } } },
+        { path: 'chapterId' },
+        { path: 'questionId', populate: { path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter' } } } },
+      ])
       .lean()
 
     res.json({ reports })
   } catch (error) {
     res.status(500).json({ message: 'Could not load reports.' })
+  }
+})
+
+app.get('/api/admin/contacts', authRequired, adminRequired, async (req, res) => {
+  try {
+    const contacts = await ContactMessage.find()
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
+      .lean()
+
+    res.json({ contacts })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load contact messages.' })
   }
 })
 
@@ -3200,21 +2983,6 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
       audienceCount: recipients.length,
       sentUserEmails: recipients.map((item) => item.email),
     })
-
-    if (hasEmailConfig() && recipients.length) {
-      await Promise.all(recipients.map(async (recipient) => {
-        try {
-          await sendEmail({
-            to: recipient.email,
-            subject: subject || 'Message from Rethish Sir',
-            text: body.trim(),
-            html: `<div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.7"><p>${body.trim().replace(/\n/g, '<br />')}</p></div>`,
-          })
-        } catch (error) {
-          return null
-        }
-      }))
-    }
 
     res.status(201).json({ message: messageDoc, audienceCount: recipients.length })
   } catch (error) {
@@ -3290,7 +3058,7 @@ app.get('/api/pyqs', optionalAuth, async (req, res) => {
   }
 })
 
-app.get('/api/pyqs/:id/pdf', async (req, res) => {
+app.get('/api/pyqs/:id/pdf', authRequired, async (req, res) => {
   try {
     const pyq = await Pyq.findById(req.params.id).select('title pdf').exec()
 
@@ -3450,67 +3218,6 @@ app.post('/api/reports', authRequired, async (req, res) => {
       details: details.trim(),
     })
 
-    if (hasEmailConfig()) {
-      try {
-        await Promise.all([
-          sendEmail({
-            to: ADMIN_EMAIL,
-            subject: `Question report from ${studentName}`,
-            text: reportText,
-            html: reportHtml,
-          }),
-          studentEmail
-            ? sendEmail({
-              to: studentEmail,
-              subject: 'Your report was received - Innovative Science 2',
-              text: [
-                'Thank you for reporting the question.',
-                'This message is from Innovative Science 2 | Rethish Sir.',
-                '',
-                `Chosen error: ${chosenErrorLabel}`,
-                `Chapter: ${chapterLabel}`,
-                `Objective: ${objectiveTypeName}`,
-                `Question: ${questionText}`,
-                `Answer: ${correctAnswerText}`,
-                'Options:',
-                optionLines,
-                '',
-                `Student message: ${safeDetails || 'No extra message provided.'}`,
-              ].join('\n'),
-              html: `
-                <div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.7;background:#ffffff">
-                  <div style="max-width:720px;margin:0 auto;padding:24px">
-                    <div style="padding:18px 20px;border-radius:18px;background:#ecfeff;border:1px solid #a5f3fc">
-                      <p style="margin:0 0 8px;color:#0e7490;font-size:12px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase">Innovative Science 2 | Rethish Sir</p>
-                      <h2 style="margin:0;font-size:24px;line-height:1.25;font-weight:800;color:#0f172a">Thank you for your report</h2>
-                    </div>
-                    <div style="margin-top:18px;padding:18px 20px;border:1px solid #e2e8f0;border-radius:18px;background:#f8fafc">
-                      <p style="margin:0 0 10px;font-size:14px"><strong>Chosen error:</strong> ${escapeHtml(chosenErrorLabel)}</p>
-                      <p style="margin:0 0 10px;font-size:14px"><strong>Student message:</strong> ${escapeHtml(safeDetails || 'No extra message provided.')}</p>
-                      <p style="margin:0 0 10px;font-size:14px"><strong>Chapter:</strong> ${escapeHtml(chapterLabel)}</p>
-                      <p style="margin:0 0 10px;font-size:14px"><strong>Objective:</strong> ${escapeHtml(objectiveTypeName)}</p>
-                      <p style="margin:0 0 10px;font-size:14px"><strong>Question:</strong></p>
-                      <p style="margin:0;font-size:14px;color:#334155">${escapeHtml(questionText)}</p>
-                      <p style="margin:14px 0 0;font-size:14px"><strong>Answer:</strong> ${escapeHtml(correctAnswerText)}</p>
-                    </div>
-                    <div style="margin-top:18px;padding:18px 20px;border:1px solid #e2e8f0;border-radius:18px;background:#ffffff">
-                      <p style="margin:0 0 10px;font-size:14px"><strong>Options:</strong></p>
-                      <pre style="margin:0;white-space:pre-wrap;font-family:inherit;font-size:14px;color:#334155">${escapeHtml(optionLines)}</pre>
-                    </div>
-                    <div style="margin-top:18px;padding:18px 20px;border:1px solid #e2e8f0;border-radius:18px;background:#ffffff">
-                      <p style="margin:0;font-size:14px"><strong>We will review this and help you soon.</strong></p>
-                    </div>
-                  </div>
-                </div>
-              `,
-            })
-            : Promise.resolve(),
-        ])
-      } catch (mailError) {
-        // Keep the API successful even when email delivery fails.
-      }
-    }
-
     res.status(201).json({
       report: reportDoc,
       message: 'Thank you for the report. We will review it soon.',
@@ -3528,22 +3235,17 @@ app.post('/api/contact', async (req, res) => {
       return res.status(400).json({ message: 'Name, email, and message are required.' })
     }
 
-    if (hasEmailConfig()) {
-      await sendEmail({
-        to: ADMIN_EMAIL,
-        subject: subject ? `Contact: ${subject}` : `Contact from ${name}`,
-        text: `From: ${name} <${email}>\n\n${message}`,
-        html: `
-          <div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.7">
-            <p><strong>From:</strong> ${name} (${email})</p>
-            <p><strong>Subject:</strong> ${subject || 'General enquiry'}</p>
-            <p>${message.replace(/\n/g, '<br />')}</p>
-          </div>
-        `,
-      })
-    }
+    const contact = await ContactMessage.create({
+      name: name.trim(),
+      email: email.trim(),
+      subject: subject.trim(),
+      message: message.trim(),
+    })
 
-    res.json({ message: 'Your message was sent successfully.' })
+    res.status(201).json({
+      message: 'Your message was sent successfully.',
+      contact,
+    })
   } catch (error) {
     res.status(500).json({ message: 'Could not send contact message.' })
   }
@@ -3957,13 +3659,13 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
 })
 
 const ensureAdminUser = async () => {
-  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12)
   await User.findOneAndUpdate(
     { email: ADMIN_EMAIL },
     {
       name: 'Rethish Sir',
       email: ADMIN_EMAIL,
-      passwordHash,
+      password: ADMIN_PASSWORD,
+      passwordHash: '',
       isAdmin: true,
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },

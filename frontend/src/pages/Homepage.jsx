@@ -545,7 +545,7 @@ const Homepage = () => {
               Combines chapter learning, objective practice, AI help, and reporting so you always know exactly what to study next.
             </p>
             <div className="mt-8 grid gap-4 grid-cols-1 sm:grid-cols-2">
-              <MiniStat icon={Award} title="Brain cells" value="1 correct = 1 cell" delay={0.1} />
+              <MiniStat icon={Award} title="Brain cells" value="Earn brain cell by Solving objectives" delay={0.1} />
               <MiniStat icon={CheckCircle2} title="Reports" value="Saved after attempts" delay={0.2} />
               <MiniStat icon={TrendingUp} title="Improvement" value="Live tracking visible" delay={0.3} />
               <MiniStat icon={BookOpen} title="Questions" value="MCQ to completion" delay={0.4} />

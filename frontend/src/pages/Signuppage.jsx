@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowRight, Loader2, ShieldCheck, Eye, EyeOff } from 'lucide-react'
+import { ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth, saveAuth } from '../authStorage'
 
@@ -15,19 +15,14 @@ const initialForm = {
   phoneNumber: '',
   password: '',
   confirmPassword: '',
-  otp: '',
 }
 
 const Signuppage = () => {
   const navigate = useNavigate()
   const [form, setForm] = useState(initialForm)
-  const [step, setStep] = useState('details')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const [otpTimer, setOtpTimer] = useState(0)
-  
-  // Password visibility states
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
@@ -37,21 +32,11 @@ const Signuppage = () => {
     }
   }, [navigate])
 
-  useEffect(() => {
-    if (!otpTimer) return undefined
-
-    const timer = window.setInterval(() => {
-      setOtpTimer((current) => (current > 0 ? current - 1 : 0))
-    }, 1000)
-
-    return () => window.clearInterval(timer)
-  }, [otpTimer])
-
   const updateField = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }))
   }
 
-  const requestOtp = async (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
     setMessage('')
@@ -71,10 +56,15 @@ const Signuppage = () => {
       return
     }
 
+    if (!form.email.trim()) {
+      setError('Email address is required.')
+      return
+    }
+
     setLoading(true)
 
     try {
-      const response = await apiRequest('/api/auth/signup/send-otp', {
+      const response = await apiRequest('/api/auth/signup', {
         method: 'POST',
         body: JSON.stringify({
           name: form.name,
@@ -84,58 +74,8 @@ const Signuppage = () => {
         }),
       })
 
-      setStep('otp')
-      setOtpTimer(600)
-      setMessage(response?.message || 'OTP sent successfully. Please check your inbox and Spam folder.')
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const verifyOtp = async (event) => {
-    event.preventDefault()
-    setError('')
-    setMessage('')
-    setLoading(true)
-
-    try {
-      const data = await apiRequest('/api/auth/signup/verify-otp', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: form.email,
-          otp: form.otp,
-        }),
-      })
-
-      saveAuth({ token: data.token, user: data.user })
+      saveAuth({ token: response.token, user: response.user })
       navigate('/', { replace: true })
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const resendOtp = async () => {
-    setError('')
-    setMessage('')
-    setLoading(true)
-
-    try {
-      const response = await apiRequest('/api/auth/signup/send-otp', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          email: form.email,
-          phoneNumber: form.phoneNumber,
-          password: form.password,
-        }),
-      })
-
-      setOtpTimer(600)
-      setMessage(response?.message || 'A new OTP has been sent.')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -181,12 +121,10 @@ const Signuppage = () => {
         {/* Dynamic Headers */}
         <div className="text-center mb-8">
           <h1 className="text-[28px] font-black tracking-tight text-slate-900">
-            {step === 'details' ? 'Welcome' : 'Verify Email'}
+            Create Account
           </h1>
           <p className="mt-1.5 text-sm font-medium text-slate-400">
-            {step === 'details' 
-              ? 'Continue your journey with Innovative Science 2.' 
-              : `Enter the 6-digit verification code sent to ${form.email}`}
+            Continue your journey with Innovative Science 2.
           </p>
         </div>
 
@@ -205,137 +143,90 @@ const Signuppage = () => {
         </AnimatePresence>
 
         {/* Form Controls */}
-        {step === 'details' ? (
-          <form onSubmit={requestOtp} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Full Name</label>
+            <input
+              type="text"
+              required
+              value={form.name}
+              onChange={(e) => updateField('name', e.target.value)}
+              className={fieldClass}
+              placeholder="Your name"
+            />
+          </div>
+
+          <div>
+            <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Email Address</label>
+            <input
+              type="email"
+              required
+              value={form.email}
+              onChange={(e) => updateField('email', e.target.value)}
+              className={fieldClass}
+              placeholder="student@science.edu"
+            />
+          </div>
+
+          <div>
+            <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Phone Number</label>
+            <input
+              type="tel"
+              required
+              value={form.phoneNumber}
+              onChange={(e) => updateField('phoneNumber', e.target.value)}
+              className={fieldClass}
+              placeholder="Enter phone number"
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Full Name</label>
-              <input
-                type="text"
-                required
-                value={form.name}
-                onChange={(e) => updateField('name', e.target.value)}
-                className={fieldClass}
-                placeholder="Your name"
-              />
-            </div>
-
-            <div>
-              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Email Address</label>
-              <input
-                type="email"
-                required
-                value={form.email}
-                onChange={(e) => updateField('email', e.target.value)}
-                className={fieldClass}
-                placeholder="student@science.edu"
-              />
-            </div>
-
-            <div>
-              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Phone Number</label>
-              <input
-                type="tel"
-                required
-                value={form.phoneNumber}
-                onChange={(e) => updateField('phoneNumber', e.target.value)}
-                className={fieldClass}
-                placeholder="Enter phone number"
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Password</label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={form.password}
-                    onChange={(e) => updateField('password', e.target.value)}
-                    className={fieldClass}
-                    placeholder="Password"
-                  />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Confirm Password</label>
-                <div className="relative">
-                  <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={form.confirmPassword}
-                    onChange={(e) => updateField('confirmPassword', e.target.value)}
-                    className={fieldClass}
-                    placeholder="Password"
-                  />
-                  <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
+              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  value={form.password}
+                  onChange={(e) => updateField('password', e.target.value)}
+                  className={fieldClass}
+                  placeholder="Password"
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
             </div>
 
-            {/* Action Submit Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#00c49f] hover:bg-[#00b08f] active:bg-[#009c7f] px-5 py-4 text-sm font-bold text-white transition-all shadow-md shadow-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign up to Dashboard'}
-              {!loading && <ArrowRight className="h-4 w-4" />}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={verifyOtp} className="space-y-5">
             <div>
-              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">One-Time Password (OTP)</label>
-              <input
-                type="text"
-                required
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={form.otp}
-                onChange={(e) => updateField('otp', e.target.value)}
-                className={`${fieldClass} text-center tracking-[0.2em] text-lg font-bold`}
-                placeholder="000000"
-              />
+              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Confirm Password</label>
+              <div className="relative">
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  value={form.confirmPassword}
+                  onChange={(e) => updateField('confirmPassword', e.target.value)}
+                  className={fieldClass}
+                  placeholder="Password"
+                />
+                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
+          </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#00c49f] hover:bg-[#00b08f] px-5 py-4 text-sm font-bold text-white transition-all shadow-md shadow-emerald-500/10 disabled:opacity-60"
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              Verify and create account
-            </button>
-
-            {/* OTP Meta controls */}
-            <div className="flex flex-col gap-2.5 sm:flex-row pt-2">
-              <button
-                type="button"
-                onClick={() => setStep('details')}
-                className="inline-flex flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 transition-all hover:bg-slate-50"
-              >
-                Edit Details
-              </button>
-              <button
-                type="button"
-                onClick={resendOtp}
-                disabled={loading || otpTimer > 0}
-                className="inline-flex flex-1 items-center justify-center rounded-2xl bg-emerald-50/60 px-4 py-3 text-xs font-bold text-[#00c49f] transition-all hover:bg-emerald-100/70 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {otpTimer ? `Resend in ${Math.floor(otpTimer / 60)}:${String(otpTimer % 60).padStart(2, '0')}` : 'Resend OTP'}
-              </button>
-            </div>
-          </form>
-        )}
+          <button
+            type="submit"
+            disabled={loading}
+            className="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#00c49f] hover:bg-[#00b08f] active:bg-[#009c7f] px-5 py-4 text-sm font-bold text-white transition-all shadow-md shadow-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign up to Dashboard'}
+            {!loading && <ArrowRight className="h-4 w-4" />}
+          </button>
+        </form>
 
         {/* Global Footer Navigation */}
         <div className="mt-8 text-center text-sm font-medium text-slate-400">

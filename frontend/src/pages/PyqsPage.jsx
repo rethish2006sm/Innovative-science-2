@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
 import { BookOpen, FileUp, Filter, Loader2, Trash2, UploadCloud, X } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
@@ -40,6 +41,10 @@ const PyqsPage = () => {
   const [isMobile, setIsMobile] = useState(false)
   const [isMobileViewerOpen, setIsMobileViewerOpen] = useState(false)
   const [isMobilePdfLoading, setIsMobilePdfLoading] = useState(false)
+  const [pdfObjectUrl, setPdfObjectUrl] = useState('')
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [isSignInPopupOpen, setIsSignInPopupOpen] = useState(false)
+  const selectedPyq = pyqs.find((item) => item.id === selectedPyqId) || pyqs[0] || null
 
   useEffect(() => {
     const syncAuth = () => setAuth(getStoredAuth())
@@ -79,14 +84,79 @@ const PyqsPage = () => {
     loadPyqs()
   }, [])
 
-  const selectedPyq = pyqs.find((item) => item.id === selectedPyqId) || pyqs[0] || null
+  useEffect(() => {
+    let active = true
+    let currentObjectUrl = ''
+
+    const loadPdf = async () => {
+      if (!selectedPyq?.pdfUrl) {
+        setPdfObjectUrl('')
+        setPdfLoading(false)
+        return
+      }
+
+      if (!auth?.token) {
+        setPdfObjectUrl('')
+        setPdfLoading(false)
+        return
+      }
+
+      setPdfLoading(true)
+
+      try {
+        const response = await fetch(assetUrl(selectedPyq.pdfUrl), {
+          headers: {
+            Authorization: `Bearer ${auth.token}`,
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error(response.status === 401 ? 'Please sign in to view PYQ PDFs.' : 'Could not open this PDF.')
+        }
+
+        const blob = await response.blob()
+        currentObjectUrl = URL.createObjectURL(blob)
+
+        if (active) {
+          setPdfObjectUrl(currentObjectUrl)
+          setError('')
+        }
+      } catch (err) {
+        if (active) {
+          setPdfObjectUrl('')
+          setError(err.message)
+        }
+      } finally {
+        if (active) {
+          setPdfLoading(false)
+        }
+      }
+    }
+
+    loadPdf()
+
+    return () => {
+      active = false
+      if (currentObjectUrl) {
+        URL.revokeObjectURL(currentObjectUrl)
+      }
+    }
+  }, [auth?.token, selectedPyq?.pdfUrl])
 
   const handleUploadChange = (field, value) => {
     setUploadForm((current) => ({ ...current, [field]: value }))
   }
 
   const openPyq = (pyq) => {
+    if (!auth?.token) {
+      setPdfObjectUrl('')
+      setIsMobileViewerOpen(false)
+      setIsSignInPopupOpen(true)
+      return
+    }
+
     setSelectedPyqId(pyq.id)
+    setIsSignInPopupOpen(false)
 
     if (isMobile) {
       setIsMobilePdfLoading(true)
@@ -150,6 +220,7 @@ const PyqsPage = () => {
       })
       setIsMobileViewerOpen(false)
       setIsMobilePdfLoading(false)
+      setPdfObjectUrl('')
     } catch (err) {
       setError(err.message)
     }
@@ -333,18 +404,25 @@ const PyqsPage = () => {
               </div>
 
               <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-100">
-                {selectedPyq?.pdfUrl ? (
+                {pdfObjectUrl ? (
                   <iframe
                     key={selectedPyq.id}
                     title={selectedPyq.title}
-                    src={assetUrl(selectedPyq.pdfUrl)}
+                    src={pdfObjectUrl}
                     className="h-[75vh] w-full bg-white"
                   />
+                ) : pdfLoading ? (
+                  <div className="grid h-[75vh] place-items-center bg-slate-50 px-6 text-center text-slate-500">
+                    <div>
+                      <Loader2 className="mx-auto h-10 w-10 animate-spin text-cyan-600" />
+                      <p className="mt-3 text-sm font-medium">Opening PDF...</p>
+                    </div>
+                  </div>
                 ) : (
                   <div className="grid h-[75vh] place-items-center bg-slate-50 px-6 text-center text-slate-500">
                     <div>
                       <BookOpen className="mx-auto h-10 w-10 text-slate-300" />
-                      <p className="mt-3 text-sm font-medium">No paper selected.</p>
+                      <p className="mt-3 text-sm font-medium">Sign in to open a paper.</p>
                     </div>
                   </div>
                 )}
@@ -354,7 +432,7 @@ const PyqsPage = () => {
         </div>
       </div>
 
-      {isMobile && isMobileViewerOpen && selectedPyq?.pdfUrl && (
+      {isMobile && isMobileViewerOpen && (pdfObjectUrl || pdfLoading) && (
         <div className="fixed inset-0 z-[220] bg-slate-950">
           <div className="flex h-[100dvh] flex-col">
             <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 text-white">
@@ -379,7 +457,7 @@ const PyqsPage = () => {
               <iframe
                 key={`${selectedPyq.id}-mobile`}
                 title={selectedPyq.title}
-                src={assetUrl(selectedPyq.pdfUrl)}
+                src={pdfObjectUrl}
                 onLoad={() => setIsMobilePdfLoading(false)}
                 className="h-full w-full bg-white"
               />
@@ -398,6 +476,46 @@ const PyqsPage = () => {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isSignInPopupOpen && (
+        <div className="fixed inset-0 z-[230] flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[2rem] border border-white/10 bg-white p-6 shadow-[0_30px_120px_rgba(15,23,42,0.35)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-700">Sign in required</p>
+                <h3 className="mt-2 text-2xl font-black tracking-tight text-slate-950">Please sign in first</h3>
+                <p className="mt-3 text-sm leading-6 text-slate-600">
+                  You need to log in before opening this PYQ PDF.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSignInPopupOpen(false)}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200 hover:text-slate-900"
+                aria-label="Close sign in popup"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <Link
+                to="/signin"
+                className="inline-flex h-20  flex-1 items-center justify-center rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white transition hover:bg-black"
+              >
+                Sign in
+              </Link>
+              <button
+                type="button"
+                onClick={() => setIsSignInPopupOpen(false)}
+                className="inline-flex h-12 py-2 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 font-bold text-slate-700 transition hover:bg-slate-50"
+              >
+                Not now
+              </button>
             </div>
           </div>
         </div>

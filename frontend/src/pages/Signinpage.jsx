@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, Mail, KeyRound, X } from 'lucide-react'
+import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, KeyRound, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth, saveAuth } from '../authStorage'
 
@@ -12,9 +12,7 @@ const Signinpage = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [isForgotOpen, setIsForgotOpen] = useState(false)
-  const [forgotForm, setForgotForm] = useState({ email: '', otp: '', newPassword: '', confirmPassword: '' })
-  const [forgotStep, setForgotStep] = useState('email')
-  const [resetToken, setResetToken] = useState('')
+  const [forgotForm, setForgotForm] = useState({ email: '', newPassword: '', confirmPassword: '' })
   const [forgotMessage, setForgotMessage] = useState('')
   const [forgotError, setForgotError] = useState('')
   const [isForgotLoading, setIsForgotLoading] = useState(false)
@@ -26,9 +24,7 @@ const Signinpage = () => {
   }, [navigate])
 
   const openForgotPassword = () => {
-    setForgotForm({ email: form.email, otp: '', newPassword: '', confirmPassword: '' })
-    setForgotStep('email')
-    setResetToken('')
+    setForgotForm({ email: form.email, newPassword: '', confirmPassword: '' })
     setForgotMessage('')
     setForgotError('')
     setIsForgotOpen(true)
@@ -36,9 +32,7 @@ const Signinpage = () => {
 
   const closeForgotPassword = () => {
     setIsForgotOpen(false)
-    setForgotForm({ email: '', otp: '', newPassword: '', confirmPassword: '' })
-    setForgotStep('email')
-    setResetToken('')
+    setForgotForm({ email: '', newPassword: '', confirmPassword: '' })
     setForgotMessage('')
     setForgotError('')
   }
@@ -75,29 +69,6 @@ const Signinpage = () => {
     setIsForgotLoading(true)
 
     try {
-      if (forgotStep === 'email') {
-        const data = await apiRequest('/api/auth/forgot-password/send-otp', {
-          method: 'POST',
-          body: JSON.stringify({ email: forgotForm.email }),
-        })
-
-        setForgotStep('otp')
-        setForgotMessage(data.message || 'OTP sent successfully. Please check your Spam folder too.')
-        return
-      }
-
-      if (forgotStep === 'otp') {
-        const data = await apiRequest('/api/auth/forgot-password/verify-otp', {
-          method: 'POST',
-          body: JSON.stringify({ email: forgotForm.email, otp: forgotForm.otp }),
-        })
-
-        setResetToken(data.resetToken)
-        setForgotStep('password')
-        setForgotMessage(data.message)
-        return
-      }
-
       if (forgotForm.newPassword !== forgotForm.confirmPassword) {
         setForgotError('New passwords do not match.')
         return
@@ -105,10 +76,9 @@ const Signinpage = () => {
 
       const data = await apiRequest('/api/auth/forgot-password/reset', {
         method: 'POST',
-        body: JSON.stringify({ resetToken, newPassword: forgotForm.newPassword }),
+        body: JSON.stringify({ email: forgotForm.email, newPassword: forgotForm.newPassword }),
       })
 
-      setForgotStep('done')
       setForgotMessage(data.message)
       setForm({ email: forgotForm.email, password: '' })
     } catch (err) {
@@ -263,15 +233,11 @@ const Signinpage = () => {
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-700">
-                  {forgotStep === 'email' ? <Mail size={22} /> : <KeyRound size={22} />}
+                  <KeyRound size={22} />
                 </div>
                 <h2 className="text-2xl font-black text-slate-900">Forgot password</h2>
                 <p className="mt-1 text-sm font-medium text-slate-500">
-                  {forgotStep === 'done'
-                    ? 'Your password has been changed successfully.'
-                    : forgotStep === 'password'
-                      ? 'Enter a new password for this account.'
-                      : 'We will send an OTP first. Please check your Spam folder too.'}
+                  Enter your email and choose a new password. No OTP is needed.
                 </p>
               </div>
               <button
@@ -284,108 +250,61 @@ const Signinpage = () => {
               </button>
             </div>
 
-            {forgotStep !== 'done' && (
-              <div className="grid gap-4">
-                <label className="grid gap-2 text-sm font-bold text-slate-700">
-                  Email Address
-                  <input
-                    type="email"
-                    value={forgotForm.email}
-                    onChange={(event) =>
-                      setForgotForm({
-                        email: event.target.value,
-                        otp: '',
-                        newPassword: '',
-                        confirmPassword: '',
-                      })
-                    }
-                    required
-                    disabled={forgotStep !== 'email'}
-                    placeholder="email@gmail.com"
-                    className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10 disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                </label>
+            <div className="grid gap-4">
+              <label className="grid gap-2 text-sm font-bold text-slate-700">
+                Email Address
+                <input
+                  type="email"
+                  value={forgotForm.email}
+                  onChange={(event) =>
+                    setForgotForm({
+                      ...forgotForm,
+                      email: event.target.value,
+                    })
+                  }
+                  required
+                  placeholder="email@gmail.com"
+                  className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
+                />
+              </label>
 
-                {forgotStep === 'otp' && (
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Enter 6 digit OTP
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={6}
-                      value={forgotForm.otp}
-                      onChange={(event) =>
-                        setForgotForm({ ...forgotForm, otp: event.target.value.replace(/\D/g, '').slice(0, 6) })
-                      }
-                      required
-                      placeholder="123456"
-                      className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-center text-lg font-black tracking-[0.4em] text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
-                    />
-                  </label>
-                )}
+              <label className="grid gap-2 text-sm font-bold text-slate-700">
+                New password
+                <input
+                  type="password"
+                  minLength={6}
+                  value={forgotForm.newPassword}
+                  onChange={(event) => setForgotForm({ ...forgotForm, newPassword: event.target.value })}
+                  required
+                  placeholder="New password"
+                  className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
+                />
+              </label>
 
-                {forgotStep === 'password' && (
-                  <>
-                    <label className="grid gap-2 text-sm font-bold text-slate-700">
-                      New password
-                      <input
-                        type="password"
-                        minLength={6}
-                        value={forgotForm.newPassword}
-                        onChange={(event) => setForgotForm({ ...forgotForm, newPassword: event.target.value })}
-                        required
-                        placeholder="New password"
-                        className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
-                      />
-                    </label>
-
-                    <label className="grid gap-2 text-sm font-bold text-slate-700">
-                      Confirm new password
-                      <input
-                        type="password"
-                        minLength={6}
-                        value={forgotForm.confirmPassword}
-                        onChange={(event) => setForgotForm({ ...forgotForm, confirmPassword: event.target.value })}
-                        required
-                        placeholder="Confirm new password"
-                        className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
-                      />
-                    </label>
-                  </>
-                )}
-              </div>
-            )}
+              <label className="grid gap-2 text-sm font-bold text-slate-700">
+                Confirm new password
+                <input
+                  type="password"
+                  minLength={6}
+                  value={forgotForm.confirmPassword}
+                  onChange={(event) => setForgotForm({ ...forgotForm, confirmPassword: event.target.value })}
+                  required
+                  placeholder="Confirm new password"
+                  className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
+                />
+              </label>
+            </div>
 
             {forgotMessage && <p className="mt-4 text-sm font-bold text-emerald-600">{forgotMessage}</p>}
             {forgotError && <p className="mt-4 text-sm font-bold text-rose-500">{forgotError}</p>}
 
-            {forgotStep === 'done' ? (
-              <button
-                type="button"
-                onClick={closeForgotPassword}
-                className="mt-6 flex h-13 w-full items-center justify-center rounded-2xl bg-slate-900 font-bold text-white transition hover:bg-slate-800"
-              >
-                Back to sign in
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={isForgotLoading}
-                className="mt-6 flex h-13 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isForgotLoading
-                  ? forgotStep === 'email'
-                    ? 'Sending OTP...'
-                    : forgotStep === 'otp'
-                      ? 'Verifying OTP...'
-                      : 'Updating password...'
-                  : forgotStep === 'email'
-                    ? 'Send OTP'
-                    : forgotStep === 'otp'
-                      ? 'Verify OTP'
-                      : 'Set New Password'}
-              </button>
-            )}
+            <button
+              type="submit"
+              disabled={isForgotLoading}
+              className="mt-6 flex h-13 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isForgotLoading ? 'Updating password...' : 'Set New Password'}
+            </button>
           </motion.form>
         </div>
       )}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { BadgePlus, BellRing, BookOpen, Edit3, Search, Send, Shield, Sparkles, Trash2, Users, X } from 'lucide-react'
+import { BadgePlus, BellRing, BookOpen, Edit3, MessageCircleMore, Search, Shield, Sparkles, Trash2, Users, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 
@@ -14,6 +14,7 @@ const Adminpage = () => {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
   const [reports, setReports] = useState([])
+  const [contacts, setContacts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
@@ -22,30 +23,23 @@ const Adminpage = () => {
   const [classForm, setClassForm] = useState(emptyClassForm)
   const [editingClassId, setEditingClassId] = useState('')
   const [classSaving, setClassSaving] = useState(false)
-  const [messageForm, setMessageForm] = useState({
-    targetType: 'all',
-    targetClassId: '',
-    targetUserId: '',
-    subject: '',
-    body: '',
-  })
-  const [messageStatus, setMessageStatus] = useState('')
-  const [messageSaving, setMessageSaving] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
     setError('')
 
     try {
-      const [studentsData, classesData, reportsData] = await Promise.all([
+      const [studentsData, classesData, reportsData, contactsData] = await Promise.all([
         apiRequest(`/api/admin/students?search=${encodeURIComponent(search)}`),
         apiRequest('/api/admin/classes'),
         apiRequest('/api/admin/reports?limit=50'),
+        apiRequest('/api/admin/contacts?limit=50'),
       ])
 
       setStudents(studentsData.students || [])
       setClasses(classesData.classes || [])
       setReports(reportsData.reports || [])
+      setContacts(contactsData.contacts || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -125,6 +119,18 @@ const Adminpage = () => {
     setError('')
   }
 
+  const formatReportChapter = (report) => {
+    const chapter = report.chapterId || report.questionId?.objectiveType?.topic?.chapter || report.objectiveType?.topic?.chapter
+
+    if (!chapter) {
+      return 'N/A'
+    }
+
+    const chapterNumber = chapter.number || ''
+    const chapterName = chapter.name || ''
+    return `Chapter ${chapterNumber}${chapterName ? `: ${chapterName}` : ''}`.trim()
+  }
+
   const deleteClass = async (classItem) => {
     if (!window.confirm(`Delete class "${classItem.name}"? Students will be unassigned from it.`)) {
       return
@@ -144,39 +150,6 @@ const Adminpage = () => {
       await loadData()
     } catch (err) {
       setError(err.message)
-    }
-  }
-
-  const sendMessage = async (event) => {
-    event.preventDefault()
-    setMessageSaving(true)
-    setMessageStatus('')
-    setError('')
-
-    try {
-      await apiRequest('/api/admin/messages', {
-        method: 'POST',
-        body: JSON.stringify({
-          targetType: messageForm.targetType,
-          targetClassId: messageForm.targetClassId,
-          targetUserIds: messageForm.targetUserId ? [messageForm.targetUserId] : [],
-          subject: messageForm.subject,
-          body: messageForm.body,
-        }),
-      })
-
-      setMessageStatus('Message sent successfully.')
-      setMessageForm({
-        targetType: 'all',
-        targetClassId: '',
-        targetUserId: '',
-        subject: '',
-        body: '',
-      })
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setMessageSaving(false)
     }
   }
 
@@ -212,7 +185,7 @@ const Adminpage = () => {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'messages', 'reports'].map((tab) => (
+            {['students', 'classes', 'reports', 'contacts'].map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -266,6 +239,7 @@ const Adminpage = () => {
                             >
                               <h3 className="text-lg font-black text-slate-950">{student.name}</h3>
                               <p className="mt-1 text-sm text-slate-500">{student.email}</p>
+                              <p className="mt-1 text-xs font-bold text-slate-400">Password: {student.password || 'Not available'}</p>
                               <p className="mt-2 text-xs font-black uppercase tracking-[0.22em] text-slate-400">
                                 {student.className || 'No class assigned'}
                               </p>
@@ -393,90 +367,6 @@ const Adminpage = () => {
                   </div>
                 )}
 
-                {activeTab === 'messages' && (
-                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex items-center gap-2">
-                      <Send className="h-5 w-5 text-cyan-700" />
-                      <h2 className="font-serif text-3xl text-slate-950">Send message</h2>
-                    </div>
-
-                    <form onSubmit={sendMessage} className="mt-5 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="grid gap-2 text-sm font-bold text-slate-600">
-                          Audience
-                          <select
-                            value={messageForm.targetType}
-                            onChange={(event) => setMessageForm({ ...messageForm, targetType: event.target.value })}
-                            className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none"
-                          >
-                            <option value="all">All students</option>
-                            <option value="class">By class</option>
-                            <option value="user">Individual student</option>
-                          </select>
-                        </label>
-                        {messageForm.targetType === 'class' ? (
-                          <label className="grid gap-2 text-sm font-bold text-slate-600">
-                            Class
-                            <select
-                              value={messageForm.targetClassId}
-                              onChange={(event) => setMessageForm({ ...messageForm, targetClassId: event.target.value })}
-                              className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none"
-                            >
-                              <option value="">Select class</option>
-                              {classes.map((classItem) => (
-                                <option key={classItem._id} value={classItem._id}>
-                                  {classItem.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        ) : messageForm.targetType === 'user' ? (
-                          <label className="grid gap-2 text-sm font-bold text-slate-600">
-                            Student
-                            <select
-                              value={messageForm.targetUserId}
-                              onChange={(event) => setMessageForm({ ...messageForm, targetUserId: event.target.value })}
-                              className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none"
-                            >
-                              <option value="">Select student</option>
-                              {students.map((student) => (
-                                <option key={student.id} value={student.id}>
-                                  {student.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        ) : (
-                          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-500">
-                            Message will be sent to every student.
-                          </div>
-                        )}
-                      </div>
-
-                      <Field label="Subject" value={messageForm.subject} onChange={(value) => setMessageForm({ ...messageForm, subject: value })} />
-                      <label className="grid gap-2 text-sm font-bold text-slate-600">
-                        Message
-                        <textarea
-                          required
-                          rows={6}
-                          value={messageForm.body}
-                          onChange={(event) => setMessageForm({ ...messageForm, body: event.target.value })}
-                          className="rounded-3xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-cyan-400"
-                        />
-                      </label>
-                      {messageStatus && (
-                        <p className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
-                          {messageStatus}
-                        </p>
-                      )}
-                      <button type="submit" disabled={messageSaving} className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-cyan-700 font-bold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50">
-                        <Send className="h-4 w-4" />
-                        {messageSaving ? 'Sending...' : 'Send once'}
-                      </button>
-                    </form>
-                  </div>
-                )}
-
                 {activeTab === 'reports' && (
                   <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex items-center gap-2">
@@ -492,12 +382,58 @@ const Adminpage = () => {
                               <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
                                 {report.user?.name || 'Student'} - {report.reason}
                               </p>
-                              <p className="mt-2 text-sm leading-7 text-slate-600">
-                                {report.details || 'No extra details.'}
-                              </p>
+                              <div className="mt-3 grid gap-3 text-sm leading-7 text-slate-600">
+                                <DetailLine label="Student" value={report.user?.name || 'Student'} />
+                                <DetailLine label="Message" value={report.details || 'No extra details.'} />
+                                <DetailLine label="Chapter" value={formatReportChapter(report)} />
+                                <DetailLine label="Topic" value={report.questionId?.objectiveType?.topic?.name || report.objectiveType?.topic?.name || 'N/A'} />
+                                <DetailLine label="Objective" value={report.questionId?.objectiveType?.type || report.objectiveType?.type || 'N/A'} />
+                                <DetailLine
+                                  label="Question"
+                                  value={report.questionId?.question || 'N/A'}
+                                />
+                                <DetailLine
+                                  label="Options"
+                                  value={Array.isArray(report.questionId?.options) && report.questionId.options.length
+                                    ? report.questionId.options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join(' | ')
+                                    : 'N/A'}
+                                />
+                              </div>
                             </div>
                             <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
                               {new Date(report.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'contacts' && (
+                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <MessageCircleMore className="h-5 w-5 text-emerald-700" />
+                      <h2 className="font-serif text-3xl text-slate-950">Contact messages</h2>
+                    </div>
+
+                    <div className="mt-5 grid gap-3">
+                      {contacts.map((contact) => (
+                        <article key={contact._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+                                {contact.name} - {contact.subject || 'General enquiry'}
+                              </p>
+                              <p className="mt-2 text-sm leading-7 text-slate-600">
+                                {contact.message}
+                              </p>
+                              <p className="mt-2 text-xs font-bold text-slate-400">
+                                {contact.email}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+                              {new Date(contact.createdAt).toLocaleDateString()}
                             </span>
                           </div>
                         </article>
@@ -516,7 +452,7 @@ const Adminpage = () => {
                   <div className="mt-4 grid gap-3">
                     <Tip title="Student popup" text="Click any student card to open detailed chapter progress, brain cells, and recent attempts." />
                     <Tip title="Class assignment" text="Use the class dropdown on each student card to move them into the right group immediately." />
-                    <Tip title="Messages" text="Send a message once to all students, a class, or a single student." />
+                    <Tip title="Contacts" text="Open the contacts tab to review direct WhatsApp-style requests from students." />
                     <Tip title="Reports" text="Question reports are stored here so you can follow up quickly when something looks wrong." />
                   </div>
                 </div>
@@ -565,6 +501,10 @@ const Adminpage = () => {
                   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-sm font-black text-slate-950">Recent attempts</p>
                     <p className="mt-2 text-lg font-bold text-slate-700">{studentDetail.progress?.latestAttempts?.length || 0}</p>
+                  </div>
+                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 lg:col-span-2">
+                    <p className="text-sm font-black text-slate-950">Password</p>
+                    <p className="mt-2 text-lg font-bold text-slate-700">{studentDetail.user.password || 'Not available'}</p>
                   </div>
                 </div>
 
@@ -630,6 +570,13 @@ const Tip = ({ title, text }) => (
   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
     <p className="text-sm font-black text-slate-950">{title}</p>
     <p className="mt-2 text-sm leading-7 text-slate-600">{text}</p>
+  </div>
+)
+
+const DetailLine = ({ label, value }) => (
+  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+    <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">{label}</p>
+    <p className="mt-2 whitespace-pre-wrap text-sm font-semibold text-slate-700">{value}</p>
   </div>
 )
 
