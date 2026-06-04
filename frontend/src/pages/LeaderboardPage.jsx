@@ -90,7 +90,7 @@ const LeaderboardPage = () => {
                 Leaderboard
               </h1>
               <p className="mt-4 text-sm leading-relaxed text-slate-500 sm:text-base">
-                Students are ranked by total brain cells. Each correct question earns 1 brain cell, so the ranking grows with every right answer.
+                Students are ranked by total brain cells. Each unique correct question earns 1 brain cell, and repeating the same question does not add more.
               </p>
             </div>
 
@@ -294,7 +294,7 @@ const LeaderboardPage = () => {
                     <h3 className="font-bold text-cyan-900">How it works</h3>
                   </div>
                   <p className="mt-3 text-xs leading-relaxed text-cyan-800/80">
-                    Brain cells are calculated question by question. Each correct answer adds 1 brain cell, ensuring steady improvement is rewarded directly.
+                    Brain cells are calculated from unique correct questions. Each right answer adds 1 brain cell the first time only, so repeated attempts do not inflate the score.
                   </p>
                 </div>
               </div>

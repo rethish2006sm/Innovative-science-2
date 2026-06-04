@@ -181,7 +181,7 @@ const Topicspage = () => {
             </div>
           </div>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-stone-500 sm:text-base">
-            Topics are loaded from the database. Admins can add and edit topics dynamically.
+            Select the Topic you want to practice.
           </p>
           {error && !isModalOpen && (
             <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-bold text-red-500">

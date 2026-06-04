@@ -10,6 +10,7 @@ import Contactpage from './pages/Contactpage'
 import Correlation from './pages/Correlation'
 import Diagrams from './pages/diagrams'
 import Adminpage from './pages/Adminpage'
+import Classpage from './pages/Classpage'
 import Improvementpage from './pages/Improvementpage'
 import Identifysymbol from './pages/Identifysymbol'
 import Homepage from './pages/Homepage'
@@ -24,7 +25,190 @@ import PyqsPage from './pages/PyqsPage'
 import Testbuilderpage from './pages/Testbuilderpage'
 import Topicspage from './pages/Topicspage'
 import TrueorFalse from './pages/TrueorFalse'
+import Seo from './components/Seo'
 import { authEvents, getStoredAuth } from './authStorage'
+
+const SITE_DESCRIPTION =
+  'Innovative Science 2 helps students practice science chapters, solve objective questions, take tests, and track brain cell progress.'
+
+const getSeoFromPathname = (pathname) => {
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/'
+
+  if (normalizedPath === '/') {
+    return {
+      title: 'Home',
+      description: SITE_DESCRIPTION,
+    }
+  }
+
+  if (normalizedPath === '/about') {
+    return {
+      title: 'About Us',
+      description: 'Learn about Innovative Science 2, a student-friendly science practice platform for Class 10.',
+    }
+  }
+
+  if (normalizedPath === '/contact') {
+    return {
+      title: 'Contact',
+      description: 'Get in touch with the Innovative Science 2 team for help, support, or feedback.',
+    }
+  }
+
+  if (normalizedPath === '/leaderboard') {
+    return {
+      title: 'Leaderboard',
+      description: 'See the top students ranked by brain cells, score, and overall practice progress.',
+    }
+  }
+
+  if (normalizedPath === '/improvement') {
+    return {
+      title: 'Improvement',
+      description: 'Review your latest practice progress, mistakes, and improvement suggestions.',
+      noindex: true,
+    }
+  }
+
+  if (normalizedPath === '/chapter-weightage') {
+    return {
+      title: 'Chapter Weightage',
+      description: 'Check chapter-wise weightage and plan your science revision effectively.',
+    }
+  }
+
+  if (normalizedPath === '/chapters') {
+    return {
+      title: 'Chapters',
+      description: 'Browse the science chapters available for practice and revision.',
+    }
+  }
+
+  if (/^\/chapters\/\d+\/topics$/.test(normalizedPath)) {
+    const chapterNumber = normalizedPath.match(/^\/chapters\/(\d+)\/topics$/)?.[1]
+    return {
+      title: `Chapter ${chapterNumber} Topics`,
+      description: `Explore topics and practice material for Chapter ${chapterNumber} in Science 2.`,
+    }
+  }
+
+  if (/^\/chapters\/\d+\/topics\/[^/]+\/objectives$/.test(normalizedPath)) {
+    const chapterNumber = normalizedPath.match(/^\/chapters\/(\d+)\/topics\/[^/]+\/objectives$/)?.[1]
+    return {
+      title: `Chapter ${chapterNumber} Objectives`,
+      description: `Open objective practice sets for Chapter ${chapterNumber} and start solving questions.`,
+    }
+  }
+
+  if (/\/objectives\/mcqs$/.test(normalizedPath)) {
+    return {
+      title: 'MCQs Practice',
+      description: 'Practice science multiple-choice questions and track your correct answers.',
+    }
+  }
+
+  if (/\/objectives\/true-or-false$/.test(normalizedPath)) {
+    return {
+      title: 'True or False',
+      description: 'Solve true-or-false science questions and improve accuracy.',
+    }
+  }
+
+  if (/\/objectives\/correlation$/.test(normalizedPath)) {
+    return {
+      title: 'Correlation Practice',
+      description: 'Practice correlation questions with a simple, exam-focused workflow.',
+    }
+  }
+
+  if (/\/objectives\/match-the-following$/.test(normalizedPath)) {
+    return {
+      title: 'Match the Following',
+      description: 'Match related science concepts and strengthen chapter recall.',
+    }
+  }
+
+  if (/\/objectives\/complete-the-tables$/.test(normalizedPath)) {
+    return {
+      title: 'Complete the Tables',
+      description: 'Complete science tables and review chapter facts in a structured way.',
+    }
+  }
+
+  if (/\/objectives\/diagram-based-question$/.test(normalizedPath)) {
+    return {
+      title: 'Diagram Questions',
+      description: 'Answer diagram-based science questions and revise visual concepts.',
+    }
+  }
+
+  if (/\/objectives\/identify-symbol$/.test(normalizedPath)) {
+    return {
+      title: 'Identify Symbol',
+      description: 'Practice science symbol identification with quick objective questions.',
+    }
+  }
+
+  if (normalizedPath === '/profile') {
+    return {
+      title: 'Profile',
+      description: 'View your profile, class details, and personal progress.',
+      noindex: true,
+    }
+  }
+
+  if (normalizedPath === '/pyqs') {
+    return {
+      title: 'PYQs',
+      description: 'Browse previous year question papers for Science 2.',
+    }
+  }
+
+  if (/^\/class\/[^/]+$/.test(normalizedPath)) {
+    return {
+      title: 'Class Board',
+      description: 'View your class notice board and admin updates.',
+      noindex: true,
+    }
+  }
+
+  if (normalizedPath === '/signin') {
+    return {
+      title: 'Sign In',
+      description: 'Sign in to save progress, take tests, and view your science rankings.',
+      noindex: true,
+    }
+  }
+
+  if (normalizedPath === '/signup') {
+    return {
+      title: 'Sign Up',
+      description: 'Create your account to start practicing Science 2 and track your progress.',
+      noindex: true,
+    }
+  }
+
+  if (normalizedPath === '/test-builder') {
+    return {
+      title: 'Test Builder',
+      description: 'Create a custom science test and check your progress with saved scores.',
+      noindex: true,
+    }
+  }
+
+  if (normalizedPath === '/admin') {
+    return {
+      title: 'Admin Dashboard',
+      description: 'Manage students, classes, reports, and platform activity.',
+      noindex: true,
+    }
+  }
+
+  return {
+    title: 'Innovative Science 2',
+    description: SITE_DESCRIPTION,
+  }
+}
 
 const ScrollToTop = () => {
   const { pathname } = useLocation()
@@ -79,6 +263,7 @@ const AppLayout = () => {
   const [showSigninReminder, setShowSigninReminder] = useState(false)
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
   const isAuthRoute = pathname === '/signin' || pathname === '/signup'
+  const seo = getSeoFromPathname(pathname)
 
   useEffect(() => {
     const syncAuth = () => setAuth(getStoredAuth())
@@ -108,6 +293,12 @@ const AppLayout = () => {
 
   return (
     <>
+      <Seo
+        title={seo.title}
+        description={seo.description}
+        noindex={seo.noindex}
+        canonicalPath={pathname}
+      />
       {!isObjectivePracticeRoute && <Navbar />}
       <main className={`min-h-screen w-full bg-slate-50 text-slate-950 ${isObjectivePracticeRoute ? 'pt-0' : 'pt-24'}`}>
         <Routes>
@@ -129,6 +320,7 @@ const AppLayout = () => {
           <Route path="/admin" element={<Adminpage />} />
           <Route path="/chapter-weightage" element={<ChapterWeightage />} />
           <Route path="/chapters" element={<Chapters />} />
+          <Route path="/class/:classId" element={<Classpage />} />
           <Route path="/chapters/:chapterNumber/topics" element={<Topicspage />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives" element={<Objectivepage />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/mcqs" element={<MCQs />} />

@@ -12,6 +12,7 @@ import {
   Shield,
   Sparkles,
   Trophy,
+  Users,
   User,
   Menu,
   X,
@@ -60,16 +61,6 @@ const navItems = [
   },
 ];
 
-const desktopNavItems = navItems.filter((item) => item.name !== 'About');
-const mobileNavItems = [
-  {
-    name: 'About',
-    path: '/about',
-    icon: <Info size={18} />,
-  },
-  ...navItems,
-];
-
 const containerVariants = {
   hidden: { opacity: 0 },
   visible: {
@@ -101,6 +92,21 @@ const Navbar = () => {
   const navigate = useNavigate();
   const isProfilePage = location.pathname === '/profile';
   const isAdminPage = location.pathname === '/admin';
+  const classButtonPath = auth?.user?.classId ? `/class/${auth.user.classId}` : '';
+  const classButtonLabel = auth?.user?.className?.trim() || 'Class';
+  const hasClassButton = Boolean(classButtonPath);
+  const hideContactForStudent = Boolean(auth?.user?.classId) && !auth?.user?.isAdmin;
+  const desktopNavItems = navItems.filter(
+    (item) => item.name !== 'About' && (!hideContactForStudent || item.name !== 'Contact'),
+  );
+  const mobileNavItems = [
+    {
+      name: 'About',
+      path: '/about',
+      icon: <Info size={18} />,
+    },
+    ...navItems,
+  ];
 
   useEffect(() => {
     setIsMenuOpen(false);
@@ -173,7 +179,7 @@ const Navbar = () => {
         {/* Removed max-w restriction and padded the edges for edge-to-edge view */}
         <div className="relative mx-auto flex h-24 w-full items-center justify-between px-6 md:px-10">
           {/* Left Section: Mobile Menu + Logo */}
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3 min-w-0">
             {/* Mobile Menu Toggle */}
             <motion.button
               whileTap={{ scale: 0.9 }}
@@ -185,7 +191,7 @@ const Navbar = () => {
             </motion.button>
 
             {/* Logo Section */}
-            <NavLink to="/" className="group flex items-center gap-2 sm:gap-3">
+            <NavLink to="/" className="group flex min-w-0 items-center gap-2 sm:gap-3">
               <motion.div
                 whileHover={{
                   scale: 1.08,
@@ -218,8 +224,8 @@ const Navbar = () => {
               </motion.div>
 
               {/* Website title now remains visible in mobile views with adjusted sizing */}
-              <div>
-                <h1 className="flex items-center gap-1 text-sm font-black tracking-tight text-white min-w-max sm:text-lg md:text-2xl">
+              <div className="min-w-0">
+                <h1 className="flex items-center gap-1 text-sm font-black tracking-tight text-white sm:text-lg md:text-2xl">
                   Innovative Science 2
                   <motion.span
                     animate={{ rotate: [0, 10, -10, 0] }}
@@ -236,7 +242,7 @@ const Navbar = () => {
           </div>
 
           {/* Right Section: Nav items grouped tightly next to the profile button */}
-          <div className="flex items-center gap-4">
+          <div className="flex min-w-0 items-center gap-4 justify-end">
             <motion.button
               type="button"
               whileTap={{ scale: 0.9 }}
@@ -313,11 +319,30 @@ const Navbar = () => {
               ))}
             </motion.div>
 
+            {hasClassButton && (
+              <NavLink to={classButtonPath} aria-label={`Open ${classButtonLabel}`}>
+                {({ isActive }) => (
+                    <motion.div
+                      whileHover={{ y: -3, scale: 1.02 }}
+                      whileTap={{ scale: 0.96 }}
+                      className={`hidden items-center gap-2 rounded-2xl border px-5 py-2.5 text-sm font-semibold backdrop-blur-sm transition-all duration-300 md:flex ${
+                        isActive
+                          ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_25px_rgba(16,185,129,0.25)]'
+                          : 'border-emerald-400/20 bg-white/5 text-slate-200 hover:border-emerald-400/40 hover:bg-white/10 hover:text-white'
+                      }`}
+                    >
+                    <Users size={18} className="text-emerald-300" />
+                    <span className="max-w-[11rem] truncate">{classButtonLabel}</span>
+                  </motion.div>
+                )}
+              </NavLink>
+            )}
+
             <motion.div
               variants={itemVariants}
               initial="hidden"
               animate="visible"
-              className="hidden items-center gap-2 sm:flex"
+              className="hidden min-w-0 items-center gap-2 sm:flex"
             >
               {auth?.user?.isAdmin && (
                 <NavLink to="/admin" aria-label="Open admin panel">
@@ -483,6 +508,22 @@ const Navbar = () => {
                 <div className="grid gap-2">
                   {auth ? (
                     <>
+                      {hasClassButton && (
+                        <NavLink to={classButtonPath} onClick={() => setIsMenuOpen(false)}>
+                          {({ isActive }) => (
+                            <div
+                              className={`flex items-center gap-4 rounded-xl px-4 py-3 text-base font-medium transition-all duration-200 ${
+                                isActive
+                                  ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-400'
+                                  : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                              }`}
+                            >
+                              <Users size={20} className="text-emerald-400" />
+                              {classButtonLabel}
+                            </div>
+                          )}
+                        </NavLink>
+                      )}
                       {auth.user.isAdmin && (
                         <NavLink to="/admin" onClick={() => setIsMenuOpen(false)}>
                           {({ isActive }) => (

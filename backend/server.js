@@ -6,6 +6,7 @@ const cors = require('cors')
 const dotenv = require('dotenv')
 const multer = require('multer')
 const sharp = require('sharp')
+const path = require('path')
 
 dotenv.config()
 
@@ -19,6 +20,25 @@ const pdfUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 })
+
+const classShareUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+    files: 12,
+  },
+})
+
+const CLASS_POST_CATEGORIES = ['assignment', 'important-question', 'practice-paper']
+const CLASS_POST_CATEGORY_LABELS = {
+  assignment: 'Assignment',
+  'important-question': 'Important Question',
+  'practice-paper': 'Practice Paper',
+}
+const CLASS_POST_PHOTO_FORMAT = String(process.env.CLASS_POST_PHOTO_FORMAT || 'webp').toLowerCase() === 'avif'
+  ? 'avif'
+  : 'webp'
+const CLASS_POST_PHOTO_CONTENT_TYPE = CLASS_POST_PHOTO_FORMAT === 'avif' ? 'image/avif' : 'image/webp'
 
 const PORT = process.env.PORT || 5000
 const MONGODB_URI = process.env.MONGODB_URI
@@ -567,6 +587,53 @@ const messageSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+const classPostSchema = new mongoose.Schema(
+  {
+    classId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Class',
+      required: true,
+      index: true,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    category: {
+      type: String,
+      enum: CLASS_POST_CATEGORIES,
+      default: 'assignment',
+    },
+    message: {
+      type: String,
+      trim: true,
+      maxlength: 4000,
+      default: '',
+    },
+    photos: {
+      type: [{
+        data: Buffer,
+        contentType: String,
+        originalName: String,
+        updatedAt: Date,
+      }],
+      default: [],
+    },
+    pdf: {
+      data: Buffer,
+      contentType: String,
+      originalName: String,
+      updatedAt: Date,
+    },
+  },
+  { timestamps: true },
+)
+
+classPostSchema.index({ classId: 1, createdAt: -1 })
+
+const ClassPost = mongoose.model('ClassPost', classPostSchema)
+
 const pyqSchema = new mongoose.Schema(
   {
     title: {
@@ -702,6 +769,89 @@ const publicPyq = (pyq) => ({
   uploadedAt: pyq.createdAt,
 })
 
+const bufferToDataUrl = (file = {}) => {
+  if (!file?.data || !file?.contentType) {
+    return ''
+  }
+
+  return `data:${file.contentType};base64,${Buffer.from(file.data).toString('base64')}`
+}
+
+const convertClassPhoto = async (file) => {
+  const image = sharp(file.buffer).rotate()
+  const data = CLASS_POST_PHOTO_FORMAT === 'avif'
+    ? await image.avif({ quality: 55 }).toBuffer()
+    : await image.webp({ quality: 82 }).toBuffer()
+  const baseName = path.parse(file.originalname || 'photo').name
+
+  return {
+    data,
+    contentType: CLASS_POST_PHOTO_CONTENT_TYPE,
+    originalName: `${baseName}.${CLASS_POST_PHOTO_FORMAT}`,
+    updatedAt: new Date(),
+  }
+}
+
+const publicClassPost = (post) => {
+  const normalizedPost = typeof post.toObject === 'function' ? post.toObject() : post
+
+  return {
+    id: String(normalizedPost._id),
+    classId: String(normalizedPost.classId?._id || normalizedPost.classId || ''),
+    category: normalizedPost.category || 'assignment',
+    categoryLabel: CLASS_POST_CATEGORY_LABELS[normalizedPost.category || 'assignment'] || 'Assignment',
+    message: normalizedPost.message || '',
+    createdAt: normalizedPost.createdAt,
+    createdBy: normalizedPost.createdBy
+      ? {
+          id: String(normalizedPost.createdBy._id || normalizedPost.createdBy),
+          name: normalizedPost.createdBy.name || '',
+        }
+      : null,
+    photos: (normalizedPost.photos || []).map((photo) => ({
+      id: String(photo._id),
+      name: photo.originalName || 'photo',
+      contentType: photo.contentType || '',
+      photoUrl: `/api/classes/${String(normalizedPost.classId?._id || normalizedPost.classId || '')}/posts/${String(normalizedPost._id)}/photos/${String(photo._id)}?v=${photo.updatedAt?.getTime() || Date.now()}`,
+      dataUrl: bufferToDataUrl(photo),
+    })),
+    pdf: normalizedPost.pdf?.data
+      ? {
+          name: normalizedPost.pdf.originalName || 'attachment.pdf',
+          contentType: normalizedPost.pdf.contentType || 'application/pdf',
+          pdfUrl: `/api/classes/${String(normalizedPost.classId?._id || normalizedPost.classId || '')}/posts/${String(normalizedPost._id)}/pdf?v=${normalizedPost.pdf.updatedAt?.getTime() || Date.now()}`,
+          dataUrl: bufferToDataUrl(normalizedPost.pdf),
+        }
+      : null,
+  }
+}
+
+const getAuthenticatedUserFromRequest = async (req) => {
+  const headerToken = String(req.headers.authorization || '').startsWith('Bearer ')
+    ? String(req.headers.authorization).slice(7)
+    : ''
+  const queryToken = String(req.query.token || '')
+  const token = headerToken || queryToken
+
+  if (!token) {
+    return null
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET)
+    const userId = payload?.userId || payload?.id || payload?._id || payload?.sub || payload
+
+    if (!userId) {
+      return null
+    }
+
+    const user = await User.findById(userId).populate('classId')
+    return user || null
+  } catch (error) {
+    return null
+  }
+}
+
 const chapterBrainCellsFromPercent = (percent = 0) => {
   const normalized = Math.max(0, Math.min(Number(percent) || 0, 100))
   return Math.round((normalized / 100) * 1000)
@@ -781,19 +931,89 @@ const buildChapterBreakdownEntry = ({ chapter, score, totalQuestions, objectiveL
   }
 }
 
+const normalizeQuestionId = (value = '') => String(value || '').trim()
+
 const summarizeAttemptHistory = (attempts = []) => {
   const chapterTotals = new Map()
+  const rewardedQuestionIds = new Set()
   let totalBrainCells = 0
   let totalScore = 0
   let totalQuestions = 0
   let attemptCount = attempts.length
+  const orderedAttempts = [...attempts].sort(
+    (left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0),
+  )
 
-  attempts.forEach((attempt) => {
+  orderedAttempts.forEach((attempt) => {
     totalScore += safeNumber(attempt.totalScore)
     totalQuestions += safeNumber(attempt.totalQuestions)
 
-    ;(attempt.chapterBreakdown || []).forEach((chapterEntry) => {
-      const key = String(chapterEntry.chapterId)
+    const chapterAttemptMap = new Map()
+    const questionBreakdown = Array.isArray(attempt.questionBreakdown) ? attempt.questionBreakdown : []
+
+    if (questionBreakdown.length) {
+      questionBreakdown.forEach((item) => {
+        const chapterId = normalizeQuestionId(item.chapterId)
+        if (!chapterId) return
+
+        const current = chapterAttemptMap.get(chapterId) || {
+          chapterId: item.chapterId,
+          chapterNumber: safeNumber(item.chapterNumber),
+          chapterName: item.chapterName || '',
+          score: 0,
+          totalQuestions: 0,
+          percent: 0,
+          brainCells: 0,
+          conceptSummary: attempt.conceptSummary || null,
+          sourceName: attempt.sourceName || '',
+        }
+
+        current.totalQuestions += 1
+
+        if (item.status === 'correct') {
+          current.score += 1
+
+          const questionId = normalizeQuestionId(item.questionId)
+          if (questionId && !rewardedQuestionIds.has(questionId)) {
+            rewardedQuestionIds.add(questionId)
+            current.brainCells += 1
+            totalBrainCells += 1
+          }
+        }
+
+        current.percent = current.totalQuestions
+          ? Math.round((current.score / current.totalQuestions) * 100)
+          : 0
+        chapterAttemptMap.set(chapterId, current)
+      })
+    } else {
+      ;(attempt.chapterBreakdown || []).forEach((chapterEntry) => {
+        const chapterId = normalizeQuestionId(chapterEntry.chapterId)
+        if (!chapterId) return
+
+        const current = chapterAttemptMap.get(chapterId) || {
+          chapterId: chapterEntry.chapterId,
+          chapterNumber: safeNumber(chapterEntry.chapterNumber),
+          chapterName: chapterEntry.chapterName || '',
+          score: 0,
+          totalQuestions: 0,
+          percent: 0,
+          brainCells: 0,
+          conceptSummary: attempt.conceptSummary || null,
+          sourceName: attempt.sourceName || '',
+        }
+
+        current.score += safeNumber(chapterEntry.score)
+        current.totalQuestions += safeNumber(chapterEntry.totalQuestions)
+        current.percent = current.totalQuestions
+          ? Math.round((current.score / current.totalQuestions) * 100)
+          : 0
+        chapterAttemptMap.set(chapterId, current)
+      })
+    }
+
+    chapterAttemptMap.forEach((chapterEntry) => {
+      const key = normalizeQuestionId(chapterEntry.chapterId)
       if (!key) return
 
       const current = chapterTotals.get(key) || {
@@ -810,7 +1030,7 @@ const summarizeAttemptHistory = (attempts = []) => {
         attemptCount: 0,
         latestAttemptAt: null,
         conceptSummary: chapterEntry.conceptSummary || null,
-        sourceName: attempt.sourceName,
+        sourceName: chapterEntry.sourceName || attempt.sourceName,
       }
 
       current.totalScore += safeNumber(chapterEntry.score)
@@ -829,7 +1049,6 @@ const summarizeAttemptHistory = (attempts = []) => {
 
       current.bestPercent = Math.max(current.bestPercent, safeNumber(chapterEntry.percent))
       chapterTotals.set(key, current)
-      totalBrainCells += safeNumber(chapterEntry.brainCells)
     })
   })
 
@@ -3058,8 +3277,51 @@ app.get('/api/pyqs', optionalAuth, async (req, res) => {
   }
 })
 
-app.get('/api/pyqs/:id/pdf', authRequired, async (req, res) => {
+const getPyqAccessToken = (req) => {
+  const authHeader = String(req.headers.authorization || '')
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim()
+  }
+
+  return String(req.query.token || '').trim()
+}
+
+const verifyPyqAccess = async (req, res) => {
+  const accessToken = getPyqAccessToken(req)
+
+  if (!accessToken) {
+    res.status(401).json({ message: 'Please sign in to view PYQ PDFs.' })
+    return null
+  }
+
   try {
+    const decoded = jwt.verify(accessToken, JWT_SECRET)
+    const userId = decoded?.userId || decoded?.id || decoded?._id || decoded?.sub
+
+    if (!userId) {
+      throw new Error('Missing user id')
+    }
+
+    const user = await User.findById(userId).select('_id').lean()
+
+    if (!user) {
+      throw new Error('User not found')
+    }
+
+    return user
+  } catch (error) {
+    res.status(401).json({ message: 'Please sign in to view PYQ PDFs.' })
+    return null
+  }
+}
+
+app.get('/api/pyqs/:id/pdf', async (req, res) => {
+  try {
+    const user = await verifyPyqAccess(req, res)
+    if (!user) {
+      return
+    }
+
     const pyq = await Pyq.findById(req.params.id).select('title pdf').exec()
 
     if (!pyq?.pdf?.data) {
@@ -3656,6 +3918,293 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Could not submit test.' })
   }
+})
+
+app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
+  try {
+    const { classId } = req.params
+    const classDoc = await Class.findById(classId).lean()
+
+    if (!classDoc) {
+      return res.status(404).json({ message: 'Class not found.' })
+    }
+
+    const canAccessClass = req.user.isAdmin || String(req.user.classId || '') === String(classId)
+
+    if (!canAccessClass) {
+      return res.status(403).json({ message: 'You do not have access to this class.' })
+    }
+
+    const posts = await ClassPost.find({ classId })
+      .populate('createdBy', 'name isAdmin')
+      .sort({ createdAt: -1 })
+      .limit(50)
+
+    res.json({
+      classItem: {
+        id: String(classDoc._id),
+        name: classDoc.name,
+        description: classDoc.description || '',
+        grade: classDoc.grade || '',
+      },
+      posts: posts.map(publicClassPost),
+      canPost: Boolean(req.user.isAdmin),
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load class feed.' })
+  }
+})
+
+app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.fields([
+  { name: 'photos', maxCount: 10 },
+  { name: 'pdf', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Only admin can edit class posts.' })
+    }
+
+    const { classId, postId } = req.params
+    const post = await ClassPost.findOne({ _id: postId, classId })
+
+    if (!post) {
+      return res.status(404).json({ message: 'Post not found.' })
+    }
+
+    const message = typeof req.body.message === 'string' ? req.body.message.trim() : post.message
+    const category = typeof req.body.category === 'string' && CLASS_POST_CATEGORIES.includes(req.body.category)
+      ? req.body.category
+      : post.category || 'assignment'
+    const photos = Array.isArray(req.files?.photos) ? req.files.photos : null
+    const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
+
+    if (!message && (!photos || !photos.length) && !pdfFile && !post.pdf?.data && !(post.photos || []).length) {
+      return res.status(400).json({ message: 'Post cannot be empty.' })
+    }
+
+    if (photos && photos.some((file) => !file.mimetype?.startsWith('image/'))) {
+      return res.status(400).json({ message: 'Photos must be image files.' })
+    }
+
+    if (pdfFile && pdfFile.mimetype !== 'application/pdf') {
+      return res.status(400).json({ message: 'PDF attachment must be a PDF file.' })
+    }
+
+    if (photos) {
+      if (photos.some((file) => Number(file.size) > 5 * 1024 * 1024)) {
+        return res.status(400).json({ message: 'Each photo must be 5 MB or smaller.' })
+      }
+
+      post.photos = await Promise.all(photos.map(convertClassPhoto))
+    }
+
+    if (pdfFile) {
+      if (Number(pdfFile.size) > 25 * 1024 * 1024) {
+        return res.status(400).json({ message: 'PDF must be 25 MB or smaller.' })
+      }
+
+      post.pdf = {
+        data: pdfFile.buffer,
+        contentType: pdfFile.mimetype,
+        originalName: pdfFile.originalname,
+        updatedAt: new Date(),
+      }
+    }
+
+    post.message = message
+    post.category = category
+
+    await post.save()
+    await post.populate('createdBy', 'name isAdmin')
+
+    res.json({
+      post: publicClassPost(post),
+      message: 'Updated successfully.',
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not edit class post.' })
+  }
+})
+
+app.delete('/api/classes/:classId/posts/:postId', authRequired, async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Only admin can delete class posts.' })
+    }
+
+    const { classId, postId } = req.params
+    const post = await ClassPost.findOneAndDelete({ _id: postId, classId })
+
+    if (!post) {
+      return res.status(404).json({ message: 'Post not found.' })
+    }
+
+    res.json({ message: 'Deleted successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete class post.' })
+  }
+})
+
+app.get('/api/classes/:classId/posts/:postId/pdf', async (req, res) => {
+  try {
+    const { classId, postId } = req.params
+    const currentUser = await getAuthenticatedUserFromRequest(req)
+
+    if (!currentUser) {
+      return res.status(401).json({ message: 'Please sign in first.' })
+    }
+
+    const canAccessClass = currentUser.isAdmin || String(currentUser.classId?._id || currentUser.classId || '') === String(classId)
+
+    if (!canAccessClass) {
+      return res.status(403).json({ message: 'You do not have access to this class.' })
+    }
+
+    const post = await ClassPost.findOne({ _id: postId, classId })
+
+    if (!post || !post.pdf?.data) {
+      return res.status(404).json({ message: 'PDF not found.' })
+    }
+
+    res.setHeader('Content-Type', post.pdf.contentType || 'application/pdf')
+    const isDownload = String(req.query.download || '') === '1'
+    res.setHeader(
+      'Content-Disposition',
+      `${isDownload ? 'attachment' : 'inline'}; filename="${post.pdf.originalName || 'attachment.pdf'}"`,
+    )
+    res.send(post.pdf.data)
+  } catch (error) {
+    res.status(500).json({ message: 'Could not open PDF.' })
+  }
+})
+
+app.get('/api/classes/:classId/posts/:postId/photos/:photoId', async (req, res) => {
+  try {
+    const { classId, postId, photoId } = req.params
+    const currentUser = await getAuthenticatedUserFromRequest(req)
+
+    if (!currentUser) {
+      return res.status(401).json({ message: 'Please sign in first.' })
+    }
+
+    const canAccessClass = currentUser.isAdmin || String(currentUser.classId?._id || currentUser.classId || '') === String(classId)
+
+    if (!canAccessClass) {
+      return res.status(403).json({ message: 'You do not have access to this class.' })
+    }
+
+    const post = await ClassPost.findOne({ _id: postId, classId })
+
+    if (!post) {
+      return res.status(404).json({ message: 'Photo not found.' })
+    }
+
+    const photo = (post.photos || []).find((item) => String(item._id) === String(photoId))
+
+    if (!photo?.data) {
+      return res.status(404).json({ message: 'Photo not found.' })
+    }
+
+    const isDownload = String(req.query.download || '') === '1'
+    res.setHeader('Content-Type', photo.contentType || 'image/jpeg')
+    res.setHeader(
+      'Content-Disposition',
+      `${isDownload ? 'attachment' : 'inline'}; filename="${photo.originalName || 'photo'}"`,
+    )
+    res.send(photo.data)
+  } catch (error) {
+    res.status(500).json({ message: 'Could not open photo.' })
+  }
+})
+
+app.post(
+  '/api/classes/:classId/posts',
+  authRequired,
+  classShareUpload.fields([
+    { name: 'photos', maxCount: 10 },
+    { name: 'pdf', maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      if (!req.user.isAdmin) {
+        return res.status(403).json({ message: 'Only admin can share in this class.' })
+      }
+
+      const { classId } = req.params
+      const classDoc = await Class.findById(classId)
+
+      if (!classDoc) {
+        return res.status(404).json({ message: 'Class not found.' })
+      }
+
+      const message = String(req.body.message || '').trim()
+      const category = CLASS_POST_CATEGORIES.includes(String(req.body.category || 'assignment'))
+        ? String(req.body.category || 'assignment')
+        : 'assignment'
+      const photos = Array.isArray(req.files?.photos) ? req.files.photos : []
+      const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
+
+      if (!message && !photos.length && !pdfFile) {
+        return res.status(400).json({ message: 'Add a message, a photo, or a PDF before sharing.' })
+      }
+
+      if (photos.some((file) => !file.mimetype?.startsWith('image/'))) {
+        return res.status(400).json({ message: 'Photos must be image files.' })
+      }
+
+      if (pdfFile && pdfFile.mimetype !== 'application/pdf') {
+        return res.status(400).json({ message: 'PDF attachment must be a PDF file.' })
+      }
+
+      const photoLimitBytes = 5 * 1024 * 1024
+      const pdfLimitBytes = 25 * 1024 * 1024
+
+      if (photos.some((file) => Number(file.size) > photoLimitBytes)) {
+        return res.status(400).json({ message: 'Each photo must be 5 MB or smaller.' })
+      }
+
+      if (pdfFile && Number(pdfFile.size) > pdfLimitBytes) {
+        return res.status(400).json({ message: 'PDF must be 25 MB or smaller.' })
+      }
+
+      const post = await ClassPost.create({
+        classId: classDoc._id,
+        createdBy: req.user._id,
+        category,
+        message,
+        photos: await Promise.all(photos.map(convertClassPhoto)),
+        pdf: pdfFile
+          ? {
+              data: pdfFile.buffer,
+              contentType: pdfFile.mimetype,
+              originalName: pdfFile.originalname,
+              updatedAt: new Date(),
+            }
+          : undefined,
+      })
+
+      await post.populate('createdBy', 'name isAdmin')
+
+      res.status(201).json({
+        post: publicClassPost(post),
+        message: 'Shared successfully.',
+      })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not share in this class.' })
+    }
+  },
+)
+
+app.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: 'One of the uploaded files is too large.' })
+    }
+
+    return res.status(400).json({ message: 'Could not process uploaded files.' })
+  }
+
+  return next(error)
 })
 
 const ensureAdminUser = async () => {

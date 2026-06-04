@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { BookOpen, FileUp, Filter, Loader2, Trash2, UploadCloud, X } from 'lucide-react'
@@ -44,7 +44,16 @@ const PyqsPage = () => {
   const [pdfObjectUrl, setPdfObjectUrl] = useState('')
   const [pdfLoading, setPdfLoading] = useState(false)
   const [isSignInPopupOpen, setIsSignInPopupOpen] = useState(false)
+  const mobilePdfWindowRef = useRef(null)
   const selectedPyq = pyqs.find((item) => item.id === selectedPyqId) || pyqs[0] || null
+
+  const closeMobilePdfWindow = () => {
+    if (mobilePdfWindowRef.current && !mobilePdfWindowRef.current.closed) {
+      mobilePdfWindowRef.current.close()
+    }
+
+    mobilePdfWindowRef.current = null
+  }
 
   useEffect(() => {
     const syncAuth = () => setAuth(getStoredAuth())
@@ -63,6 +72,8 @@ const PyqsPage = () => {
       window.removeEventListener('resize', syncViewport)
     }
   }, [])
+
+  useEffect(() => () => closeMobilePdfWindow(), [])
 
   useEffect(() => {
     const loadPyqs = async () => {
@@ -85,66 +96,25 @@ const PyqsPage = () => {
   }, [])
 
   useEffect(() => {
-    let active = true
-    let currentObjectUrl = ''
-
-    const loadPdf = async () => {
-      if (!selectedPyq?.pdfUrl) {
-        setPdfObjectUrl('')
-        setPdfLoading(false)
-        return
-      }
-
-      if (!auth?.token) {
-        setPdfObjectUrl('')
-        setPdfLoading(false)
-        return
-      }
-
-      setPdfLoading(true)
-
-      try {
-        const response = await fetch(assetUrl(selectedPyq.pdfUrl), {
-          headers: {
-            Authorization: `Bearer ${auth.token}`,
-          },
-        })
-
-        if (!response.ok) {
-          throw new Error(response.status === 401 ? 'Please sign in to view PYQ PDFs.' : 'Could not open this PDF.')
-        }
-
-        const blob = await response.blob()
-        currentObjectUrl = URL.createObjectURL(blob)
-
-        if (active) {
-          setPdfObjectUrl(currentObjectUrl)
-          setError('')
-        }
-      } catch (err) {
-        if (active) {
-          setPdfObjectUrl('')
-          setError(err.message)
-        }
-      } finally {
-        if (active) {
-          setPdfLoading(false)
-        }
-      }
-    }
-
-    loadPdf()
-
-    return () => {
-      active = false
-      if (currentObjectUrl) {
-        URL.revokeObjectURL(currentObjectUrl)
-      }
-    }
-  }, [auth?.token, selectedPyq?.pdfUrl])
+    setPdfObjectUrl('')
+    setPdfLoading(false)
+    setIsMobileViewerOpen(false)
+    setIsMobilePdfLoading(false)
+  }, [selectedPyqId])
 
   const handleUploadChange = (field, value) => {
     setUploadForm((current) => ({ ...current, [field]: value }))
+  }
+
+  const buildProtectedPdfUrl = (pdfUrl) => {
+    const baseUrl = assetUrl(pdfUrl)
+
+    if (!baseUrl) {
+      return ''
+    }
+
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    return `${baseUrl}${separator}token=${encodeURIComponent(auth?.token || '')}`
   }
 
   const openPyq = (pyq) => {
@@ -158,9 +128,17 @@ const PyqsPage = () => {
     setSelectedPyqId(pyq.id)
     setIsSignInPopupOpen(false)
 
-    if (isMobile) {
-      setIsMobilePdfLoading(true)
-      setIsMobileViewerOpen(true)
+    const pdfUrl = buildProtectedPdfUrl(pyq.pdfUrl)
+
+    if (!pdfUrl) {
+      setError('Could not open this PDF.')
+      return
+    }
+
+    const newWindow = window.open(pdfUrl, '_blank', 'noopener,noreferrer')
+
+    if (!newWindow) {
+      window.location.assign(pdfUrl)
     }
   }
 
@@ -221,6 +199,7 @@ const PyqsPage = () => {
       setIsMobileViewerOpen(false)
       setIsMobilePdfLoading(false)
       setPdfObjectUrl('')
+      closeMobilePdfWindow()
     } catch (err) {
       setError(err.message)
     }
@@ -445,7 +424,11 @@ const PyqsPage = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setIsMobileViewerOpen(false)}
+                onClick={() => {
+                  setIsMobileViewerOpen(false)
+                  setIsMobilePdfLoading(false)
+                  closeMobilePdfWindow()
+                }}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/10 text-white"
                 aria-label="Close PDF"
               >
@@ -453,29 +436,53 @@ const PyqsPage = () => {
               </button>
             </div>
 
-            <div className="relative flex-1">
-              <iframe
-                key={`${selectedPyq.id}-mobile`}
-                title={selectedPyq.title}
-                src={pdfObjectUrl}
-                onLoad={() => setIsMobilePdfLoading(false)}
-                className="h-full w-full bg-white"
-              />
-
-              {isMobilePdfLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-slate-950">
-                  <div className="flex flex-col items-center gap-3 text-white">
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
-                      className="rounded-full border-4 border-white/20 border-t-cyan-300 p-3"
+            <div className="grid flex-1 place-items-center px-4 text-center">
+              {isMobilePdfLoading ? (
+                <div className="flex flex-col items-center gap-3 text-white">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+                    className="rounded-full border-4 border-white/20 border-t-cyan-300 p-3"
+                  >
+                    <Loader2 className="h-6 w-6 text-cyan-300" />
+                  </motion.div>
+                  <p className="text-sm font-semibold text-slate-200">Opening PDF...</p>
+                  <p className="max-w-sm text-xs leading-6 text-slate-400">
+                    Your PDF is opening in a new tab for better mobile support.
+                  </p>
+                </div>
+              ) : pdfObjectUrl ? (
+                <div className="flex max-w-sm flex-col items-center gap-4 text-white">
+                  <BookOpen className="h-10 w-10 text-cyan-300" />
+                  <p className="text-sm font-semibold text-slate-200">
+                    If the PDF did not open automatically, tap the button below.
+                  </p>
+                  <div className="flex w-full flex-col gap-3 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const win = window.open(pdfObjectUrl, '_blank')
+                        if (win) {
+                          win.focus()
+                        }
+                      }}
+                      className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl bg-cyan-400 px-5 font-bold text-slate-950 transition hover:bg-cyan-300"
                     >
-                      <Loader2 className="h-6 w-6 text-cyan-300" />
-                    </motion.div>
-                    <p className="text-sm font-semibold text-slate-200">Opening PDF...</p>
+                      Open PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMobileViewerOpen(false)
+                        closeMobilePdfWindow()
+                      }}
+                      className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-5 font-bold text-white transition hover:bg-white/10"
+                    >
+                      Close
+                    </button>
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         </div>

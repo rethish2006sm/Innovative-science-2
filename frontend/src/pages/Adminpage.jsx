@@ -1,10 +1,41 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { BadgePlus, BellRing, BookOpen, Edit3, MessageCircleMore, Search, Shield, Sparkles, Trash2, Users, X } from 'lucide-react'
-import { apiRequest } from '../api'
+import {
+  BadgePlus,
+  BellRing,
+  BookOpen,
+  CalendarDays,
+  Download,
+  Edit3,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  MessageCircleMore,
+  Search,
+  Send,
+  Shield,
+  Sparkles,
+  Trash2,
+  Upload,
+  Users,
+  X,
+} from 'lucide-react'
+import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 
 const emptyClassForm = { name: '', description: '', grade: '' }
+const emptyClassShareForm = { message: '', category: 'assignment' }
+
+const CLASS_POST_CATEGORIES = [
+  { value: 'assignment', label: 'Assignment' },
+  { value: 'important-question', label: 'Important Question' },
+  { value: 'practice-paper', label: 'Practice Paper' },
+]
+
+const CLASS_POST_CATEGORY_LABELS = CLASS_POST_CATEGORIES.reduce((accumulator, item) => {
+  accumulator[item.value] = item.label
+  return accumulator
+}, {})
 
 const Adminpage = () => {
   const auth = getStoredAuth()
@@ -23,6 +54,17 @@ const Adminpage = () => {
   const [classForm, setClassForm] = useState(emptyClassForm)
   const [editingClassId, setEditingClassId] = useState('')
   const [classSaving, setClassSaving] = useState(false)
+  const [selectedClassFeedId, setSelectedClassFeedId] = useState('')
+  const [classPosts, setClassPosts] = useState([])
+  const [classFeedLoading, setClassFeedLoading] = useState(false)
+  const [classFeedError, setClassFeedError] = useState('')
+  const [classShareForm, setClassShareForm] = useState(emptyClassShareForm)
+  const [classSharePhotos, setClassSharePhotos] = useState([])
+  const [classSharePdf, setClassSharePdf] = useState(null)
+  const [classShareSaving, setClassShareSaving] = useState(false)
+  const [selectedPhoto, setSelectedPhoto] = useState(null)
+  const [selectedPdf, setSelectedPdf] = useState(null)
+  const [editingClassPostId, setEditingClassPostId] = useState('')
 
   const loadData = async () => {
     setLoading(true)
@@ -47,11 +89,60 @@ const Adminpage = () => {
     }
   }
 
+  const loadClassFeed = async (classId) => {
+    if (!classId) {
+      setClassPosts([])
+      return
+    }
+
+    setClassFeedLoading(true)
+    setClassFeedError('')
+
+    try {
+      const data = await apiRequest(`/api/classes/${classId}/feed`)
+      setClassPosts(data.posts || [])
+    } catch (err) {
+      setClassFeedError(err.message)
+      setClassPosts([])
+    } finally {
+      setClassFeedLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (isAdmin) {
       loadData()
     }
   }, [isAdmin, search])
+
+  useEffect(() => {
+    if (!classes.length) {
+      setSelectedClassFeedId('')
+      setClassPosts([])
+      return
+    }
+
+    setSelectedClassFeedId((current) => {
+      if (current && classes.some((classItem) => classItem._id === current)) {
+        return current
+      }
+
+      return classes[0]._id
+    })
+  }, [classes])
+
+  useEffect(() => {
+    if (activeTab === 'class-board' && selectedClassFeedId) {
+      loadClassFeed(selectedClassFeedId)
+    }
+  }, [activeTab, selectedClassFeedId])
+
+  useEffect(() => {
+    setEditingClassPostId('')
+    setClassShareForm(emptyClassShareForm)
+    setClassSharePhotos([])
+    setClassSharePdf(null)
+  }, [selectedClassFeedId])
 
   const openStudentDetail = async (student) => {
     setSelectedStudent(student)
@@ -153,6 +244,153 @@ const Adminpage = () => {
     }
   }
 
+  const shareClassMaterial = async (event) => {
+    event.preventDefault()
+
+    if (!selectedClassFeedId) {
+      setClassFeedError('Choose a class first.')
+      return
+    }
+
+    if (!classShareForm.message.trim() && !classSharePhotos.length && !classSharePdf) {
+      setClassFeedError('Add a message, photo, or PDF before sharing.')
+      return
+    }
+
+    setClassShareSaving(true)
+    setClassFeedError('')
+
+    try {
+      const formData = new FormData()
+      formData.append('message', classShareForm.message)
+      formData.append('category', classShareForm.category || 'assignment')
+
+      classSharePhotos.forEach((file) => {
+        formData.append('photos', file)
+      })
+
+      if (classSharePdf) {
+        formData.append('pdf', classSharePdf)
+      }
+
+      const isEditing = Boolean(editingClassPostId)
+      const data = await apiRequest(
+        isEditing
+          ? `/api/classes/${selectedClassFeedId}/posts/${editingClassPostId}`
+          : `/api/classes/${selectedClassFeedId}/posts`,
+        {
+          method: isEditing ? 'PATCH' : 'POST',
+        body: formData,
+        },
+      )
+
+      setClassPosts((current) =>
+        isEditing
+          ? current.map((post) => (post.id === editingClassPostId ? data.post : post))
+          : [data.post, ...current],
+      )
+      setClassShareForm(emptyClassShareForm)
+      setClassSharePhotos([])
+      setClassSharePdf(null)
+      setEditingClassPostId('')
+    } catch (err) {
+      setClassFeedError(err.message)
+    } finally {
+      setClassShareSaving(false)
+    }
+  }
+
+  const buildProtectedPdfUrl = (pdfUrl, { download = false } = {}) => {
+    const baseUrl = assetUrl(pdfUrl)
+
+    if (!baseUrl) {
+      return ''
+    }
+
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    const tokenUrl = `${baseUrl}${separator}token=${encodeURIComponent(auth?.token || '')}`
+    return download ? `${tokenUrl}&download=1` : tokenUrl
+  }
+
+  const buildProtectedPhotoUrl = (photoUrl, { download = false } = {}) => {
+    const baseUrl = assetUrl(photoUrl)
+
+    if (!baseUrl) {
+      return ''
+    }
+
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    const tokenUrl = `${baseUrl}${separator}token=${encodeURIComponent(auth?.token || '')}`
+    return download ? `${tokenUrl}&download=1` : tokenUrl
+  }
+
+  const openClassPdf = (pdfUrl) => {
+    const previewUrl = buildProtectedPdfUrl(pdfUrl)
+
+    if (!previewUrl) {
+      setClassFeedError('Could not open this PDF.')
+      return
+    }
+
+    setSelectedPhoto(null)
+    setSelectedPdf({
+      name: 'Class PDF',
+      previewUrl,
+      downloadUrl: buildProtectedPdfUrl(pdfUrl, { download: true }),
+    })
+  }
+
+  const openClassPhoto = (photo) => {
+    const previewUrl = buildProtectedPhotoUrl(photo.photoUrl)
+
+    if (!previewUrl) {
+      setClassFeedError('Could not open this image.')
+      return
+    }
+
+    setSelectedPdf(null)
+    setSelectedPhoto({
+      ...photo,
+      previewUrl,
+      downloadUrl: buildProtectedPhotoUrl(photo.photoUrl, { download: true }),
+    })
+  }
+
+  const openClassPostEdit = (post) => {
+    setEditingClassPostId(post.id)
+    setClassShareForm({
+      message: post.message || '',
+      category: post.category || 'assignment',
+    })
+    setClassSharePhotos([])
+    setClassSharePdf(null)
+    setClassFeedError('')
+    setActiveTab('class-board')
+  }
+
+  const deleteClassPost = async (post) => {
+    if (!window.confirm('Delete this class post?')) {
+      return
+    }
+
+    try {
+      await apiRequest(`/api/classes/${selectedClassFeedId}/posts/${post.id}`, {
+        method: 'DELETE',
+      })
+
+      setClassPosts((current) => current.filter((item) => item.id !== post.id))
+
+      if (editingClassPostId === post.id) {
+        setEditingClassPostId('')
+        setClassShareForm(emptyClassShareForm)
+      }
+    } catch (err) {
+      setClassFeedError(err.message)
+    }
+  }
+
+  const activeClassItem = classes.find((classItem) => classItem._id === selectedClassFeedId) || null
+
   const classOptions = useMemo(() => classes, [classes])
 
   if (!isAdmin) {
@@ -185,14 +423,14 @@ const Adminpage = () => {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'reports', 'contacts'].map((tab) => (
+            {['students', 'classes', 'class-board', 'reports', 'contacts'].map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
                 className={`rounded-full px-5 py-3 text-sm font-black capitalize transition ${activeTab === tab ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
               >
-                {tab}
+                {tab === 'class-board' ? 'class board' : tab}
               </button>
             ))}
           </div>
@@ -367,6 +605,275 @@ const Adminpage = () => {
                   </div>
                 )}
 
+                {activeTab === 'class-board' && (
+                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h2 className="font-serif text-3xl text-slate-950">Class board</h2>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Upload class material from the admin dashboard. Students will see it on their class page.
+                        </p>
+                      </div>
+                      <label className="grid gap-2 text-sm font-bold text-slate-600 sm:w-80">
+                        Select class
+                        <select
+                          value={selectedClassFeedId}
+                          onChange={(event) => setSelectedClassFeedId(event.target.value)}
+                          className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
+                        >
+                          {classOptions.length === 0 ? (
+                            <option value="">No classes available</option>
+                          ) : (
+                            classOptions.map((classItem) => (
+                              <option key={classItem._id} value={classItem._id}>
+                                {classItem.name} {classItem.grade ? `(${classItem.grade})` : ''}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </label>
+                    </div>
+
+                    {activeClassItem && (
+                      <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Selected class</p>
+                        <h3 className="mt-2 text-lg font-black text-slate-950">{activeClassItem.name}</h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {activeClassItem.description || 'No description available.'}
+                        </p>
+                      </div>
+                    )}
+
+                    <form onSubmit={shareClassMaterial} className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-center gap-2">
+                        <Upload className="h-5 w-5 text-emerald-700" />
+                        <h3 className="font-serif text-2xl text-slate-950">
+                          {editingClassPostId ? 'Edit material' : 'Share material'}
+                        </h3>
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        Choose a category, then share a message, photos, a PDF, or any combination.
+                      </p>
+
+                      <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
+                        Category
+                        <select
+                          value={classShareForm.category}
+                          onChange={(event) => setClassShareForm({ ...classShareForm, category: event.target.value })}
+                          className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-emerald-400"
+                        >
+                          {CLASS_POST_CATEGORIES.map((category) => (
+                            <option key={category.value} value={category.value}>
+                              {category.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
+                        Message
+                        <textarea
+                          value={classShareForm.message}
+                          onChange={(event) => setClassShareForm({ message: event.target.value })}
+                          rows={5}
+                          placeholder="Write homework, exam notice, revision tips, or any class update..."
+                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-emerald-400"
+                        />
+                      </label>
+
+                      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                        <label className="grid gap-2 rounded-3xl border border-dashed border-slate-200 bg-white p-4 text-sm font-bold text-slate-600">
+                          <div className="flex items-center gap-2">
+                            <ImageIcon className="h-4 w-4 text-emerald-600" />
+                            Photos
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={(event) => setClassSharePhotos(Array.from(event.target.files || []))}
+                            className="text-sm font-medium text-slate-500 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-950 file:px-4 file:py-2 file:text-white file:font-bold"
+                          />
+                          <p className="text-xs font-medium text-slate-400">
+                            Add one or more images.
+                          </p>
+                          {classSharePhotos.length > 0 && (
+                            <div className="grid gap-2 pt-1">
+                              {classSharePhotos.map((file, index) => (
+                                <FileChip
+                                  key={`${file.name}-${index}`}
+                                  label={file.name}
+                                  onRemove={() => setClassSharePhotos((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </label>
+
+                        <label className="grid gap-2 rounded-3xl border border-dashed border-slate-200 bg-white p-4 text-sm font-bold text-slate-600">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-emerald-600" />
+                            PDF
+                          </div>
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            onChange={(event) => setClassSharePdf(event.target.files?.[0] || null)}
+                            className="text-sm font-medium text-slate-500 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-950 file:px-4 file:py-2 file:text-white file:font-bold"
+                          />
+                          <p className="text-xs font-medium text-slate-400">
+                            Upload one PDF document.
+                          </p>
+                          {classSharePdf && (
+                            <FileChip
+                              label={classSharePdf.name}
+                              onRemove={() => setClassSharePdf(null)}
+                            />
+                          )}
+                        </label>
+                      </div>
+
+                      {classFeedError && (
+                        <div className="mt-4 rounded-3xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                          {classFeedError}
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={classShareSaving}
+                        className="mt-4 inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {classShareSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Sharing...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="h-4 w-4" />
+                            {editingClassPostId ? 'Save changes' : 'Share to class'}
+                          </>
+                        )}
+                      </button>
+                      {editingClassPostId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingClassPostId('')
+                            setClassShareForm(emptyClassShareForm)
+                            setClassSharePhotos([])
+                            setClassSharePdf(null)
+                          }}
+                          className="mt-3 inline-flex h-12 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 font-bold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Cancel edit
+                        </button>
+                      )}
+                    </form>
+
+                    <div className="mt-6 flex items-center gap-2">
+                      <CalendarDays className="h-5 w-5 text-slate-700" />
+                      <h3 className="font-serif text-2xl text-slate-950">Latest class posts</h3>
+                    </div>
+
+                    {classFeedLoading ? (
+                      <div className="mt-4 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                        Loading class feed...
+                      </div>
+                    ) : classPosts.length > 0 ? (
+                      <div className="mt-4 grid gap-3">
+                        {classPosts.map((post) => (
+                          <article key={post.id} className="rounded-3xl border border-slate-200 bg-white p-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
+                                  {post.createdBy?.name || 'Admin'}
+                                </p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                  {new Date(post.createdAt).toLocaleString()}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+                                  {post.categoryLabel || CLASS_POST_CATEGORY_LABELS[post.category] || 'Update'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openClassPostEdit(post)}
+                                  className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                                  aria-label="Edit post"
+                                >
+                                  <Edit3 className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteClassPost(post)}
+                                  className="grid h-9 w-9 place-items-center rounded-full border border-red-100 bg-white text-red-500 transition hover:bg-red-50 hover:text-red-700"
+                                  aria-label="Delete post"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {post.message && (
+                              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                {post.message}
+                              </p>
+                            )}
+
+                            {post.photos?.length > 0 && (
+                              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                {post.photos.map((photo) => {
+                                  const previewUrl = buildProtectedPhotoUrl(photo.photoUrl)
+
+                                  return (
+                                    <button
+                                      key={photo.id}
+                                      type="button"
+                                      onClick={() => openClassPhoto(photo)}
+                                      className="group overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 text-left transition hover:-translate-y-0.5 hover:shadow-md"
+                                    >
+                                      <div className="relative">
+                                        <img
+                                          src={previewUrl || photo.dataUrl}
+                                          alt={photo.name}
+                                          className="h-56 w-full object-cover"
+                                        />
+                                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950/35 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                                        <span className="absolute right-3 top-3 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
+                                          View
+                                        </span>
+                                      </div>
+                                      <p className="truncate px-4 py-3 text-xs font-bold text-slate-500">{photo.name}</p>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            )}
+
+                            {post.pdf?.pdfUrl && (
+                              <button
+                                type="button"
+                                onClick={() => openClassPdf(post.pdf.pdfUrl)}
+                                className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100"
+                              >
+                                <FileText className="h-4 w-4 text-emerald-600" />
+                                View PDF
+                              </button>
+                            )}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                        No class posts yet.
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {activeTab === 'reports' && (
                   <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex items-center gap-2">
@@ -461,6 +968,82 @@ const Adminpage = () => {
           )}
         </div>
       </div>
+
+      {selectedPhoto && (
+        <div className="fixed inset-0 z-[240] flex items-center justify-center bg-slate-950/90 px-4 py-6 backdrop-blur-sm">
+          <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900 shadow-[0_30px_120px_rgba(15,23,42,0.45)]">
+            <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 text-white sm:px-5">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300">Photo open</p>
+                <h3 className="truncate text-base font-black sm:text-lg">{selectedPhoto.name}</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={selectedPhoto.downloadUrl}
+                  className="inline-flex h-10 items-center gap-2 rounded-2xl bg-white px-4 text-sm font-bold text-slate-950 transition hover:bg-cyan-100"
+                >
+                  <Download className="h-4 w-4" />
+                  Download
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPhoto(null)}
+                  className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/15"
+                  aria-label="Close photo viewer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid flex-1 place-items-center overflow-auto bg-black/60 p-4">
+              <img
+                src={selectedPhoto.previewUrl}
+                alt={selectedPhoto.name}
+                className="max-h-[80vh] max-w-full rounded-[1.5rem] object-contain shadow-2xl"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedPdf && (
+        <div className="fixed inset-0 z-[240] flex items-center justify-center bg-slate-950/90 px-4 py-6 backdrop-blur-sm">
+          <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900 shadow-[0_30px_120px_rgba(15,23,42,0.45)]">
+            <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 text-white sm:px-5">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300">PDF open</p>
+                <h3 className="truncate text-base font-black sm:text-lg">{selectedPdf.name}</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={selectedPdf.downloadUrl}
+                  className="inline-flex h-10 items-center gap-2 rounded-2xl bg-white px-4 text-sm font-bold text-slate-950 transition hover:bg-cyan-100"
+                >
+                  <Download className="h-4 w-4" />
+                  Download
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPdf(null)}
+                  className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/15"
+                  aria-label="Close PDF viewer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid flex-1 place-items-center overflow-auto bg-black/60 p-4">
+              <iframe
+                src={selectedPdf.previewUrl}
+                title={selectedPdf.name}
+                className="h-[80vh] w-full rounded-[1.5rem] border-0 bg-white shadow-2xl"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedStudent && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 px-3 py-4 backdrop-blur-sm">
@@ -570,6 +1153,20 @@ const Tip = ({ title, text }) => (
   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
     <p className="text-sm font-black text-slate-950">{title}</p>
     <p className="mt-2 text-sm leading-7 text-slate-600">{text}</p>
+  </div>
+)
+
+const FileChip = ({ label, onRemove }) => (
+  <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+    <span className="truncate text-xs font-semibold text-slate-600">{label}</span>
+    <button
+      type="button"
+      onClick={onRemove}
+      className="grid h-7 w-7 place-items-center rounded-full bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+      aria-label={`Remove ${label}`}
+    >
+      <X className="h-4 w-4" />
+    </button>
   </div>
 )
 

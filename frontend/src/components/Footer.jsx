@@ -152,7 +152,7 @@ const Footer = () => {
             </motion.div>
 
             <motion.p variants={itemVariants} className="text-sm leading-relaxed text-slate-300">
-              Simplifying complex scientific concepts and fostering core conceptual clarity since 2010.
+              Simplifying complex scientific concepts and fostering core conceptual clarity.
             </motion.p>
 
             <motion.div
@@ -294,7 +294,7 @@ const Footer = () => {
 
               <motion.a
                 variants={itemVariants}
-                href="tel:+911234567890"
+                href="tel:7304930375"
                 className="flex items-center gap-3 text-sm text-slate-300 transition-colors hover:text-cyan-400"
               >
                 <PhoneCall size={16} className="text-cyan-400" />
