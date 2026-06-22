@@ -28,8 +28,11 @@ const emptyClassShareForm = { message: '', category: 'assignment' }
 
 const CLASS_POST_CATEGORIES = [
   { value: 'assignment', label: 'Assignment' },
-  { value: 'important-question', label: 'Important Question' },
   { value: 'practice-paper', label: 'Practice Paper' },
+  { value: 'important-question', label: 'Important Question' },
+  { value: 'chapter-marking', label: 'Chapter Wise Marking' },
+  { value: 'notes', label: 'Notes' },
+  { value: 'test-paper', label: 'Test Paper' },
 ]
 
 const CLASS_POST_CATEGORY_LABELS = CLASS_POST_CATEGORIES.reduce((accumulator, item) => {
@@ -37,11 +40,29 @@ const CLASS_POST_CATEGORY_LABELS = CLASS_POST_CATEGORIES.reduce((accumulator, it
   return accumulator
 }, {})
 
+const syncClassShareTargets = (classItems = [], currentTargets = []) => {
+  const targetMap = new Map(currentTargets.map((target) => [String(target.classId), target]))
+
+  return classItems.map((classItem) => {
+    const existingTarget = targetMap.get(String(classItem._id))
+
+    return {
+      classId: String(classItem._id),
+      enabled: Boolean(existingTarget?.enabled),
+      message: existingTarget?.message || '',
+      className: classItem.name || '',
+      grade: classItem.grade || '',
+    }
+  })
+}
+
 const Adminpage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const [activeTab, setActiveTab] = useState('students')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [studentClassFilter, setStudentClassFilter] = useState('')
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
   const [reports, setReports] = useState([])
@@ -62,17 +83,18 @@ const Adminpage = () => {
   const [classSharePhotos, setClassSharePhotos] = useState([])
   const [classSharePdf, setClassSharePdf] = useState(null)
   const [classShareSaving, setClassShareSaving] = useState(false)
+  const [classShareTargets, setClassShareTargets] = useState([])
   const [selectedPhoto, setSelectedPhoto] = useState(null)
   const [selectedPdf, setSelectedPdf] = useState(null)
   const [editingClassPostId, setEditingClassPostId] = useState('')
 
-  const loadData = async () => {
+  const loadData = async (searchTerm = debouncedSearch) => {
     setLoading(true)
     setError('')
 
     try {
       const [studentsData, classesData, reportsData, contactsData] = await Promise.all([
-        apiRequest(`/api/admin/students?search=${encodeURIComponent(search)}`),
+        apiRequest(`/api/admin/students?search=${encodeURIComponent(searchTerm)}`),
         apiRequest('/api/admin/classes'),
         apiRequest('/api/admin/reports?limit=50'),
         apiRequest('/api/admin/contacts?limit=50'),
@@ -113,12 +135,21 @@ const Adminpage = () => {
     if (isAdmin) {
       loadData()
     }
-  }, [isAdmin, search])
+  }, [isAdmin, debouncedSearch])
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedSearch(search.trim())
+    }, 300)
+
+    return () => clearTimeout(timeoutId)
+  }, [search])
 
   useEffect(() => {
     if (!classes.length) {
       setSelectedClassFeedId('')
       setClassPosts([])
+      setClassShareTargets([])
       return
     }
 
@@ -129,20 +160,15 @@ const Adminpage = () => {
 
       return classes[0]._id
     })
-  }, [classes])
+
+    setClassShareTargets((current) => syncClassShareTargets(classes, current))
+  }, [classes, selectedClassFeedId])
 
   useEffect(() => {
     if (activeTab === 'class-board' && selectedClassFeedId) {
       loadClassFeed(selectedClassFeedId)
     }
   }, [activeTab, selectedClassFeedId])
-
-  useEffect(() => {
-    setEditingClassPostId('')
-    setClassShareForm(emptyClassShareForm)
-    setClassSharePhotos([])
-    setClassSharePdf(null)
-  }, [selectedClassFeedId])
 
   const openStudentDetail = async (student) => {
     setSelectedStudent(student)
@@ -244,6 +270,38 @@ const Adminpage = () => {
     }
   }
 
+  const toggleClassShareTarget = (classId) => {
+    setClassShareTargets((current) =>
+      current.map((target) =>
+        target.classId === classId
+          ? { ...target, enabled: !target.enabled }
+          : target,
+      ),
+    )
+  }
+
+  const handlePreviewClassChange = (classId) => {
+    setSelectedClassFeedId(classId)
+  }
+
+  const updateClassShareTargetMessage = (classId, message) => {
+    setClassShareTargets((current) =>
+      current.map((target) =>
+        target.classId === classId
+          ? { ...target, message }
+          : target,
+      ),
+    )
+  }
+
+  const resetClassShareForm = () => {
+    setClassShareForm(emptyClassShareForm)
+    setClassSharePhotos([])
+    setClassSharePdf(null)
+    setEditingClassPostId('')
+    setClassShareTargets((current) => current.map((target) => ({ ...target, enabled: false, message: '' })))
+  }
+
   const shareClassMaterial = async (event) => {
     event.preventDefault()
 
@@ -252,7 +310,19 @@ const Adminpage = () => {
       return
     }
 
-    if (!classShareForm.message.trim() && !classSharePhotos.length && !classSharePdf) {
+    const selectedTargets = classShareTargets.filter((target) => target.enabled)
+    const selectedTargetIds = selectedTargets.map((target) => target.classId)
+
+    if (!selectedTargetIds.length) {
+      setClassFeedError('Tick at least one class to publish this update.')
+      return
+    }
+
+    const hasAnyMessage =
+      classShareForm.message.trim() ||
+      selectedTargets.some((target) => target.message.trim())
+
+    if (!hasAnyMessage && !classSharePhotos.length && !classSharePdf) {
       setClassFeedError('Add a message, photo, or PDF before sharing.')
       return
     }
@@ -274,25 +344,63 @@ const Adminpage = () => {
       }
 
       const isEditing = Boolean(editingClassPostId)
-      const data = await apiRequest(
-        isEditing
-          ? `/api/classes/${selectedClassFeedId}/posts/${editingClassPostId}`
-          : `/api/classes/${selectedClassFeedId}/posts`,
-        {
-          method: isEditing ? 'PATCH' : 'POST',
-        body: formData,
-        },
-      )
 
-      setClassPosts((current) =>
-        isEditing
-          ? current.map((post) => (post.id === editingClassPostId ? data.post : post))
-          : [data.post, ...current],
-      )
-      setClassShareForm(emptyClassShareForm)
-      setClassSharePhotos([])
-      setClassSharePdf(null)
-      setEditingClassPostId('')
+      if (isEditing) {
+        if (!selectedTargetIds.length) {
+          setClassFeedError('When editing, select at least one visible class.')
+          return
+        }
+
+        formData.append('classId', selectedTargetIds[0])
+        formData.append('classIds', JSON.stringify(selectedTargetIds))
+        const classMessages = selectedTargets.reduce((accumulator, target) => {
+          accumulator[target.classId] = target.message.trim() || classShareForm.message.trim()
+          return accumulator
+        }, {})
+        formData.append('classMessages', JSON.stringify(classMessages))
+
+        const data = await apiRequest(`/api/classes/${selectedClassFeedId}/posts/${editingClassPostId}`, {
+          method: 'PATCH',
+          body: formData,
+        })
+
+        setClassPosts((current) => {
+          const nextPosts = Array.isArray(data.posts) && data.posts.length
+            ? data.posts
+            : data.post
+              ? [data.post]
+              : []
+
+          const currentWithoutEdited = current.filter((post) => post.id !== editingClassPostId)
+          return [...currentWithoutEdited, ...nextPosts].filter(
+            (post, index, array) => index === array.findIndex((item) => item.id === post.id),
+          )
+        })
+        resetClassShareForm()
+        setSelectedClassFeedId(selectedTargetIds[0])
+        await loadClassFeed(selectedTargetIds[0])
+      } else {
+        const classMessages = selectedTargets.reduce((accumulator, target) => {
+          accumulator[target.classId] = target.message.trim() || classShareForm.message.trim()
+          return accumulator
+        }, {})
+
+        formData.append('classIds', JSON.stringify(selectedTargetIds))
+        formData.append('classMessages', JSON.stringify(classMessages))
+
+        const data = await apiRequest('/api/admin/class-board/posts', {
+          method: 'POST',
+          body: formData,
+        })
+
+        const updatedPosts = Array.isArray(data.posts) ? data.posts : []
+        if (selectedTargetIds.includes(selectedClassFeedId)) {
+          await loadClassFeed(selectedClassFeedId)
+        } else if (updatedPosts.length) {
+          setClassPosts((current) => [...updatedPosts, ...current])
+        }
+        resetClassShareForm()
+      }
     } catch (err) {
       setClassFeedError(err.message)
     } finally {
@@ -358,9 +466,22 @@ const Adminpage = () => {
 
   const openClassPostEdit = (post) => {
     setEditingClassPostId(post.id)
+    setSelectedClassFeedId(post.classId || selectedClassFeedId)
     setClassShareForm({
       message: post.message || '',
       category: post.category || 'assignment',
+    })
+    const postClassId = String(post.classId || selectedClassFeedId || '')
+    setClassShareTargets((current) => {
+      if (!classes.length) {
+        return current
+      }
+
+      return syncClassShareTargets(classes, current).map((target) => ({
+        ...target,
+        enabled: String(target.classId) === postClassId,
+        message: String(target.classId) === postClassId ? target.message : '',
+      }))
     })
     setClassSharePhotos([])
     setClassSharePdf(null)
@@ -392,6 +513,26 @@ const Adminpage = () => {
   const activeClassItem = classes.find((classItem) => classItem._id === selectedClassFeedId) || null
 
   const classOptions = useMemo(() => classes, [classes])
+  const filteredStudents = useMemo(() => {
+    if (!studentClassFilter) {
+      return students
+    }
+
+    if (studentClassFilter === '__no_class__') {
+      return students.filter((student) => !String(student.classId || '').trim())
+    }
+
+    return students.filter((student) => String(student.classId || '') === studentClassFilter)
+  }, [students, studentClassFilter])
+  const selectedClassTargetCount = classShareTargets.filter((target) => target.enabled).length
+  const groupedClassPosts = useMemo(
+    () =>
+      CLASS_POST_CATEGORIES.map((category) => ({
+        ...category,
+        posts: classPosts.filter((post) => (post.category || 'assignment') === category.value),
+      })),
+    [classPosts],
+  )
 
   if (!isAdmin) {
     return <Navigate to="/" replace />
@@ -455,19 +596,37 @@ const Adminpage = () => {
                         <h2 className="font-serif text-3xl text-slate-950">Students</h2>
                         <p className="mt-1 text-sm text-slate-500">Search by name, email, or class.</p>
                       </div>
-                      <label className="relative w-full sm:w-80">
-                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input
-                          value={search}
-                          onChange={(event) => setSearch(event.target.value)}
-                          placeholder="Search students..."
-                          className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
-                        />
-                      </label>
+                      <div className="grid gap-3 sm:min-w-[420px] sm:grid-cols-2">
+                        <label className="relative w-full">
+                          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            value={search}
+                            onChange={(event) => setSearch(event.target.value)}
+                            placeholder="Search students..."
+                            className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
+                          />
+                        </label>
+                        <label className="grid gap-2 text-sm font-bold text-slate-600">
+                          Class filter
+                          <select
+                            value={studentClassFilter}
+                            onChange={(event) => setStudentClassFilter(event.target.value)}
+                            className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
+                          >
+                            <option value="">All classes</option>
+                            <option value="__no_class__">No class</option>
+                            {classOptions.map((classItem) => (
+                              <option key={classItem._id} value={classItem._id}>
+                                {classItem.name}{classItem.grade ? ` (${classItem.grade})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
                     </div>
 
                     <div className="mt-5 grid gap-3">
-                      {students.map((student) => (
+                      {filteredStudents.map((student) => (
                         <article key={student.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                             <button
@@ -519,6 +678,11 @@ const Adminpage = () => {
                           </div>
                         </article>
                       ))}
+                      {!filteredStudents.length && (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          No students match this search or class filter.
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -611,14 +775,14 @@ const Adminpage = () => {
                       <div>
                         <h2 className="font-serif text-3xl text-slate-950">Class board</h2>
                         <p className="mt-1 text-sm text-slate-500">
-                          Upload class material from the admin dashboard. Students will see it on their class page.
+                          Publish one upload to multiple classes and give each class its own message.
                         </p>
                       </div>
                       <label className="grid gap-2 text-sm font-bold text-slate-600 sm:w-80">
-                        Select class
+                        Preview class
                         <select
                           value={selectedClassFeedId}
-                          onChange={(event) => setSelectedClassFeedId(event.target.value)}
+                          onChange={(event) => handlePreviewClassChange(event.target.value)}
                           className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
                         >
                           {classOptions.length === 0 ? (
@@ -636,7 +800,7 @@ const Adminpage = () => {
 
                     {activeClassItem && (
                       <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                        <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Selected class</p>
+                        <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Preview class</p>
                         <h3 className="mt-2 text-lg font-black text-slate-950">{activeClassItem.name}</h3>
                         <p className="mt-1 text-sm text-slate-500">
                           {activeClassItem.description || 'No description available.'}
@@ -648,11 +812,11 @@ const Adminpage = () => {
                       <div className="flex items-center gap-2">
                         <Upload className="h-5 w-5 text-emerald-700" />
                         <h3 className="font-serif text-2xl text-slate-950">
-                          {editingClassPostId ? 'Edit material' : 'Share material'}
+                          {editingClassPostId ? 'Edit material' : 'Share class update'}
                         </h3>
                       </div>
                       <p className="mt-2 text-sm leading-6 text-slate-500">
-                        Choose a category, then share a message, photos, a PDF, or any combination.
+                        Upload the file once, then tick the classes that should see it. Each class can also get a different message.
                       </p>
 
                       <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
@@ -668,18 +832,104 @@ const Adminpage = () => {
                             </option>
                           ))}
                         </select>
+                        <p className="text-xs font-medium text-slate-400">
+                          Choose from Assignment, Practice Paper, Important Question, Chapter Wise Marking, Notes, or Test Paper.
+                        </p>
                       </label>
 
                       <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
-                        Message
+                        Base message
                         <textarea
                           value={classShareForm.message}
-                          onChange={(event) => setClassShareForm({ message: event.target.value })}
-                          rows={5}
+                          onChange={(event) => setClassShareForm({ ...classShareForm, message: event.target.value })}
+                          rows={4}
                           placeholder="Write homework, exam notice, revision tips, or any class update..."
                           className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-emerald-400"
                         />
                       </label>
+
+                      <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-black text-slate-950">Visible classes</p>
+                            <p className="mt-1 text-xs font-medium text-slate-500">
+                              Tick the class boxes below. Override the message for any class if needed.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setClassShareTargets((current) =>
+                                  current.map((target) => ({ ...target, enabled: true })),
+                                )
+                              }}
+                              className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setClassShareTargets((current) =>
+                                  current.map((target) => ({ ...target, enabled: false })),
+                                )
+                              }}
+                              className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+
+                        {classShareTargets.length === 0 ? (
+                          <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                            No classes available yet.
+                          </div>
+                        ) : (
+                          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                            {classShareTargets.map((target) => {
+                              const classItem = classOptions.find((item) => item._id === target.classId)
+
+                              return (
+                                <div
+                                  key={target.classId}
+                                  className={`rounded-3xl border p-4 transition ${
+                                    target.enabled ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200 bg-slate-50'
+                                  }`}
+                                >
+                                  <label className="flex items-start gap-3">
+                                    <input
+                                      type="checkbox"
+                                      checked={target.enabled}
+                                      onChange={() => toggleClassShareTarget(target.classId)}
+                                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-black text-slate-950 truncate">
+                                        {classItem?.name || target.className || 'Class'}
+                                      </p>
+                                      <p className="mt-1 text-xs font-medium text-slate-500">
+                                        {classItem?.grade || target.grade || 'No grade'} - tick to show this update.
+                                      </p>
+                                    </div>
+                                  </label>
+                                  <label className="mt-3 grid gap-2 text-xs font-bold text-slate-600">
+                                    Class message
+                                    <textarea
+                                      value={target.message}
+                                      onChange={(event) => updateClassShareTargetMessage(target.classId, event.target.value)}
+                                      rows={3}
+                                      placeholder="Optional custom message for this class..."
+                                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-400"
+                                    />
+                                  </label>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
 
                       <div className="mt-4 grid gap-4 lg:grid-cols-2">
                         <label className="grid gap-2 rounded-3xl border border-dashed border-slate-200 bg-white p-4 text-sm font-bold text-slate-600">
@@ -752,19 +1002,14 @@ const Adminpage = () => {
                         ) : (
                           <>
                             <Send className="h-4 w-4" />
-                            {editingClassPostId ? 'Save changes' : 'Share to class'}
+                            {editingClassPostId ? 'Save changes' : `Share to ${selectedClassTargetCount || 'selected'} classes`}
                           </>
                         )}
                       </button>
                       {editingClassPostId && (
                         <button
                           type="button"
-                          onClick={() => {
-                            setEditingClassPostId('')
-                            setClassShareForm(emptyClassShareForm)
-                            setClassSharePhotos([])
-                            setClassSharePdf(null)
-                          }}
+                          onClick={resetClassShareForm}
                           className="mt-3 inline-flex h-12 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 font-bold text-slate-700 transition hover:bg-slate-50"
                         >
                           Cancel edit
@@ -774,7 +1019,7 @@ const Adminpage = () => {
 
                     <div className="mt-6 flex items-center gap-2">
                       <CalendarDays className="h-5 w-5 text-slate-700" />
-                      <h3 className="font-serif text-2xl text-slate-950">Latest class posts</h3>
+                      <h3 className="font-serif text-2xl text-slate-950">Latest uploads</h3>
                     </div>
 
                     {classFeedLoading ? (
@@ -782,93 +1027,114 @@ const Adminpage = () => {
                         Loading class feed...
                       </div>
                     ) : classPosts.length > 0 ? (
-                      <div className="mt-4 grid gap-3">
-                        {classPosts.map((post) => (
-                          <article key={post.id} className="rounded-3xl border border-slate-200 bg-white p-4">
-                            <div className="flex items-start justify-between gap-4">
-                              <div>
-                                <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
-                                  {post.createdBy?.name || 'Admin'}
-                                </p>
-                                <p className="mt-1 text-sm text-slate-500">
-                                  {new Date(post.createdAt).toLocaleString()}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
+                      <div className="mt-4 grid gap-5">
+                        {groupedClassPosts.map((group) => {
+                          const hasPosts = group.posts.length > 0
+
+                          return (
+                            <section key={group.value} className="rounded-[1.75rem] border border-slate-200 bg-white p-4">
+                              <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                                <div>
+                                  <h4 className="text-lg font-black text-slate-950">{group.label}</h4>
+                                  <p className="mt-1 text-xs font-medium text-slate-500">
+                                    {hasPosts ? `${group.posts.length} upload${group.posts.length === 1 ? '' : 's'} available` : 'No uploads in this category yet.'}
+                                  </p>
+                                </div>
                                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
-                                  {post.categoryLabel || CLASS_POST_CATEGORY_LABELS[post.category] || 'Update'}
+                                  {group.posts.length}
                                 </span>
-                                <button
-                                  type="button"
-                                  onClick={() => openClassPostEdit(post)}
-                                  className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-                                  aria-label="Edit post"
-                                >
-                                  <Edit3 className="h-4 w-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteClassPost(post)}
-                                  className="grid h-9 w-9 place-items-center rounded-full border border-red-100 bg-white text-red-500 transition hover:bg-red-50 hover:text-red-700"
-                                  aria-label="Delete post"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
                               </div>
-                            </div>
 
-                            {post.message && (
-                              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                                {post.message}
-                              </p>
-                            )}
-
-                            {post.photos?.length > 0 && (
-                              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                                {post.photos.map((photo) => {
-                                  const previewUrl = buildProtectedPhotoUrl(photo.photoUrl)
-
-                                  return (
-                                    <button
-                                      key={photo.id}
-                                      type="button"
-                                      onClick={() => openClassPhoto(photo)}
-                                      className="group overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                                    >
-                                      <div className="relative">
-                                        <img
-                                          src={previewUrl || photo.dataUrl}
-                                          alt={photo.name}
-                                          className="h-56 w-full object-cover"
-                                        />
-                                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950/35 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-                                        <span className="absolute right-3 top-3 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
-                                          View
-                                        </span>
+                              {hasPosts ? (
+                                <div className="mt-4 grid gap-3">
+                                  {group.posts.map((post) => (
+                                    <article key={post.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                                      <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                          <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
+                                            {post.createdBy?.name || 'Admin'}
+                                          </p>
+                                          <p className="mt-1 text-sm text-slate-500">
+                                            {new Date(post.createdAt).toLocaleString()}
+                                          </p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openClassPostEdit(post)}
+                                            className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                                            aria-label="Edit post"
+                                          >
+                                            <Edit3 className="h-4 w-4" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => deleteClassPost(post)}
+                                            className="grid h-9 w-9 place-items-center rounded-full border border-red-100 bg-white text-red-500 transition hover:bg-red-50 hover:text-red-700"
+                                            aria-label="Delete post"
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </button>
+                                        </div>
                                       </div>
-                                      <p className="truncate px-4 py-3 text-xs font-bold text-slate-500">{photo.name}</p>
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            )}
 
-                            {post.pdf?.pdfUrl && (
-                              <button
-                                type="button"
-                                onClick={() => openClassPdf(post.pdf.pdfUrl)}
-                                className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100"
-                              >
-                                <FileText className="h-4 w-4 text-emerald-600" />
-                                View PDF
-                              </button>
-                            )}
-                          </article>
-                        ))}
+                                      {post.message && (
+                                        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                          {post.message}
+                                        </p>
+                                      )}
+
+                                      {post.photos?.length > 0 && (
+                                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                          {post.photos.map((photo) => {
+                                            const previewUrl = buildProtectedPhotoUrl(photo.photoUrl)
+
+                                            return (
+                                              <button
+                                                key={photo.id}
+                                                type="button"
+                                                onClick={() => openClassPhoto(photo)}
+                                                className="group overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 text-left transition hover:-translate-y-0.5 hover:shadow-md"
+                                              >
+                                                <div className="relative">
+                                                  <img
+                                                    src={previewUrl || photo.dataUrl}
+                                                    alt={photo.name}
+                                                    className="h-56 w-full object-cover"
+                                                  />
+                                                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/35 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                                                  <span className="absolute right-3 top-3 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
+                                                    View
+                                                  </span>
+                                                </div>
+                                                <p className="truncate px-4 py-3 text-xs font-bold text-slate-500">{photo.name}</p>
+                                              </button>
+                                            )
+                                          })}
+                                        </div>
+                                      )}
+
+                                      {post.pdf?.pdfUrl && (
+                                        <button
+                                          type="button"
+                                          onClick={() => openClassPdf(post.pdf.pdfUrl)}
+                                          className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100"
+                                        >
+                                          <FileText className="h-4 w-4 text-emerald-600" />
+                                          View PDF
+                                        </button>
+                                      )}
+                                    </article>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </section>
+                          )
+                        })}
                       </div>
                     ) : (
                       <div className="mt-4 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                        No class posts yet.
+                        No class uploads yet.
                       </div>
                     )}
                   </div>

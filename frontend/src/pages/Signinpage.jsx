@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, KeyRound, X } from 'lucide-react'
+import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, MessageCircleMore, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth, saveAuth } from '../authStorage'
+
+const WHATSAPP_NUMBER = '917304930375'
+const WHATSAPP_FALLBACK_MESSAGE = 'Hello Sir, I need help with my account password.'
+const WHATSAPP_LINK = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_FALLBACK_MESSAGE)}`
 
 const Signinpage = () => {
   const navigate = useNavigate()
@@ -12,10 +16,6 @@ const Signinpage = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [isForgotOpen, setIsForgotOpen] = useState(false)
-  const [forgotForm, setForgotForm] = useState({ email: '', newPassword: '', confirmPassword: '' })
-  const [forgotMessage, setForgotMessage] = useState('')
-  const [forgotError, setForgotError] = useState('')
-  const [isForgotLoading, setIsForgotLoading] = useState(false)
 
   useEffect(() => {
     if (getStoredAuth()) {
@@ -24,17 +24,11 @@ const Signinpage = () => {
   }, [navigate])
 
   const openForgotPassword = () => {
-    setForgotForm({ email: form.email, newPassword: '', confirmPassword: '' })
-    setForgotMessage('')
-    setForgotError('')
     setIsForgotOpen(true)
   }
 
   const closeForgotPassword = () => {
     setIsForgotOpen(false)
-    setForgotForm({ email: '', newPassword: '', confirmPassword: '' })
-    setForgotMessage('')
-    setForgotError('')
   }
 
   const handleSubmit = async (event) => {
@@ -59,32 +53,6 @@ const Signinpage = () => {
       setError(err.status === 401 ? 'Password is wrong.' : err.message)
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  const handleForgotSubmit = async (event) => {
-    event.preventDefault()
-    setForgotError('')
-    setForgotMessage('')
-    setIsForgotLoading(true)
-
-    try {
-      if (forgotForm.newPassword !== forgotForm.confirmPassword) {
-        setForgotError('New passwords do not match.')
-        return
-      }
-
-      const data = await apiRequest('/api/auth/forgot-password/reset', {
-        method: 'POST',
-        body: JSON.stringify({ email: forgotForm.email, newPassword: forgotForm.newPassword }),
-      })
-
-      setForgotMessage(data.message)
-      setForm({ email: forgotForm.email, password: '' })
-    } catch (err) {
-      setForgotError(err.message)
-    } finally {
-      setIsForgotLoading(false)
     }
   }
 
@@ -224,20 +192,19 @@ const Signinpage = () => {
 
       {isForgotOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 backdrop-blur-sm">
-          <motion.form
+          <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 16 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            onSubmit={handleForgotSubmit}
             className="w-full max-w-md rounded-3xl border border-white/60 bg-white p-6 shadow-2xl shadow-slate-950/20 sm:p-8"
           >
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-700">
-                  <KeyRound size={22} />
+                  <MessageCircleMore size={22} />
                 </div>
                 <h2 className="text-2xl font-black text-slate-900">Forgot password</h2>
-                <p className="mt-1 text-sm font-medium text-slate-500">
-                  Enter your email and choose a new password. No OTP is needed.
+                <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
+                  Please contact sir directly on WhatsApp to get the password for this account.
                 </p>
               </div>
               <button
@@ -250,62 +217,29 @@ const Signinpage = () => {
               </button>
             </div>
 
-            <div className="grid gap-4">
-              <label className="grid gap-2 text-sm font-bold text-slate-700">
-                Email Address
-                <input
-                  type="email"
-                  value={forgotForm.email}
-                  onChange={(event) =>
-                    setForgotForm({
-                      ...forgotForm,
-                      email: event.target.value,
-                    })
-                  }
-                  required
-                  placeholder="email@gmail.com"
-                  className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-bold text-slate-700">
-                New password
-                <input
-                  type="password"
-                  minLength={6}
-                  value={forgotForm.newPassword}
-                  onChange={(event) => setForgotForm({ ...forgotForm, newPassword: event.target.value })}
-                  required
-                  placeholder="New password"
-                  className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-bold text-slate-700">
-                Confirm new password
-                <input
-                  type="password"
-                  minLength={6}
-                  value={forgotForm.confirmPassword}
-                  onChange={(event) => setForgotForm({ ...forgotForm, confirmPassword: event.target.value })}
-                  required
-                  placeholder="Confirm new password"
-                  className="h-13 rounded-2xl border-2 border-slate-100 bg-white px-4 text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
-                />
-              </label>
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
+              Tap the WhatsApp button and send your registered email or class details. Sir can check the account faster that way.
             </div>
 
-            {forgotMessage && <p className="mt-4 text-sm font-bold text-emerald-600">{forgotMessage}</p>}
-            {forgotError && <p className="mt-4 text-sm font-bold text-rose-500">{forgotError}</p>}
-
-            <button
-              type="submit"
-              disabled={isForgotLoading}
-              className="mt-6 flex h-13 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isForgotLoading ? 'Updating password...' : 'Set New Password'}
-            </button>
-          </motion.form>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <a
+                href={WHATSAPP_LINK}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-13 items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 font-bold text-white transition hover:scale-[1.01]"
+                onClick={closeForgotPassword}
+              >
+                Contact Sir on WhatsApp
+              </a>
+              <button
+                type="button"
+                onClick={closeForgotPassword}
+                className="inline-flex h-13 items-center justify-center rounded-2xl border border-slate-200 bg-white font-bold text-slate-700 transition hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
     </section>

@@ -29,11 +29,21 @@ const classShareUpload = multer({
   },
 })
 
-const CLASS_POST_CATEGORIES = ['assignment', 'important-question', 'practice-paper']
+const CLASS_POST_CATEGORIES = [
+  'assignment',
+  'practice-paper',
+  'important-question',
+  'chapter-marking',
+  'notes',
+  'test-paper',
+]
 const CLASS_POST_CATEGORY_LABELS = {
   assignment: 'Assignment',
-  'important-question': 'Important Question',
   'practice-paper': 'Practice Paper',
+  'important-question': 'Important Question',
+  'chapter-marking': 'Chapter Wise Marking',
+  notes: 'Notes',
+  'test-paper': 'Test Paper',
 }
 const CLASS_POST_PHOTO_FORMAT = String(process.env.CLASS_POST_PHOTO_FORMAT || 'webp').toLowerCase() === 'avif'
   ? 'avif'
@@ -595,6 +605,12 @@ const classPostSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    shareGroupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ClassPost',
+      index: true,
+      default: null,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -798,6 +814,7 @@ const publicClassPost = (post) => {
   return {
     id: String(normalizedPost._id),
     classId: String(normalizedPost.classId?._id || normalizedPost.classId || ''),
+    groupId: String(normalizedPost.shareGroupId?._id || normalizedPost.shareGroupId || ''),
     category: normalizedPost.category || 'assignment',
     categoryLabel: CLASS_POST_CATEGORY_LABELS[normalizedPost.category || 'assignment'] || 'Assignment',
     message: normalizedPost.message || '',
@@ -825,6 +842,34 @@ const publicClassPost = (post) => {
       : null,
   }
 }
+
+const parseJsonValue = (value, fallback = null) => {
+  if (value === undefined || value === null || value === '') {
+    return fallback
+  }
+
+  if (typeof value === 'object') {
+    return value
+  }
+
+  try {
+    return JSON.parse(String(value))
+  } catch (error) {
+    return fallback
+  }
+}
+
+const cloneClassAttachments = (photos = [], pdfFile = null) => ({
+  photos: photos.map((photo) => ({ ...photo })),
+  pdf: pdfFile
+    ? {
+        data: pdfFile.buffer,
+        contentType: pdfFile.mimetype,
+        originalName: pdfFile.originalname,
+        updatedAt: new Date(),
+      }
+    : undefined,
+})
 
 const getAuthenticatedUserFromRequest = async (req) => {
   const headerToken = String(req.headers.authorization || '').startsWith('Bearer ')
@@ -3965,13 +4010,29 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
     }
 
     const { classId, postId } = req.params
-    const post = await ClassPost.findOne({ _id: postId, classId })
+    const post = await ClassPost.findById(postId)
 
     if (!post) {
       return res.status(404).json({ message: 'Post not found.' })
     }
 
+    const parsedClassIds = parseJsonValue(req.body.classIds, null)
+    const desiredClassIds = Array.isArray(parsedClassIds)
+      ? parsedClassIds
+      : [req.body.classId || classId || post.classId || '']
+    const selectedClassIds = [...new Set(desiredClassIds.map((value) => String(value || '').trim()).filter(Boolean))]
+
+    if (!selectedClassIds.length) {
+      return res.status(400).json({ message: 'Please select at least one visible class.' })
+    }
+
+    const matchingClasses = await Class.find({ _id: { $in: selectedClassIds } }).lean()
+    if (matchingClasses.length !== selectedClassIds.length) {
+      return res.status(404).json({ message: 'One or more target classes were not found.' })
+    }
+
     const message = typeof req.body.message === 'string' ? req.body.message.trim() : post.message
+    const classMessages = parseJsonValue(req.body.classMessages, {})
     const category = typeof req.body.category === 'string' && CLASS_POST_CATEGORIES.includes(req.body.category)
       ? req.body.category
       : post.category || 'assignment'
@@ -3990,35 +4051,85 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
       return res.status(400).json({ message: 'PDF attachment must be a PDF file.' })
     }
 
-    if (photos) {
-      if (photos.some((file) => Number(file.size) > 5 * 1024 * 1024)) {
-        return res.status(400).json({ message: 'Each photo must be 5 MB or smaller.' })
-      }
-
-      post.photos = await Promise.all(photos.map(convertClassPhoto))
+    if (photos && photos.some((file) => Number(file.size) > 5 * 1024 * 1024)) {
+      return res.status(400).json({ message: 'Each photo must be 5 MB or smaller.' })
     }
 
-    if (pdfFile) {
-      if (Number(pdfFile.size) > 25 * 1024 * 1024) {
-        return res.status(400).json({ message: 'PDF must be 25 MB or smaller.' })
-      }
-
-      post.pdf = {
-        data: pdfFile.buffer,
-        contentType: pdfFile.mimetype,
-        originalName: pdfFile.originalname,
-        updatedAt: new Date(),
-      }
+    if (pdfFile && Number(pdfFile.size) > 25 * 1024 * 1024) {
+      return res.status(400).json({ message: 'PDF must be 25 MB or smaller.' })
     }
 
-    post.message = message
-    post.category = category
+    const groupId = post.shareGroupId || post._id
+    const groupPosts = await ClassPost.find({
+      $or: [{ _id: groupId }, { shareGroupId: groupId }],
+    })
 
-    await post.save()
-    await post.populate('createdBy', 'name isAdmin')
+    const postsByClassId = new Map(groupPosts.map((item) => [String(item.classId), item]))
+    const existingAttachments = {
+      photos: post.photos || [],
+      pdf: post.pdf || null,
+    }
+    const nextAttachments = {
+      photos: photos ? await Promise.all(photos.map(convertClassPhoto)) : existingAttachments.photos,
+      pdf: pdfFile
+        ? {
+            data: pdfFile.buffer,
+            contentType: pdfFile.mimetype,
+            originalName: pdfFile.originalname,
+            updatedAt: new Date(),
+          }
+        : existingAttachments.pdf,
+    }
 
+    const savedPosts = []
+
+    for (const classItem of matchingClasses) {
+      const existingPost = postsByClassId.get(String(classItem._id))
+      const classMessage = String(classMessages?.[String(classItem._id)] || '').trim()
+      const resolvedMessage = classMessage || existingPost?.message || message || ''
+
+      if (existingPost) {
+        existingPost.classId = classItem._id
+        existingPost.shareGroupId = groupId
+        existingPost.message = resolvedMessage
+        existingPost.category = category
+        existingPost.photos = nextAttachments.photos.map((photo) => ({ ...photo }))
+        existingPost.pdf = nextAttachments.pdf
+          ? { ...nextAttachments.pdf }
+          : undefined
+        await existingPost.save()
+        await existingPost.populate('createdBy', 'name isAdmin')
+        savedPosts.push(existingPost)
+        continue
+      }
+
+      const createdPost = await ClassPost.create({
+        classId: classItem._id,
+        shareGroupId: groupId,
+        createdBy: req.user._id,
+        category,
+        message: resolvedMessage,
+        photos: nextAttachments.photos.map((photo) => ({ ...photo })),
+        pdf: nextAttachments.pdf
+          ? { ...nextAttachments.pdf }
+          : undefined,
+      })
+
+      await createdPost.populate('createdBy', 'name isAdmin')
+      savedPosts.push(createdPost)
+    }
+
+    const selectedClassIdSet = new Set(selectedClassIds.map((value) => String(value)))
+    const removedPosts = groupPosts.filter((item) => !selectedClassIdSet.has(String(item.classId)))
+
+    if (removedPosts.length) {
+      await ClassPost.deleteMany({ _id: { $in: removedPosts.map((item) => item._id) } })
+    }
+
+    const primaryPost = savedPosts[0] || post
     res.json({
-      post: publicClassPost(post),
+      post: publicClassPost(primaryPost),
+      posts: savedPosts.map(publicClassPost),
       message: 'Updated successfully.',
     })
   } catch (error) {
@@ -4169,6 +4280,7 @@ app.post(
 
       const post = await ClassPost.create({
         classId: classDoc._id,
+        shareGroupId: new mongoose.Types.ObjectId(),
         createdBy: req.user._id,
         category,
         message,
@@ -4191,6 +4303,114 @@ app.post(
       })
     } catch (error) {
       res.status(500).json({ message: 'Could not share in this class.' })
+    }
+  },
+)
+
+app.post(
+  '/api/admin/class-board/posts',
+  authRequired,
+  classShareUpload.fields([
+    { name: 'photos', maxCount: 10 },
+    { name: 'pdf', maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      if (!req.user.isAdmin) {
+        return res.status(403).json({ message: 'Only admin can share class board updates.' })
+      }
+
+      const classIds = Array.isArray(parseJsonValue(req.body.classIds, []))
+        ? parseJsonValue(req.body.classIds, [])
+        : []
+      const classMessages = parseJsonValue(req.body.classMessages, {})
+      const defaultMessage = String(req.body.message || '').trim()
+      const category = CLASS_POST_CATEGORIES.includes(String(req.body.category || 'assignment'))
+        ? String(req.body.category || 'assignment')
+        : 'assignment'
+      const photos = Array.isArray(req.files?.photos) ? req.files.photos : []
+      const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
+      const selectedClassIds = [...new Set(classIds.map((value) => String(value || '').trim()).filter(Boolean))]
+
+      if (!selectedClassIds.length) {
+        return res.status(400).json({ message: 'Please select at least one class.' })
+      }
+
+      if (photos.some((file) => !file.mimetype?.startsWith('image/'))) {
+        return res.status(400).json({ message: 'Photos must be image files.' })
+      }
+
+      if (pdfFile && pdfFile.mimetype !== 'application/pdf') {
+        return res.status(400).json({ message: 'PDF attachment must be a PDF file.' })
+      }
+
+      const photoLimitBytes = 5 * 1024 * 1024
+      const pdfLimitBytes = 25 * 1024 * 1024
+
+      if (photos.some((file) => Number(file.size) > photoLimitBytes)) {
+        return res.status(400).json({ message: 'Each photo must be 5 MB or smaller.' })
+      }
+
+      if (pdfFile && Number(pdfFile.size) > pdfLimitBytes) {
+        return res.status(400).json({ message: 'PDF must be 25 MB or smaller.' })
+      }
+
+      const matchingClasses = await Class.find({ _id: { $in: selectedClassIds } }).lean()
+
+      if (!matchingClasses.length) {
+        return res.status(404).json({ message: 'No matching classes were found.' })
+      }
+
+      const hasAnyMessage =
+        defaultMessage ||
+        selectedClassIds.some((classId) => String(classMessages?.[classId] || '').trim())
+
+      if (!hasAnyMessage && !photos.length && !pdfFile) {
+        return res.status(400).json({ message: 'Add a message, a photo, or a PDF before sharing.' })
+      }
+
+      const classMap = new Map(matchingClasses.map((classItem) => [String(classItem._id), classItem]))
+      const convertedPhotos = photos.length ? await Promise.all(photos.map(convertClassPhoto)) : []
+      const createdPosts = []
+      const shareGroupId = new mongoose.Types.ObjectId()
+
+      for (const classId of selectedClassIds) {
+        const classDoc = classMap.get(String(classId))
+        if (!classDoc) {
+          continue
+        }
+
+        const classMessage = String(classMessages?.[classId] || defaultMessage || '').trim()
+
+        if (!classMessage && !convertedPhotos.length && !pdfFile) {
+          continue
+        }
+
+        const attachmentBundle = cloneClassAttachments(convertedPhotos, pdfFile)
+        const post = await ClassPost.create({
+          classId: classDoc._id,
+          shareGroupId,
+          createdBy: req.user._id,
+          category,
+          message: classMessage,
+          photos: attachmentBundle.photos,
+          pdf: attachmentBundle.pdf,
+        })
+
+        await post.populate('createdBy', 'name isAdmin')
+        createdPosts.push(publicClassPost(post))
+      }
+
+      if (!createdPosts.length) {
+        return res.status(400).json({ message: 'Please add a message for at least one selected class.' })
+      }
+
+      res.status(201).json({
+        posts: createdPosts,
+        message: 'Shared successfully.',
+      })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not share class board updates.' })
     }
   },
 )

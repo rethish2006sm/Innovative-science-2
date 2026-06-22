@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, Download, FileText, Image as ImageIcon, Loader2, X, Eye, Layers } from "lucide-react";
+import { CalendarDays, Download, FileText, Image as ImageIcon, Loader2, X, Eye } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { API_BASE_URL, apiRequest } from "../api";
 import { getStoredAuth } from "../authStorage";
@@ -8,6 +8,9 @@ const CLASS_POST_CATEGORIES = [
   { id: "assignment", label: "Assignment" },
   { id: "practice-paper", label: "Practice Paper" },
   { id: "important-question", label: "Important Question" },
+  { id: "chapter-marking", label: "Chapter Wise Marking" },
+  { id: "notes", label: "Notes" },
+  { id: "test-paper", label: "Test Paper" },
 ];
 
 const CATEGORY_LABELS = CLASS_POST_CATEGORIES.reduce((acc, item) => {
@@ -115,18 +118,19 @@ export default function Classpage() {
   }, [classId]);
 
   const categoryCounts = useMemo(() => {
-    return posts.reduce(
-      (acc, post) => {
-        const category = normalizeCategory(post?.category);
+    // Dynamically initialize all counts to 0 based on our categories array
+    const initialCounts = CLASS_POST_CATEGORIES.reduce((acc, item) => {
+      acc[item.id] = 0;
+      return acc;
+    }, {});
+
+    return posts.reduce((acc, post) => {
+      const category = normalizeCategory(post?.category);
+      if (acc[category] !== undefined) {
         acc[category] += 1;
-        return acc;
-      },
-      {
-        assignment: 0,
-        "practice-paper": 0,
-        "important-question": 0,
-      },
-    );
+      }
+      return acc;
+    }, initialCounts);
   }, [posts]);
 
   const filteredPosts = useMemo(() => {
@@ -171,10 +175,10 @@ export default function Classpage() {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  const currentCategoryLabel = CATEGORY_LABELS[activeCategory] || "Assignment";
+  const currentCategoryLabel = CATEGORY_LABELS[activeCategory] || "Notes";
 
   return (
-    <main className="min-h-screen bg-[#f8fafc] text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 antialiased">
+    <main className="min-h-screen bg-[#f8fafc] text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 antialiased overflow-hidden">
       {/* Dynamic Background Accents */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[400px] bg-gradient-to-b from-indigo-50/40 via-transparent to-transparent pointer-events-none -z-10" />
 
@@ -187,16 +191,16 @@ export default function Classpage() {
             <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">Classroom Feed</p>
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-            {currentCategoryLabel}s
+            {currentCategoryLabel}
           </h1>
-          <p className="mt-2 text-sm text-slate-500 max-w-xl">
-            Stay up to date with assignments, papers, and curriculum support materials updated directly.
+          <p className="mt-2 text-sm text-slate-500 max-w-xl mx-auto sm:mx-0">
+            Scroll it to see many options........
           </p>
         </header>
 
-        {/* Categories Horizontal Menu Bar */}
-        <div className="sticky top-4 z-40 mb-8 rounded-2xl border border-slate-200/80 bg-white/80 p-1.5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-md">
-          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar scroll-smooth snap-x">
+        {/* Categories Horizontal Menu Bar (Responsive Scroll) */}
+        <div className="sticky top-4 z-40 mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white/85 p-2 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-md">
+          <div className="flex overflow-x-auto no-scrollbar gap-2 pb-1 sm:pb-0 sm:grid sm:grid-cols-3 lg:grid-cols-6">
             {CLASS_POST_CATEGORIES.map((category) => {
               const active = activeCategory === category.id;
               return (
@@ -205,23 +209,21 @@ export default function Classpage() {
                   type="button"
                   onClick={() => setActiveCategory(category.id)}
                   className={[
-                    "relative flex-1 min-w-[140px] sm:min-w-0 snap-center rounded-xl py-3 px-4 text-xs sm:text-sm font-semibold tracking-wide transition-all duration-300 ease-out outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+                    "relative flex items-center justify-center gap-2 rounded-2xl py-3 px-4 text-sm font-bold tracking-wide transition-all duration-300 ease-out outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 shrink-0 whitespace-nowrap",
                     active
-                      ? "bg-slate-900 text-white shadow-md shadow-slate-950/10 scale-[1.02]"
-                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 active:scale-98",
+                      ? "bg-slate-950 text-white shadow-md shadow-slate-950/10 scale-[1.01]"
+                      : "bg-white text-slate-600 border border-transparent hover:border-slate-200 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.99]",
                   ].join(" ")}
                 >
-                  <div className="flex items-center justify-center gap-2 whitespace-nowrap">
-                    <span>{category.label}</span>
-                    <span 
-                      className={[
-                        "inline-flex items-center justify-center px-2 py-0.5 text-[10px] font-bold rounded-full transition-colors",
-                        active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
-                      ].join(" ")}
-                    >
-                      {categoryCounts[category.id]}
-                    </span>
-                  </div>
+                  <span>{category.label}</span>
+                  <span
+                    className={[
+                      "inline-flex items-center justify-center min-w-6 rounded-full px-2 py-0.5 text-[11px] font-black transition-colors",
+                      active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500",
+                    ].join(" ")}
+                  >
+                    {categoryCounts[category.id]}
+                  </span>
                 </button>
               );
             })}
@@ -231,7 +233,7 @@ export default function Classpage() {
         {/* Global Error Notice */}
         {error ? (
           <div className="mb-6 rounded-2xl border border-rose-100 bg-rose-50/60 p-4 text-sm text-rose-800 backdrop-blur-sm flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
-            <span className="h-2 w-2 rounded-full bg-rose-500" />
+            <span className="h-2 w-2 rounded-full bg-rose-500 shrink-0" />
             <p className="font-medium">{error}</p>
           </div>
         ) : null}
@@ -245,7 +247,7 @@ export default function Classpage() {
             <p className="text-sm font-medium text-slate-500">Syncing classroom archive...</p>
           </div>
         ) : filteredPosts.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-slate-200 bg-white/60 py-16 px-4 text-center backdrop-blur-sm animate-in fade-in duration-300">
+          <div id="class-notes" className="rounded-3xl border border-dashed border-slate-200 bg-white/60 py-16 px-4 text-center backdrop-blur-sm animate-in fade-in duration-300">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-50 border border-slate-100 text-slate-400 shadow-sm">
               <CalendarDays className="h-6 w-6 text-slate-400" />
             </div>
@@ -255,7 +257,7 @@ export default function Classpage() {
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
+          <div id="class-notes" className="space-y-6">
             {filteredPosts.map((post) => {
               const category = normalizeCategory(post?.category);
               const photos = Array.isArray(post?.photos) ? post.photos : [];
@@ -281,7 +283,7 @@ export default function Classpage() {
                         </p>
                       </div>
                     </div>
-                    <span className="inline-flex items-center rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 whitespace-nowrap">
+                    <span className="inline-flex items-center rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 whitespace-nowrap hidden sm:inline-flex">
                       {CATEGORY_LABELS[category]}
                     </span>
                   </div>
@@ -293,7 +295,7 @@ export default function Classpage() {
                     </p>
                   ) : null}
 
-                  {/* Re-imagined Gallery Interface */}
+                  {/* Gallery Interface */}
                   {photos.length > 0 ? (
                     <div className="mb-4">
                       <div 
@@ -308,7 +310,6 @@ export default function Classpage() {
                           const src = photo?.photoUrl ? buildAuthedUrl(photo.photoUrl) : photo?.dataUrl || "";
                           const alt = photo?.fileName || `Attachment ${index + 1}`;
                           
-                          // Handle a modern photo layout based on counts
                           const isLargeSpan = photos.length === 3 && index === 0;
 
                           return (
@@ -334,7 +335,6 @@ export default function Classpage() {
                                 </div>
                               )}
                               
-                              {/* Modern Glass Overlays */}
                               <div className="absolute inset-0 bg-slate-950/20 opacity-0 group-hover/item:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-[2px]">
                                 <div className="flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1.5 text-xs font-semibold text-slate-900 shadow-sm scale-90 group-hover/item:scale-100 transition-transform duration-300">
                                   <Eye className="h-3.5 w-3.5" />
@@ -348,7 +348,7 @@ export default function Classpage() {
                     </div>
                   ) : null}
 
-                  {/* Action/Attachment File Bar (PDF Section preserved natively) */}
+                  {/* PDF Action Bar */}
                   {pdfUrl ? (
                     <div className="flex items-center pt-1">
                       <button
@@ -356,7 +356,7 @@ export default function Classpage() {
                         onClick={() => openPdfViewer(post, post.pdf)}
                         className="inline-flex w-full sm:w-auto items-center justify-center gap-2.5 rounded-xl border border-slate-200/80 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 hover:border-slate-300 hover:text-slate-950 active:scale-98"
                       >
-                        <FileText className="h-4 w-4 text-rose-500" />
+                        <FileText className="h-4 w-4 text-rose-500 shrink-0" />
                         <span className="truncate max-w-[200px] text-left">
                           {post.pdf?.fileName || "Review Documentation"}
                         </span>
@@ -370,14 +370,13 @@ export default function Classpage() {
         )}
       </div>
 
-      {/* Re-imagined Gallery Overlay / Photo Viewer Modal */}
+      {/* Photo Viewer Modal */}
       {viewerPhoto && viewerPost ? (
         <div
           className="fixed inset-0 z-50 flex flex-col justify-between bg-white/95 sm:bg-slate-950/95 px-0 py-0 sm:p-6 backdrop-blur-md animate-in fade-in duration-200"
           onClick={closeViewer}
           role="presentation"
         >
-          {/* Top Panel Bar */}
           <div 
             className="flex items-center justify-between gap-4 bg-white border-b border-slate-100 sm:border-0 sm:bg-transparent p-4 sm:p-2 w-full max-w-7xl mx-auto"
             onClick={(event) => event.stopPropagation()}
@@ -392,7 +391,7 @@ export default function Classpage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={handleDownload}
@@ -412,7 +411,6 @@ export default function Classpage() {
             </div>
           </div>
 
-          {/* Photo Render Hub */}
           <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
             <button
               type="button"
@@ -432,12 +430,11 @@ export default function Classpage() {
             </button>
           </div>
 
-          {/* Bottom Spacer/Buffer for layout alignment */}
           <div className="hidden sm:block h-6 w-full" />
         </div>
       ) : null}
 
-      {/* Protected Unchanged PDF Modal Layout Component Structure */}
+      {/* PDF Modal */}
       {viewerPdf && viewerPost ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm"
@@ -457,14 +454,14 @@ export default function Classpage() {
                 <p className="text-xs text-slate-300">{viewerPost.authorName || "Class admin"} · PDF preview</p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleDownload}
                   className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
                 >
                   <Download className="h-4 w-4" />
-                  Download
+                  <span className="hidden sm:inline">Download</span>
                 </button>
                 <button
                   type="button"
