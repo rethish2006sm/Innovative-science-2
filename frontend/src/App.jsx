@@ -196,7 +196,7 @@ const getSeoFromPathname = (pathname) => {
     }
   }
 
-  if (normalizedPath === '/admin') {
+  if (normalizedPath === '/admin' || normalizedPath === '/dashboard') {
     return {
       title: 'Admin Dashboard',
       description: 'Manage students, classes, reports, and platform activity.',
@@ -318,6 +318,7 @@ const AppLayout = () => {
             }
           />
           <Route path="/admin" element={<Adminpage />} />
+          <Route path="/dashboard" element={<Adminpage />} />
           <Route path="/chapter-weightage" element={<ChapterWeightage />} />
           <Route path="/chapters" element={<Chapters />} />
           <Route path="/class/:classId" element={<Classpage />} />

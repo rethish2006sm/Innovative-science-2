@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const cors = require('cors')
 const dotenv = require('dotenv')
+const fs = require('fs')
 const multer = require('multer')
 const sharp = require('sharp')
 const path = require('path')
@@ -95,6 +96,18 @@ app.use(
   }),
 )
 app.use(express.json({ limit: '2mb' }))
+
+const frontendDistPath = path.resolve(__dirname, '..', 'frontend', 'dist')
+const frontendIndexPath = path.join(frontendDistPath, 'index.html')
+const frontendIsBuilt = fs.existsSync(frontendIndexPath)
+
+if (frontendIsBuilt) {
+  app.use(express.static(frontendDistPath, { index: false }))
+} else {
+  console.warn(
+    `Frontend build not found at ${frontendIndexPath}. Run the frontend build before starting the server.`,
+  )
+}
 
 const userSchema = new mongoose.Schema(
   {
@@ -4414,6 +4427,12 @@ app.post(
     }
   },
 )
+
+if (frontendIsBuilt) {
+  app.get(/^\/(?!api(?:\/|$)).*/, (req, res) => {
+    res.sendFile(frontendIndexPath)
+  })
+}
 
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {

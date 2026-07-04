@@ -91,7 +91,7 @@ const Navbar = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const isProfilePage = location.pathname === '/profile';
-  const isAdminPage = location.pathname === '/admin';
+  const isAdminPage = location.pathname === '/admin' || location.pathname === '/dashboard';
   const classButtonPath = auth?.user?.classId ? `/class/${auth.user.classId}` : '';
   const classButtonLabel = auth?.user?.className?.trim() || 'Class';
   const hasClassButton = Boolean(classButtonPath);
