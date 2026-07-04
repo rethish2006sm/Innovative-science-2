@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { HashRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import Footer from './components/Footer'
 import Navbar from './components/Navbar'
 import Aboutpage from './pages/Aboutpage'
@@ -397,10 +397,10 @@ const AppLayout = () => {
 
 const App = () => {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <ScrollToTop />
       <AppLayout />
-    </BrowserRouter>
+    </HashRouter>
   )
 }
 

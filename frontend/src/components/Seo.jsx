@@ -39,6 +39,17 @@ const ensureLinkTag = (selector, attributes) => {
   return tag
 }
 
+const buildCanonicalUrl = (canonicalPath) => {
+  if (/^https?:\/\//i.test(canonicalPath)) {
+    return canonicalPath
+  }
+
+  const normalizedPath = `${canonicalPath || '/'}`.replace(/\/+$/, '') || '/'
+  const hashPath = normalizedPath === '/' ? '/' : normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
+
+  return `${window.location.origin}/#${hashPath}`
+}
+
 const Seo = ({
   title,
   description = DEFAULT_DESCRIPTION,
@@ -49,7 +60,7 @@ const Seo = ({
   useEffect(() => {
     const previousTitle = document.title
     const fullTitle = title ? `${title} | ${SITE_NAME}` : SITE_NAME
-    const canonicalUrl = `${window.location.origin}${canonicalPath || window.location.pathname}`
+    const canonicalUrl = buildCanonicalUrl(canonicalPath || window.location.hash?.slice(1) || '/')
     const robots = noindex ? 'noindex, nofollow' : 'index, follow'
 
     document.title = fullTitle
