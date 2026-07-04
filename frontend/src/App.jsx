@@ -31,6 +31,23 @@ import { authEvents, getStoredAuth } from './authStorage'
 const SITE_DESCRIPTION =
   'Innovative Science 2 helps students practice science chapters, solve objective questions, take tests, and track brain cell progress.'
 
+const normalizeToHashRoute = () => {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const { pathname, search, hash } = window.location
+
+  if (hash || pathname === '/' || pathname.startsWith('/api')) {
+    return false
+  }
+
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/'
+  const nextUrl = `${window.location.origin}/#${normalizedPath}${search}`
+  window.location.replace(nextUrl)
+  return true
+}
+
 const getSeoFromPathname = (pathname) => {
   const normalizedPath = pathname.replace(/\/+$/, '') || '/'
 
@@ -396,6 +413,10 @@ const AppLayout = () => {
 }
 
 const App = () => {
+  if (normalizeToHashRoute()) {
+    return null
+  }
+
   return (
     <HashRouter>
       <ScrollToTop />
