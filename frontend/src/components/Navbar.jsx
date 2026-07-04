@@ -8,6 +8,7 @@ import {
   Info,
   LogIn,
   Home,
+  MessageCircleMore,
   PhoneCall,
   Shield,
   Sparkles,
@@ -59,6 +60,11 @@ const navItems = [
     path: '/contact',
     icon: <PhoneCall size={18} />,
   },
+  {
+    name: 'Feedback',
+    path: '/feedback',
+    icon: <MessageCircleMore size={18} />,
+  },
 ];
 
 const containerVariants = {
@@ -97,7 +103,10 @@ const Navbar = () => {
   const hasClassButton = Boolean(classButtonPath);
   const hideContactForStudent = Boolean(auth?.user?.classId) && !auth?.user?.isAdmin;
   const desktopNavItems = navItems.filter(
-    (item) => item.name !== 'About' && (!hideContactForStudent || item.name !== 'Contact'),
+    (item) =>
+      item.name !== 'About' &&
+      item.name !== 'Feedback' &&
+      (!hideContactForStudent || item.name !== 'Contact'),
   );
   const mobileNavItems = [
     {
@@ -177,14 +186,14 @@ const Navbar = () => {
         </div>
 
         {/* Removed max-w restriction and padded the edges for edge-to-edge view */}
-        <div className="relative mx-auto flex h-24 w-full items-center justify-between px-6 md:px-10">
+        <div className="relative mx-auto flex h-24 w-full items-center justify-between px-6 min-[309.4mm]:px-10">
           {/* Left Section: Mobile Menu + Logo */}
           <div className="flex shrink-0 items-center gap-3 min-w-0">
             {/* Mobile Menu Toggle */}
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={() => setIsMenuOpen(true)}
-              className="relative block rounded-full bg-white/5 p-2 text-slate-300 backdrop-blur-sm transition-all hover:bg-white/10 hover:text-teal-300 md:hidden"
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={() => setIsMenuOpen(true)}
+              className="relative block rounded-full bg-white/5 p-2 text-slate-300 backdrop-blur-sm transition-all hover:bg-white/10 hover:text-teal-300 min-[309.4mm]:hidden"
               aria-label="Open menu"
             >
               <Menu size={20} />
@@ -253,7 +262,7 @@ const Navbar = () => {
                   navigate(auth ? '/profile' : '/signin');
                 }
               }}
-              className={`relative grid h-10 w-10 place-items-center overflow-hidden rounded-full border backdrop-blur-xl transition-all duration-300 sm:hidden ${
+              className={`relative grid h-10 w-10 place-items-center overflow-hidden rounded-full border backdrop-blur-xl transition-all duration-300 min-[309.4mm]:hidden ${
                 isProfilePage
                   ? 'border-teal-400/70 bg-teal-500/20 text-teal-300 shadow-[0_0_18px_rgba(20,184,166,0.45)]'
                   : 'border-white/10 bg-white/5 text-slate-300 hover:border-teal-400/40 hover:bg-white/10 hover:text-teal-300'
@@ -280,10 +289,10 @@ const Navbar = () => {
               variants={containerVariants}
               initial="hidden"
               animate="visible"
-              className="hidden items-center gap-2 md:flex"
+              className="hidden shrink-0 items-center gap-2 overflow-x-auto min-[309.4mm]:flex"
             >
               {desktopNavItems.map((item) => (
-                <motion.div key={item.name} variants={itemVariants}>
+                <motion.div key={item.name} variants={itemVariants} className="shrink-0">
                   <NavLink to={item.path}>
                     {({ isActive }) => (
                       <motion.div
@@ -292,7 +301,7 @@ const Navbar = () => {
                           transition: { type: 'spring', stiffness: 300 },
                         }}
                         whileTap={{ scale: 0.95 }}
-                        className={`group relative overflow-hidden rounded-2xl px-5 py-2.5 transition-all duration-300 ${
+                        className={`group relative flex shrink-0 whitespace-nowrap overflow-hidden rounded-2xl px-5 py-2.5 transition-all duration-300 ${
                           isActive
                             ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_25px_rgba(20,184,166,0.5)]'
                             : 'bg-white/5 text-slate-300 backdrop-blur-sm hover:bg-white/10 hover:text-white'
@@ -308,7 +317,7 @@ const Navbar = () => {
                             transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                           />
                         )}
-                        <div className="relative flex items-center gap-2 font-semibold">
+                        <div className="relative flex items-center gap-2 font-semibold whitespace-nowrap">
                           {item.icon}
                           {item.name}
                         </div>
@@ -325,7 +334,7 @@ const Navbar = () => {
                     <motion.div
                       whileHover={{ y: -3, scale: 1.02 }}
                       whileTap={{ scale: 0.96 }}
-                      className={`hidden items-center gap-2 rounded-2xl border px-5 py-2.5 text-sm font-semibold backdrop-blur-sm transition-all duration-300 md:flex ${
+                      className={`hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-2xl border px-5 py-2.5 text-sm font-semibold backdrop-blur-sm transition-all duration-300 min-[309.4mm]:flex ${
                         isActive
                           ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_25px_rgba(16,185,129,0.25)]'
                           : 'border-emerald-400/20 bg-white/5 text-slate-200 hover:border-emerald-400/40 hover:bg-white/10 hover:text-white'
@@ -342,7 +351,7 @@ const Navbar = () => {
               variants={itemVariants}
               initial="hidden"
               animate="visible"
-              className="hidden min-w-0 items-center gap-2 sm:flex"
+              className="hidden min-w-0 items-center gap-2 min-[309.4mm]:flex"
             >
               {auth?.user?.isAdmin && (
                 <NavLink to="/admin" aria-label="Open admin panel">

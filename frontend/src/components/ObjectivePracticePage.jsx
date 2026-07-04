@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Edit3, Flag, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
+import StarFeedbackModal from './StarFeedbackModal'
+import { hasFeedbackFlowBeenSubmitted } from '../lib/feedbackFlow'
 
 const emptyQuestionForm = {
   question: '',
@@ -151,6 +153,8 @@ const buildTutorStarterPrompt = ({ question, topicName = '', chapterName = '', p
   })}`
 )
 
+const translatePracticeQuestions = async (questions = []) => questions
+
 const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions }) => {
   const { chapterNumber, topicId } = useParams()
   const navigate = useNavigate()
@@ -189,6 +193,8 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
+  const [pendingResult, setPendingResult] = useState(null)
+  const [feedbackPromptStage, setFeedbackPromptStage] = useState('')
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const isSignedIn = Boolean(auth?.token)
@@ -254,10 +260,26 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
     try {
       const data = await apiRequest(`/api/topics/${topicId}/objective-types/${objectiveType}/practice`)
-      setTopic(data.topic)
-      setChapter(data.chapter)
+      const nextTopic = {
+        ...(data.topic || {}),
+        sourceName: data.topic?.name || '',
+        sourceDescription: data.topic?.description || '',
+        sourceStudyText: data.topic?.studyText || '',
+        name: data.topic?.name || '',
+        description: data.topic?.description || '',
+        studyText: data.topic?.studyText || '',
+      }
+      const nextChapter = {
+        ...(data.chapter || {}),
+        sourceName: data.chapter?.name || '',
+        name: data.chapter?.name || '',
+      }
+
+      setTopic(nextTopic)
+      setChapter(nextChapter)
       setObjective(data.objectiveType)
-      setQuestions(preparePracticeQuestions(data.questions || [], isAdmin, objectiveType))
+      const preparedQuestions = preparePracticeQuestions(data.questions || [], isAdmin, objectiveType)
+      setQuestions(await translatePracticeQuestions(preparedQuestions))
       setBestScore(data.bestScore)
       setDoneStates(
         (objectiveType === 'complete-the-tables' || objectiveType === 'diagram-based-question') && data.bestScore?.isDone
@@ -267,6 +289,11 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       setTutorMessages(defaultTutorMessages)
       setTutorInput('')
       setReportStatus('')
+      setResult(null)
+      setMode('dashboard')
+      setCurrentQuestionIndex(0)
+      setPendingResult(null)
+      setFeedbackPromptStage('')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -785,6 +812,8 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setDoneStates({})
     setCurrentQuestionIndex(0)
     setResult(null)
+    setPendingResult(null)
+    setFeedbackPromptStage('')
     setDashboardFilter('all')
     setIsDashboardOpen(false)
     setMode('practice')
@@ -916,15 +945,52 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           })),
         }),
       })
-      setResult(data)
       setBestScore(data.bestScore)
       setIsDashboardOpen(false)
-      setMode('result')
+      if (isAdmin) {
+        setResult(data)
+        setMode('result')
+        setPendingResult(null)
+        setFeedbackPromptStage('')
+      } else {
+        setPendingResult(data)
+        if (hasFeedbackFlowBeenSubmitted('objective', objective._id)) {
+          setResult(data)
+          setMode('result')
+          setFeedbackPromptStage('')
+        } else {
+          setFeedbackPromptStage('before')
+        }
+      }
+      window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
     } catch (err) {
       setError(err.message)
     } finally {
       setIsSaving(false)
     }
+  }
+
+  const practiceFeedbackSourceKey = objective?._id ? String(objective._id) : ''
+
+  const handlePracticeFeedbackSubmitted = () => {
+    if (pendingResult) {
+      setResult(pendingResult)
+      setMode('result')
+    }
+
+    setPendingResult(null)
+    setFeedbackPromptStage('')
+  }
+
+  const handlePracticeFeedbackSkip = () => {
+    if (feedbackPromptStage === 'before' && pendingResult) {
+      setResult(pendingResult)
+      setMode('result')
+      setFeedbackPromptStage('after')
+      return
+    }
+
+    setFeedbackPromptStage('')
   }
 
   if (isLoading) {
@@ -2144,6 +2210,19 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           </form>
         </div>
       )}
+
+      <StarFeedbackModal
+        open={!isAdmin && Boolean(feedbackPromptStage) && Boolean(pendingResult)}
+        title={feedbackPromptStage === 'before' ? 'Rate this practice' : 'Rate the result too'}
+        subtitle={feedbackPromptStage === 'before'
+          ? 'Tap stars only. After you rate, we will show your result.'
+          : 'Your result is visible now. If you skipped earlier, please leave a quick star rating.'}
+        sourceType="objective"
+        sourceKey={practiceFeedbackSourceKey}
+        sourceLabel={title}
+        onSubmitSuccess={handlePracticeFeedbackSubmitted}
+        onSkip={handlePracticeFeedbackSkip}
+      />
     </section>
   )
 }

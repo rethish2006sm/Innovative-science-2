@@ -15,6 +15,7 @@ import {
   Send,
   Shield,
   Sparkles,
+  Star,
   Trash2,
   Upload,
   Users,
@@ -67,6 +68,7 @@ const Adminpage = () => {
   const [classes, setClasses] = useState([])
   const [reports, setReports] = useState([])
   const [contacts, setContacts] = useState([])
+  const [feedbacks, setFeedbacks] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
@@ -93,17 +95,19 @@ const Adminpage = () => {
     setError('')
 
     try {
-      const [studentsData, classesData, reportsData, contactsData] = await Promise.all([
+      const [studentsData, classesData, reportsData, contactsData, feedbackData] = await Promise.all([
         apiRequest(`/api/admin/students?search=${encodeURIComponent(searchTerm)}`),
         apiRequest('/api/admin/classes'),
         apiRequest('/api/admin/reports?limit=50'),
         apiRequest('/api/admin/contacts?limit=50'),
+        apiRequest('/api/admin/feedback?limit=50'),
       ])
 
       setStudents(studentsData.students || [])
       setClasses(classesData.classes || [])
       setReports(reportsData.reports || [])
       setContacts(contactsData.contacts || [])
+      setFeedbacks(feedbackData.feedback || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -265,6 +269,77 @@ const Adminpage = () => {
       }
 
       await loadData()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const updateReport = async (reportId, status) => {
+    try {
+      await apiRequest(`/api/admin/reports/${reportId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+      setReports((current) => current.map((report) => (
+        report._id === reportId ? { ...report, status } : report
+      )))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const deleteReport = async (reportId) => {
+    try {
+      await apiRequest(`/api/admin/reports/${reportId}`, {
+        method: 'DELETE',
+      })
+      setReports((current) => current.filter((report) => report._id !== reportId))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const toggleFeedbackFeatured = async (feedbackItem) => {
+    try {
+      const data = await apiRequest(`/api/admin/feedback/${feedbackItem.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ featured: !feedbackItem.featured }),
+      })
+
+      setFeedbacks((current) => current.map((item) => (
+        item.id === feedbackItem.id ? { ...item, featured: data.feedback?.featured ?? !feedbackItem.featured } : item
+      )))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const markFeedbackReviewed = async (feedbackItem) => {
+    try {
+      const data = await apiRequest(`/api/admin/feedback/${feedbackItem.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'reviewed' }),
+      })
+
+      setFeedbacks((current) => current.map((item) => (
+        item.id === feedbackItem.id ? { ...item, status: data.feedback?.status || 'reviewed' } : item
+      )))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const deleteFeedback = async (feedbackId) => {
+    if (!window.confirm('Delete this feedback?')) {
+      return
+    }
+
+    try {
+      await apiRequest(`/api/admin/feedback/${feedbackId}`, {
+        method: 'DELETE',
+      })
+
+      setFeedbacks((current) => current.filter((item) => item.id !== feedbackId))
     } catch (err) {
       setError(err.message)
     }
@@ -533,6 +608,7 @@ const Adminpage = () => {
       })),
     [classPosts],
   )
+  const openReports = useMemo(() => reports.filter((report) => report.status === 'open'), [reports])
 
   if (!isAdmin) {
     return <Navigate to="/" replace />
@@ -556,15 +632,16 @@ const Adminpage = () => {
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[420px]">
+            <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[560px] lg:grid-cols-4">
               <Stat label="Students" value={students.length} />
               <Stat label="Classes" value={classes.length} />
               <Stat label="Reports" value={reports.length} />
+              <Stat label="Feedback" value={feedbacks.length} />
             </div>
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'class-board', 'reports', 'contacts'].map((tab) => (
+            {['students', 'classes', 'class-board', 'reports', 'contacts', 'feedback'].map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -594,7 +671,7 @@ const Adminpage = () => {
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <h2 className="font-serif text-3xl text-slate-950">Students</h2>
-                        <p className="mt-1 text-sm text-slate-500">Search by name, email, or class.</p>
+                        <p className="mt-1 text-sm text-slate-500">Search by name, email, phone number, or class.</p>
                       </div>
                       <div className="grid gap-3 sm:min-w-[420px] sm:grid-cols-2">
                         <label className="relative w-full">
@@ -636,6 +713,7 @@ const Adminpage = () => {
                             >
                               <h3 className="text-lg font-black text-slate-950">{student.name}</h3>
                               <p className="mt-1 text-sm text-slate-500">{student.email}</p>
+                              <p className="mt-1 text-sm text-slate-500">{student.phoneNumber || 'No phone number shared'}</p>
                               <p className="mt-1 text-xs font-bold text-slate-400">Password: {student.password || 'Not available'}</p>
                               <p className="mt-2 text-xs font-black uppercase tracking-[0.22em] text-slate-400">
                                 {student.className || 'No class assigned'}
@@ -1146,6 +1224,9 @@ const Adminpage = () => {
                       <BellRing className="h-5 w-5 text-rose-700" />
                       <h2 className="font-serif text-3xl text-slate-950">Latest reports</h2>
                     </div>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Open reports will also show as a popup until they are marked done or deleted.
+                    </p>
 
                     <div className="mt-5 grid gap-3">
                       {reports.map((report) => (
@@ -1171,6 +1252,25 @@ const Adminpage = () => {
                                     ? report.questionId.options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join(' | ')
                                     : 'N/A'}
                                 />
+                              </div>
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => updateReport(report._id, 'resolved')}
+                                  className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-emerald-700"
+                                >
+                                  Mark done
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteReport(report._id)}
+                                  className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
+                                >
+                                  Delete
+                                </button>
+                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${report.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  {report.status || 'open'}
+                                </span>
                               </div>
                             </div>
                             <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
@@ -1211,6 +1311,87 @@ const Adminpage = () => {
                           </div>
                         </article>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'feedback' && (
+                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <Star className="h-5 w-5 text-amber-600" />
+                      <h2 className="font-serif text-3xl text-slate-950">Student feedback</h2>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Pick the best feedback and it will appear on the home page.
+                    </p>
+
+                    <div className="mt-5 grid gap-3">
+                      {feedbacks.length ? feedbacks.map((feedbackItem) => (
+                        <article key={feedbackItem.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+                                {feedbackItem.name} {feedbackItem.className ? `- ${feedbackItem.className}` : ''}
+                              </p>
+                              <div className="mt-2 flex flex-wrap items-center gap-1">
+                                {Array.from({ length: 5 }).map((_, index) => (
+                                  <Star
+                                    key={`${feedbackItem.id}-star-${index}`}
+                                    className={`h-4 w-4 ${index < feedbackItem.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                                  />
+                                ))}
+                                <span className={`ml-2 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${feedbackItem.featured ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-500'}`}>
+                                  {feedbackItem.featured ? 'Featured' : 'Hidden'}
+                                </span>
+                                <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${feedbackItem.status === 'reviewed' ? 'bg-cyan-100 text-cyan-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  {feedbackItem.status || 'new'}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+                              {new Date(feedbackItem.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+
+                          {feedbackItem.message ? (
+                            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">
+                              {feedbackItem.message}
+                            </p>
+                          ) : (
+                            <p className="mt-3 text-sm leading-7 text-slate-400">
+                              No text message was added.
+                            </p>
+                          )}
+
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleFeedbackFeatured(feedbackItem)}
+                              className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-black"
+                            >
+                              {feedbackItem.featured ? 'Unfeature' : 'Feature on home'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => markFeedbackReviewed(feedbackItem)}
+                              className="inline-flex items-center gap-2 rounded-2xl border border-cyan-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-700 transition hover:bg-cyan-50"
+                            >
+                              Mark reviewed
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteFeedback(feedbackItem.id)}
+                              className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </article>
+                      )) : (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          No feedback has been submitted yet.
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1311,6 +1492,52 @@ const Adminpage = () => {
         </div>
       )}
 
+      {openReports.length > 0 && (
+        <div className="fixed inset-0 z-[230] flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[2rem] border border-rose-100 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-rose-700">Report alert</p>
+                <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
+                  {openReports.length} open report{openReports.length === 1 ? '' : 's'} need attention
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  Mark it done or delete it. The popup stays until every open report is handled.
+                </p>
+              </div>
+              <div className="rounded-full bg-rose-50 px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-rose-700">
+                Pending
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+                {openReports[0].user?.name || 'Student'} - {openReports[0].reason}
+              </p>
+              <p className="mt-3 text-sm leading-7 text-slate-600">
+                {openReports[0].details || 'No extra details.'}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateReport(openReports[0]._id, 'resolved')}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-emerald-700"
+                >
+                  Mark done
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteReport(openReports[0]._id)}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
+                >
+                  Delete report
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedStudent && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 px-3 py-4 backdrop-blur-sm">
           <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl">
@@ -1319,6 +1546,7 @@ const Adminpage = () => {
                 <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-700">Student detail</p>
                 <h2 className="mt-2 font-serif text-3xl text-slate-950">{selectedStudent.name}</h2>
                 <p className="mt-1 text-sm text-slate-500">{selectedStudent.email}</p>
+                <p className="mt-1 text-sm text-slate-500">{selectedStudent.phoneNumber || 'No phone number shared'}</p>
               </div>
               <button
                 type="button"
@@ -1346,6 +1574,10 @@ const Adminpage = () => {
                   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-sm font-black text-slate-950">Class</p>
                     <p className="mt-2 text-lg font-bold text-slate-700">{studentDetail.user.className || 'No class assigned'}</p>
+                  </div>
+                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm font-black text-slate-950">Phone</p>
+                    <p className="mt-2 text-lg font-bold text-slate-700">{studentDetail.user.phoneNumber || 'Not available'}</p>
                   </div>
                   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-sm font-black text-slate-950">Recent attempts</p>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { HashRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import Footer from './components/Footer'
+import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
 import Aboutpage from './pages/Aboutpage'
 import ChapterWeightage from './pages/Chapter_weightage'
@@ -11,6 +12,7 @@ import Correlation from './pages/Correlation'
 import Diagrams from './pages/diagrams'
 import Adminpage from './pages/Adminpage'
 import Classpage from './pages/Classpage'
+import Feedbackpage from './pages/Feedbackpage'
 import Improvementpage from './pages/Improvementpage'
 import Identifysymbol from './pages/Identifysymbol'
 import Homepage from './pages/Homepage'
@@ -69,6 +71,13 @@ const getSeoFromPathname = (pathname) => {
     return {
       title: 'Contact',
       description: 'Get in touch with the Innovative Science 2 team for help, support, or feedback.',
+    }
+  }
+
+  if (normalizedPath === '/feedback') {
+    return {
+      title: 'Feedback',
+      description: 'Leave a star rating and an optional message for Innovative Science 2.',
     }
   }
 
@@ -316,12 +325,14 @@ const AppLayout = () => {
         noindex={seo.noindex}
         canonicalPath={pathname}
       />
+      <RankNotifier />
       {!isObjectivePracticeRoute && <Navbar />}
       <main className={`min-h-screen w-full bg-slate-50 text-slate-950 ${isObjectivePracticeRoute ? 'pt-0' : 'pt-24'}`}>
         <Routes>
           <Route path="/" element={<Homepage />} />
           <Route path="/about" element={<Aboutpage />} />
           <Route path="/contact" element={<Contactpage />} />
+          <Route path="/feedback" element={<Feedbackpage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/improvement" element={<Improvementpage />} />
           <Route

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, Award, BookOpen, Brain, CheckCircle2, Sparkles, Trophy, TrendingUp, X } from 'lucide-react'
+import { ArrowRight, Award, BookOpen, Brain, CheckCircle2, MessageCircleMore, Sparkles, Star, Trophy, TrendingUp, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
@@ -63,6 +63,7 @@ const Homepage = () => {
   const [selectedClassId, setSelectedClassId] = useState(() => readHomepageCache()?.selectedClassId || getStoredAuth()?.user?.classId || '')
   const [chapters, setChapters] = useState(() => readHomepageCache()?.chapters || [])
   const [progress, setProgress] = useState(() => readHomepageCache()?.progress || null)
+  const [featuredFeedback, setFeaturedFeedback] = useState(() => readHomepageCache()?.featuredFeedback || [])
   const [loading, setLoading] = useState(() => !readHomepageCache())
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [isAiTeacherOpen, setIsAiTeacherOpen] = useState(false)
@@ -92,15 +93,18 @@ const Homepage = () => {
           apiRequest('/api/chapters'),
           apiRequest('/api/classes'),
         ])
+        const feedbackData = await apiRequest('/api/feedback/featured?limit=3').catch(() => ({ feedback: [] }))
         if (cancelled) return
 
         const nextLeaderboard = leaderboardData.leaderboard || []
         const nextChapters = chaptersData.chapters || []
         const nextClassOptions = classesData.classes || []
+        const nextFeaturedFeedback = feedbackData.feedback || []
 
         setLeaderboard(nextLeaderboard)
         setChapters(nextChapters)
         setClassOptions(nextClassOptions)
+        setFeaturedFeedback(nextFeaturedFeedback)
         if (auth?.token) {
           const progressData = await apiRequest('/api/progress/me')
           if (cancelled) return
@@ -110,6 +114,7 @@ const Homepage = () => {
             leaderboard: nextLeaderboard,
             chapters: nextChapters,
             classOptions: nextClassOptions,
+            featuredFeedback: nextFeaturedFeedback,
             leaderboardScope: 'all',
             selectedClassId: auth?.user?.classId || '',
             progress: nextProgress,
@@ -121,6 +126,7 @@ const Homepage = () => {
             leaderboard: nextLeaderboard,
             chapters: nextChapters,
             classOptions: nextClassOptions,
+            featuredFeedback: nextFeaturedFeedback,
             leaderboardScope: 'all',
             selectedClassId: auth?.user?.classId || '',
             progress: null,
@@ -179,12 +185,13 @@ const Homepage = () => {
       chapters,
       leaderboard,
       classOptions,
+      featuredFeedback,
       leaderboardScope,
       selectedClassId,
       progress,
       profile: auth?.user || null,
     })
-  }, [loading, chapters, leaderboard, classOptions, leaderboardScope, selectedClassId, progress, auth?.user])
+  }, [loading, chapters, leaderboard, classOptions, featuredFeedback, leaderboardScope, selectedClassId, progress, auth?.user])
 
   useEffect(() => {
     const loadLeaderboard = async () => {
@@ -355,6 +362,10 @@ const Homepage = () => {
               <Link to="/leaderboard" className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-200 bg-emerald-50/80 px-6 py-3.5 text-sm font-bold text-emerald-700 transition-all hover:bg-emerald-100 hover:shadow-md active:scale-95 sm:w-auto sm:px-8 sm:py-4">
                 Leaderboard
               </Link>
+              <Link to="/feedback" className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-amber-200 bg-amber-50/80 px-6 py-3.5 text-sm font-bold text-amber-700 transition-all hover:bg-amber-100 hover:shadow-md active:scale-95 sm:w-auto sm:px-8 sm:py-4">
+                Leave feedback
+                <MessageCircleMore className="h-4 w-4" />
+              </Link>
             </motion.div>
 
             <motion.div variants={staggerContainer} className="mt-8 grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:mt-12 sm:grid-cols-3 sm:gap-4">
@@ -515,6 +526,60 @@ const Homepage = () => {
           <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-slate-50 p-3 sm:mt-6 sm:rounded-[2rem] sm:p-5">
             <ChapterWeightageGraph chapters={chapters} />
           </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-80px' }}
+          transition={{ duration: 0.5, delay: 0.1 }}
+          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-xl sm:mt-6 sm:rounded-[2.5rem] sm:p-8"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 sm:text-xs">
+                Feedback picked by admin
+              </p>
+              <h2 className="mt-1.5 font-serif text-2xl text-slate-900 sm:mt-2 sm:text-3xl">
+                Real voices from the classroom
+              </h2>
+            </div>
+            <div className="rounded-2xl bg-amber-100 p-2.5 sm:p-3">
+              <Star className="h-7 w-7 text-amber-500 sm:h-8 sm:w-8" />
+            </div>
+          </div>
+
+          {featuredFeedback.length ? (
+            <div className="mt-5 grid gap-4 md:grid-cols-3">
+              {featuredFeedback.map((item) => (
+                <article key={item.id} className="rounded-[1.5rem] border border-slate-200/80 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+                        {item.name} {item.className ? `• ${item.className}` : ''}
+                      </p>
+                      <div className="mt-2 flex items-center gap-1">
+                        {Array.from({ length: 5 }).map((_, index) => (
+                          <Star
+                            key={`${item.id}-star-${index}`}
+                            className={`h-4 w-4 ${index < item.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <MessageCircleMore className="h-5 w-5 text-emerald-500" />
+                  </div>
+                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-600">
+                    {item.message || 'No message was added, but the rating still counts.'}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-5 rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+              No featured feedback yet. Visit the feedback page and send the first good note.
+            </div>
+          )}
         </motion.div>
 
         {/* Bottom Bento Grid section */}

@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, BarChart3, BookOpen, CheckCircle2, ChevronLeft, ChevronRight, Circle, Flag, Sparkles, X } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
+import StarFeedbackModal from '../components/StarFeedbackModal'
+import { hasFeedbackFlowBeenSubmitted } from '../lib/feedbackFlow'
 
 const objectiveLabels = {
   mcqs: 'MCQs',
@@ -84,6 +86,8 @@ const Testbuilderpage = () => {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDashboardOpen, setIsDashboardOpen] = useState(false)
   const [error, setError] = useState('')
+  const [pendingResult, setPendingResult] = useState(null)
+  const [feedbackPromptStage, setFeedbackPromptStage] = useState('')
   
   // New state for controlling the mobile popup/wizard flow
   const [mobileWizard, setMobileWizard] = useState(false)
@@ -164,10 +168,13 @@ const Testbuilderpage = () => {
     setMarkedLater({})
     setCurrentIndex(0)
     setResult(null)
+    setPendingResult(null)
+    setFeedbackPromptStage('')
     setIsGenerating(false)
     setIsSubmitting(false)
     setIsDashboardOpen(false)
     setError('')
+    setMobileWizard(false)
   }
 
   const toggleChapter = (chapterNumber) => {
@@ -334,8 +341,15 @@ const Testbuilderpage = () => {
         }),
       })
 
-      setResult(data)
       setMobileWizard(false) // Exit mobile full-screen mode for the result
+      setPendingResult(data)
+      if (hasFeedbackFlowBeenSubmitted('test', 'test-builder')) {
+        setResult(data)
+        setFeedbackPromptStage('')
+      } else {
+        setFeedbackPromptStage('before')
+      }
+      window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -350,6 +364,8 @@ const Testbuilderpage = () => {
     setDoneStates({})
     setMarkedLater({})
     setResult(null)
+    setPendingResult(null)
+    setFeedbackPromptStage('')
     setCurrentIndex(0)
     setStep(2)
   }
@@ -361,6 +377,27 @@ const Testbuilderpage = () => {
     setQuestionCount(10)
     setStep(1)
     setMobileWizard(false)
+    setPendingResult(null)
+    setFeedbackPromptStage('')
+  }
+
+  const handleTestFeedbackSubmitted = () => {
+    if (pendingResult) {
+      setResult(pendingResult)
+    }
+
+    setPendingResult(null)
+    setFeedbackPromptStage('')
+  }
+
+  const handleTestFeedbackSkip = () => {
+    if (feedbackPromptStage === 'before' && pendingResult) {
+      setResult(pendingResult)
+      setFeedbackPromptStage('after')
+      return
+    }
+
+    setFeedbackPromptStage('')
   }
 
   if (loading) {
@@ -1179,6 +1216,19 @@ const Testbuilderpage = () => {
           )}
         </div>
       </div>
+
+      <StarFeedbackModal
+        open={Boolean(feedbackPromptStage) && Boolean(pendingResult)}
+        title={feedbackPromptStage === 'before' ? 'Rate this test' : 'Rate the result too'}
+        subtitle={feedbackPromptStage === 'before'
+          ? 'Tap stars only. After you rate, we will show your result.'
+          : 'Your result is visible now. If you skipped earlier, please leave a quick star rating.'}
+        sourceType="test"
+        sourceKey="test-builder"
+        sourceLabel="Test builder"
+        onSubmitSuccess={handleTestFeedbackSubmitted}
+        onSkip={handleTestFeedbackSkip}
+      />
     </section>
   )
 }

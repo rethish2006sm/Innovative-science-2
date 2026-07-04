@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { CheckCircle2, Edit3, Plus, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Edit3, Plus, Star, Trash2, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
+import { getFeedbackClientKey } from '../lib/feedbackClient'
 
 const emptyForm = { name: '', description: '', studyText: '' }
 
@@ -17,6 +18,8 @@ const Topicspage = () => {
   const [editingTopic, setEditingTopic] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [isSaving, setIsSaving] = useState(false)
+  const [topicFeedbackSummary, setTopicFeedbackSummary] = useState({ averageRating: 0, ratingCount: 0, userRating: 0 })
+  const [topicFeedbackSubmitting, setTopicFeedbackSubmitting] = useState(false)
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const marksWithOption = Number(chapter?.marks || 0)
@@ -30,8 +33,21 @@ const Topicspage = () => {
 
     try {
       const data = await apiRequest(`/api/chapters/${chapterNumber}/topics`)
-      setChapter(data.chapter)
-      setTopics(data.topics || [])
+      const nextTopics = Array.isArray(data.topics) ? data.topics : []
+      setChapter({
+        ...(data.chapter || {}),
+        sourceName: data.chapter?.name || '',
+        name: data.chapter?.name || '',
+      })
+      setTopics(nextTopics.map((topic) => ({
+        ...(topic || {}),
+        sourceName: topic.name || '',
+        sourceDescription: topic.description || '',
+        sourceStudyText: topic.studyText || '',
+        name: topic.name || '',
+        description: topic.description || '',
+        studyText: topic.studyText || '',
+      })))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -42,6 +58,41 @@ const Topicspage = () => {
   useEffect(() => {
     loadTopics()
   }, [chapterNumber])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadFeedbackSummary = async () => {
+      if (!chapter?._id) {
+        setTopicFeedbackSummary({ averageRating: 0, ratingCount: 0, userRating: 0 })
+        return
+      }
+
+      try {
+        const data = await apiRequest(
+          `/api/feedback/context?sourceType=topic&sourceKey=${encodeURIComponent(chapter._id)}&clientKey=${encodeURIComponent(getFeedbackClientKey())}&limit=10`,
+        )
+
+        if (!cancelled) {
+          setTopicFeedbackSummary({
+            averageRating: Number(data.averageRating || 0),
+            ratingCount: Number(data.ratingCount || 0),
+            userRating: Number(data.userRating || 0),
+          })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTopicFeedbackSummary({ averageRating: 0, ratingCount: 0, userRating: 0 })
+        }
+      }
+    }
+
+    loadFeedbackSummary()
+
+    return () => {
+      cancelled = true
+    }
+  }, [chapter?._id, auth?.token])
 
   const openAddModal = () => {
     setEditingTopic(null)
@@ -96,6 +147,63 @@ const Topicspage = () => {
       await loadTopics()
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const topicFeedbackSourceKey = chapter?._id ? String(chapter._id) : ''
+  const topicFeedbackSubmitted = Boolean(topicFeedbackSummary.userRating)
+
+  const submitTopicFeedback = async (rating) => {
+    if (!topicFeedbackSourceKey || topicFeedbackSubmitting) {
+      return
+    }
+
+    setTopicFeedbackSubmitting(true)
+
+    try {
+      await apiRequest('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          rating,
+          message: '',
+          sourceType: 'topic',
+          sourceKey: topicFeedbackSourceKey,
+          sourceLabel: chapter?.name || 'Chapter topics',
+          clientKey: getFeedbackClientKey(),
+          name: auth?.user?.name || '',
+          email: auth?.user?.email || '',
+          phoneNumber: auth?.user?.phoneNumber || '',
+        }),
+      })
+
+      setTopicFeedbackSummary((current) => ({
+        ...current,
+        userRating: rating,
+      }))
+      await refreshTopicFeedback()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setTopicFeedbackSubmitting(false)
+    }
+  }
+
+  const refreshTopicFeedback = async () => {
+    if (!topicFeedbackSourceKey) {
+      return
+    }
+
+    try {
+      const data = await apiRequest(
+        `/api/feedback/context?sourceType=topic&sourceKey=${encodeURIComponent(topicFeedbackSourceKey)}&clientKey=${encodeURIComponent(getFeedbackClientKey())}&limit=10`,
+      )
+      setTopicFeedbackSummary({
+        averageRating: Number(data.averageRating || 0),
+        ratingCount: Number(data.ratingCount || 0),
+        userRating: Number(data.userRating || 0),
+      })
+    } catch (err) {
+      // Leave the current summary in place.
     }
   }
 
@@ -183,6 +291,79 @@ const Topicspage = () => {
           <p className="mt-4 max-w-2xl text-sm leading-6 text-stone-500 sm:text-base">
             Select the Topic you want to practice.
           </p>
+          <div className="mt-5 rounded-[1.75rem] border border-amber-100 bg-amber-50/80 p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.22em] text-amber-700">Topic feedback</p>
+                <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-950">Feedback</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Click on the stars to give feedback.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: 5 }).map((_, index) => {
+                    const starValue = index + 1
+                    const userActive = topicFeedbackSummary.userRating >= starValue
+                    const hasUserRating = topicFeedbackSummary.userRating > 0
+
+                    return (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => submitTopicFeedback(starValue)}
+                        disabled={topicFeedbackSubmitting}
+                        className="grid place-items-center rounded-full transition disabled:cursor-not-allowed"
+                        aria-label={`${starValue} star rating`}
+                      >
+                        <Star
+                          className={`h-5 w-5 transition ${hasUserRating && userActive ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                        />
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-black text-slate-950">
+                    {topicFeedbackSummary.userRating ? `Your rating: ${topicFeedbackSummary.userRating}/5` : 'Not rated yet'}
+                  </p>
+                  <p className="text-xs font-semibold text-slate-500">
+                    {topicFeedbackSummary.ratingCount} rating{topicFeedbackSummary.ratingCount === 1 ? '' : 's'}
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-2 rounded-2xl border border-white/80 bg-white/70 px-4 py-3 text-right shadow-sm">
+                <p className="text-sm font-black text-slate-950">
+                  {topicFeedbackSummary.averageRating
+                    ? `Avg rating: ${topicFeedbackSummary.averageRating.toFixed(1)}/5`
+                    : 'No average rating yet'}
+                </p>
+                <p className="text-xs font-semibold text-slate-500">
+                  {topicFeedbackSummary.userRating
+                    ? `You rated ${topicFeedbackSummary.userRating}/5`
+                    : 'No user rating yet'}
+                </p>
+                {topicFeedbackSummary.userRating ? (
+                  <p className="text-xs font-bold text-amber-700">
+                    Saved
+                  </p>
+                ) : (
+                  <p className="text-xs font-bold text-slate-500">
+                    Tap any star to start or change your rating.
+                  </p>
+                )}
+                <p className="text-xs font-semibold text-slate-500">
+                  {topicFeedbackSummary.ratingCount} rating{topicFeedbackSummary.ratingCount === 1 ? '' : 's'}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <span className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-slate-600">
+                <Star className="h-4 w-4 text-amber-500" />
+                {topicFeedbackSubmitted ? 'Saved' : 'Tap any star to rate'}
+              </span>
+            </div>
+          </div>
           {error && !isModalOpen && (
             <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-bold text-red-500">
               {error}
@@ -339,6 +520,7 @@ const Topicspage = () => {
           </form>
         </div>
       )}
+
     </section>
   )
 }

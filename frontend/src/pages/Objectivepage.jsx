@@ -38,8 +38,16 @@ const Objectivepage = () => {
 
     try {
       const data = await apiRequest(`/api/topics/${topicId}/objective-types`)
-      setTopic(data.topic)
-      setChapter(data.chapter)
+      setTopic({
+        ...(data.topic || {}),
+        sourceName: data.topic?.name || '',
+        name: data.topic?.name || '',
+      })
+      setChapter({
+        ...(data.chapter || {}),
+        sourceName: data.chapter?.name || '',
+        name: data.chapter?.name || '',
+      })
       setObjectiveTypes(data.objectiveTypes || [])
     } catch (err) {
       setError(err.message)

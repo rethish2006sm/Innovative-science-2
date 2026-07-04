@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, Download, FileText, Image as ImageIcon, Loader2, X, Eye } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CalendarDays, Download, FileText, Image as ImageIcon, X, Eye } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { API_BASE_URL, apiRequest } from "../api";
 import { getStoredAuth } from "../authStorage";
@@ -17,17 +17,48 @@ const CATEGORY_LABELS = CLASS_POST_CATEGORIES.reduce((acc, item) => {
   acc[item.id] = item.label;
   return acc;
 }, {});
+const EMPTY_CATEGORY_COUNTS = CLASS_POST_CATEGORIES.reduce((acc, item) => {
+  acc[item.id] = 0;
+  return acc;
+}, {});
+
+const CLASS_FEED_CACHE_PREFIX = "innovative_science_2_class_feed"
+const getClassFeedCacheKey = (classId) => `${CLASS_FEED_CACHE_PREFIX}:${String(classId || "unknown")}`
+
+function readClassFeedCache(classId) {
+  try {
+    const cached = JSON.parse(localStorage.getItem(getClassFeedCacheKey(classId)) || "null")
+    if (!cached || typeof cached !== "object") return null
+    return cached
+  } catch (error) {
+    return null
+  }
+}
+
+function writeClassFeedCache(classId, payload) {
+  try {
+    localStorage.setItem(
+      getClassFeedCacheKey(classId),
+      JSON.stringify({
+        ...payload,
+        cachedAt: Date.now(),
+      }),
+    )
+  } catch (error) {
+    // Ignore storage limits and keep the live fetch working.
+  }
+}
+
+function clearClassFeedCache(classId) {
+  try {
+    localStorage.removeItem(getClassFeedCacheKey(classId));
+  } catch (error) {
+    // Ignore storage access issues during shutdown cleanup.
+  }
+}
 
 function getStoredToken() {
   return getStoredAuth()?.token || "";
-}
-
-function toJson(payload) {
-  if (!payload) return payload;
-  if (typeof payload.json === "function") {
-    return payload.json();
-  }
-  return payload;
 }
 
 function buildAuthedUrl(rawUrl, extras = {}) {
@@ -62,10 +93,15 @@ function formatDate(value) {
 
 export default function Classpage() {
   const { classId } = useParams();
-  const [posts, setPosts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const cachedFeed = readClassFeedCache(classId)
+  const [activeCategory, setActiveCategory] = useState(() => cachedFeed?.activeCategory || "assignment");
+  const [posts, setPosts] = useState(() => cachedFeed?.posts || []);
+  const [loading, setLoading] = useState(() => !cachedFeed);
+  const [feedLimit, setFeedLimit] = useState(20);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(Boolean(cachedFeed?.hasMore));
+  const [categoryCounts, setCategoryCounts] = useState(() => cachedFeed?.categoryCounts || EMPTY_CATEGORY_COUNTS);
   const [error, setError] = useState("");
-  const [activeCategory, setActiveCategory] = useState("assignment");
   const [viewerPost, setViewerPost] = useState(null);
   const [viewerPhoto, setViewerPhoto] = useState(null);
   const [viewerPdf, setViewerPdf] = useState(null);
@@ -82,30 +118,44 @@ export default function Classpage() {
         return;
       }
 
-      setLoading(true);
+      const cachedMatchesCategory = cachedFeed?.activeCategory === activeCategory && Array.isArray(cachedFeed?.posts)
+      if (!cachedMatchesCategory) {
+        setLoading(true);
+      }
       setError("");
 
       try {
-        const response = await apiRequest(`/api/classes/${classId}/feed`);
-        const data = await toJson(response);
+        const data = await apiRequest(`/api/classes/${classId}/feed?limit=${feedLimit}&category=${encodeURIComponent(activeCategory)}`);
         const nextPosts = Array.isArray(data?.posts) ? data.posts : [];
 
         if (!cancelled) {
           setPosts(nextPosts);
-          setActiveCategory((current) => {
-            const hasCurrent = nextPosts.some((post) => normalizeCategory(post?.category) === current);
-            if (hasCurrent) return current;
-            return "assignment";
-          });
+          setHasMore(Boolean(data?.hasMore));
+          setCategoryCounts(data?.categoryCounts || EMPTY_CATEGORY_COUNTS);
+          const firstAvailableCategory = CLASS_POST_CATEGORIES.find((item) => Number(data?.categoryCounts?.[item.id] || 0) > 0)?.id || 'assignment'
+          if (!cachedFeed && activeCategory === 'assignment' && !nextPosts.length && firstAvailableCategory !== 'assignment') {
+            setActiveCategory(firstAvailableCategory)
+            return
+          }
+          writeClassFeedCache(classId, {
+            posts: nextPosts,
+            hasMore: Boolean(data?.hasMore),
+            activeCategory,
+            categoryCounts: data?.categoryCounts || EMPTY_CATEGORY_COUNTS,
+            classItem: data?.classItem || null,
+          })
         }
       } catch (fetchError) {
         if (!cancelled) {
           setError(fetchError?.message || "Failed to load class posts.");
-          setPosts([]);
+          if (!cachedMatchesCategory) {
+            setPosts([]);
+          }
         }
       } finally {
         if (!cancelled) {
           setLoading(false);
+          setIsLoadingMore(false);
         }
       }
     }
@@ -115,27 +165,25 @@ export default function Classpage() {
     return () => {
       cancelled = true;
     };
+  }, [classId, activeCategory, feedLimit]);
+
+  useEffect(() => {
+    if (!classId) {
+      return undefined;
+    }
+
+    const clearCacheOnClose = () => {
+      clearClassFeedCache(classId);
+    };
+
+    window.addEventListener("beforeunload", clearCacheOnClose);
+    window.addEventListener("pagehide", clearCacheOnClose);
+
+    return () => {
+      window.removeEventListener("beforeunload", clearCacheOnClose);
+      window.removeEventListener("pagehide", clearCacheOnClose);
+    };
   }, [classId]);
-
-  const categoryCounts = useMemo(() => {
-    // Dynamically initialize all counts to 0 based on our categories array
-    const initialCounts = CLASS_POST_CATEGORIES.reduce((acc, item) => {
-      acc[item.id] = 0;
-      return acc;
-    }, {});
-
-    return posts.reduce((acc, post) => {
-      const category = normalizeCategory(post?.category);
-      if (acc[category] !== undefined) {
-        acc[category] += 1;
-      }
-      return acc;
-    }, initialCounts);
-  }, [posts]);
-
-  const filteredPosts = useMemo(() => {
-    return posts.filter((post) => normalizeCategory(post?.category) === activeCategory);
-  }, [posts, activeCategory]);
 
   const closeViewer = () => {
     setViewerPost(null);
@@ -177,6 +225,26 @@ export default function Classpage() {
 
   const currentCategoryLabel = CATEGORY_LABELS[activeCategory] || "Notes";
 
+  const loadMorePosts = () => {
+    if (isLoadingMore || loading) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    setFeedLimit((current) => current + 20);
+  };
+
+  const changeCategory = (nextCategory) => {
+    if (nextCategory === activeCategory) {
+      return;
+    }
+
+    setLoading(true);
+    setIsLoadingMore(false);
+    setFeedLimit(20);
+    setActiveCategory(nextCategory);
+  };
+
   return (
     <main className="min-h-screen bg-[#f8fafc] text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 antialiased overflow-hidden">
       {/* Dynamic Background Accents */}
@@ -207,7 +275,7 @@ export default function Classpage() {
                 <button
                   key={category.id}
                   type="button"
-                  onClick={() => setActiveCategory(category.id)}
+                  onClick={() => changeCategory(category.id)}
                   className={[
                     "relative flex items-center justify-center gap-2 rounded-2xl py-3 px-4 text-sm font-bold tracking-wide transition-all duration-300 ease-out outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 shrink-0 whitespace-nowrap",
                     active
@@ -240,13 +308,21 @@ export default function Classpage() {
 
         {/* Feed / State Processing Layout */}
         {loading ? (
-          <div className="flex min-h-[35vh] flex-col items-center justify-center gap-4 py-12">
-            <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-white border border-slate-200 shadow-sm">
-              <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
-            </div>
-            <p className="text-sm font-medium text-slate-500">Syncing classroom archive...</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div key={`class-skeleton-${index}`} className="animate-pulse rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 h-4 w-24 rounded-full bg-slate-100" />
+                <div className="h-5 w-3/4 rounded-full bg-slate-100" />
+                <div className="mt-3 h-3 w-full rounded-full bg-slate-100" />
+                <div className="mt-2 h-3 w-5/6 rounded-full bg-slate-100" />
+                <div className="mt-5 grid grid-cols-2 gap-2">
+                  <div className="aspect-square rounded-2xl bg-slate-100" />
+                  <div className="aspect-square rounded-2xl bg-slate-100" />
+                </div>
+              </div>
+            ))}
           </div>
-        ) : filteredPosts.length === 0 ? (
+        ) : posts.length === 0 ? (
           <div id="class-notes" className="rounded-3xl border border-dashed border-slate-200 bg-white/60 py-16 px-4 text-center backdrop-blur-sm animate-in fade-in duration-300">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-50 border border-slate-100 text-slate-400 shadow-sm">
               <CalendarDays className="h-6 w-6 text-slate-400" />
@@ -257,8 +333,9 @@ export default function Classpage() {
             </p>
           </div>
         ) : (
-          <div id="class-notes" className="space-y-6">
-            {filteredPosts.map((post) => {
+          <div className="space-y-6">
+            <div id="class-notes" className="space-y-6">
+            {posts.map((post) => {
               const category = normalizeCategory(post?.category);
               const photos = Array.isArray(post?.photos) ? post.photos : [];
               const pdfUrl = post?.pdf?.pdfUrl ? buildAuthedUrl(post.pdf.pdfUrl) : "";
@@ -307,7 +384,7 @@ export default function Classpage() {
                         ].join(" ")}
                       >
                         {photos.map((photo, index) => {
-                          const src = photo?.photoUrl ? buildAuthedUrl(photo.photoUrl) : photo?.dataUrl || "";
+                          const src = photo?.thumbUrl ? buildAuthedUrl(photo.thumbUrl) : photo?.photoUrl ? buildAuthedUrl(photo.photoUrl) : "";
                           const alt = photo?.fileName || `Attachment ${index + 1}`;
                           
                           const isLargeSpan = photos.length === 3 && index === 0;
@@ -328,6 +405,7 @@ export default function Classpage() {
                                   alt={alt}
                                   className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover/item:scale-105"
                                   loading="lazy"
+                                  decoding="async"
                                 />
                               ) : (
                                 <div className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-400">
@@ -366,6 +444,20 @@ export default function Classpage() {
                 </article>
               );
             })}
+            </div>
+
+            {hasMore ? (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  onClick={loadMorePosts}
+                  disabled={isLoadingMore}
+                  className="inline-flex h-11 items-center justify-center rounded-full border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLoadingMore ? 'Loading more...' : 'Load older posts'}
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -420,12 +512,14 @@ export default function Classpage() {
               aria-label="Toggle image zoom"
             >
               <img
-                src={buildAuthedUrl(viewerPhoto.photoUrl || viewerPhoto.dataUrl || "")}
+                src={buildAuthedUrl(viewerPhoto.photoUrl || "")}
                 alt={viewerPhoto.fileName || "Class photo"}
                 className={[
                   "mx-auto max-h-[80vh] max-w-full rounded-xl sm:rounded-2xl object-contain shadow-2xl transition-transform duration-300 ease-out-back",
                   isZoomed ? "scale-125 sm:scale-150 cursor-zoom-out" : "cursor-zoom-in",
                 ].join(" ")}
+                loading="eager"
+                decoding="async"
               />
             </button>
           </div>
@@ -476,7 +570,7 @@ export default function Classpage() {
 
             <div className="flex-1 overflow-auto bg-slate-100 p-3 sm:p-4">
               <iframe
-                src={buildAuthedUrl(viewerPdf.pdfUrl || viewerPdf.dataUrl || "")}
+                src={buildAuthedUrl(viewerPdf.pdfUrl || "")}
                 title={viewerPdf.fileName || "Class PDF"}
                 className="h-full w-full rounded-[20px] border-0 bg-white shadow-2xl"
               />

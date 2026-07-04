@@ -12,6 +12,7 @@ import {
   Sparkles,
   Heart,
   ArrowUp,
+  MessageCircleMore,
   UserPlus,
   Award,
   Users,
@@ -24,6 +25,7 @@ const mainNavItems = [
   { name: 'HOME', path: '/', icon: <Home size={18} /> },
   { name: 'CHAPTERS', path: '/chapters', icon: <BookOpen size={18} /> },
   { name: 'CONTACT', path: '/contact', icon: <PhoneCall size={18} /> },
+  { name: 'FEEDBACK', path: '/feedback', icon: <MessageCircleMore size={18} /> },
 ];
 
 const resultNavItems = [

@@ -747,6 +747,92 @@ const ContactMessage = mongoose.model(
   ),
 )
 
+const feedbackSchema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 120,
+    },
+    email: {
+      type: String,
+      trim: true,
+      maxlength: 180,
+      default: '',
+    },
+    phoneNumber: {
+      type: String,
+      trim: true,
+      maxlength: 40,
+      default: '',
+    },
+    clientKey: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: '',
+    },
+    classId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Class',
+      default: null,
+    },
+    className: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: '',
+    },
+    rating: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 5,
+    },
+    message: {
+      type: String,
+      trim: true,
+      maxlength: 1500,
+      default: '',
+    },
+    featured: {
+      type: Boolean,
+      default: false,
+    },
+    sourceType: {
+      type: String,
+      enum: ['general', 'objective', 'test', 'topic'],
+      default: 'general',
+    },
+    sourceKey: {
+      type: String,
+      trim: true,
+      maxlength: 180,
+      default: '',
+    },
+    sourceLabel: {
+      type: String,
+      trim: true,
+      maxlength: 180,
+      default: '',
+    },
+    status: {
+      type: String,
+      enum: ['new', 'reviewed'],
+      default: 'new',
+    },
+  },
+  { timestamps: true },
+)
+
+const Feedback = mongoose.model('Feedback', feedbackSchema)
+
 const publicUser = (user, { includePassword = false } = {}) => ({
   id: user._id.toString(),
   name: user.name,
@@ -823,10 +909,12 @@ const convertClassPhoto = async (file) => {
 
 const publicClassPost = (post) => {
   const normalizedPost = typeof post.toObject === 'function' ? post.toObject() : post
+  const classIdValue = String(normalizedPost.classId?._id || normalizedPost.classId || '')
+  const postIdValue = String(normalizedPost._id)
 
   return {
-    id: String(normalizedPost._id),
-    classId: String(normalizedPost.classId?._id || normalizedPost.classId || ''),
+    id: postIdValue,
+    classId: classIdValue,
     groupId: String(normalizedPost.shareGroupId?._id || normalizedPost.shareGroupId || ''),
     category: normalizedPost.category || 'assignment',
     categoryLabel: CLASS_POST_CATEGORY_LABELS[normalizedPost.category || 'assignment'] || 'Assignment',
@@ -842,16 +930,15 @@ const publicClassPost = (post) => {
       id: String(photo._id),
       name: photo.originalName || 'photo',
       contentType: photo.contentType || '',
-      photoUrl: `/api/classes/${String(normalizedPost.classId?._id || normalizedPost.classId || '')}/posts/${String(normalizedPost._id)}/photos/${String(photo._id)}?v=${photo.updatedAt?.getTime() || Date.now()}`,
-      dataUrl: bufferToDataUrl(photo),
+      photoUrl: `/api/classes/${classIdValue}/posts/${postIdValue}/photos/${String(photo._id)}?v=${photo.updatedAt?.getTime() || Date.now()}`,
+      thumbUrl: `/api/classes/${classIdValue}/posts/${postIdValue}/photos/${String(photo._id)}?thumb=1&v=${photo.updatedAt?.getTime() || Date.now()}`,
     })),
-    pdf: normalizedPost.pdf?.data
+    pdf: normalizedPost.pdf
       ? {
-          name: normalizedPost.pdf.originalName || 'attachment.pdf',
-          contentType: normalizedPost.pdf.contentType || 'application/pdf',
-          pdfUrl: `/api/classes/${String(normalizedPost.classId?._id || normalizedPost.classId || '')}/posts/${String(normalizedPost._id)}/pdf?v=${normalizedPost.pdf.updatedAt?.getTime() || Date.now()}`,
-          dataUrl: bufferToDataUrl(normalizedPost.pdf),
-        }
+        name: normalizedPost.pdf.originalName || 'attachment.pdf',
+        contentType: normalizedPost.pdf.contentType || 'application/pdf',
+        pdfUrl: `/api/classes/${classIdValue}/posts/${postIdValue}/pdf?v=${normalizedPost.pdf.updatedAt?.getTime() || Date.now()}`,
+      }
       : null,
   }
 }
@@ -1191,6 +1278,7 @@ const buildProgressRowsForUsers = async (users = []) => {
       name: user.name,
       email: user.email,
       password: user.password || user.passwordHash || '',
+      phoneNumber: user.phoneNumber || '',
       classId: classDoc?._id ? String(classDoc._id) : String(user.classId || ''),
       className: classDoc?.name || '',
       isAdmin: Boolean(user.isAdmin),
@@ -1248,6 +1336,28 @@ const authRequired = async (req, res, next) => {
     next()
   } catch (error) {
     return res.status(401).json({ message: 'Session expired. Please sign in again.' })
+  }
+}
+
+const publicFeedback = (feedback) => {
+  const normalizedFeedback = typeof feedback.toObject === 'function' ? feedback.toObject() : feedback
+
+  return {
+    id: String(normalizedFeedback._id),
+    name: normalizedFeedback.name || 'Guest',
+    email: normalizedFeedback.email || '',
+    phoneNumber: normalizedFeedback.phoneNumber || '',
+    classId: String(normalizedFeedback.classId?._id || normalizedFeedback.classId || ''),
+    className: normalizedFeedback.className || normalizedFeedback.classId?.name || '',
+    rating: Number(normalizedFeedback.rating || 0),
+    message: normalizedFeedback.message || '',
+    featured: Boolean(normalizedFeedback.featured),
+    sourceType: normalizedFeedback.sourceType || 'general',
+    sourceKey: normalizedFeedback.sourceKey || '',
+    sourceLabel: normalizedFeedback.sourceLabel || '',
+    status: normalizedFeedback.status || 'new',
+    createdAt: normalizedFeedback.createdAt,
+    updatedAt: normalizedFeedback.updatedAt,
   }
 }
 
@@ -2932,6 +3042,38 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
   }
 })
 
+app.get('/api/leaderboard/me', authRequired, async (req, res) => {
+  try {
+    const users = await User.find({
+      isAdmin: false,
+    }).populate('classId')
+
+    const rows = await buildProgressRowsForUsers(users)
+    rows.sort((left, right) => {
+      if (right.totalBrainCells !== left.totalBrainCells) {
+        return right.totalBrainCells - left.totalBrainCells
+      }
+
+      if (right.averagePercent !== left.averagePercent) {
+        return right.averagePercent - left.averagePercent
+      }
+
+      return right.attemptCount - left.attemptCount
+    })
+
+    const currentUserIndex = rows.findIndex((row) => row.id === req.user._id.toString())
+    const currentUser = currentUserIndex >= 0 ? rows[currentUserIndex] : null
+
+    res.json({
+      rank: currentUserIndex >= 0 ? currentUserIndex + 1 : null,
+      totalStudents: rows.length,
+      currentUser,
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load your rank.' })
+  }
+})
+
 app.get('/api/classes', async (req, res) => {
   try {
     const classes = await Class.find().sort({ name: 1 }).lean()
@@ -2963,6 +3105,7 @@ app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => 
       ? rows.filter((student) => (
         student.name.toLowerCase().includes(search) ||
         student.email.toLowerCase().includes(search) ||
+        student.phoneNumber.toLowerCase().includes(search) ||
         student.className.toLowerCase().includes(search)
       ))
       : rows
@@ -3179,6 +3322,43 @@ app.get('/api/admin/reports', authRequired, adminRequired, async (req, res) => {
   }
 })
 
+app.patch('/api/admin/reports/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const { status } = req.body
+    const update = {}
+
+    if (status && ['open', 'resolved'].includes(status)) {
+      update.status = status
+    } else {
+      return res.status(400).json({ message: 'Please choose a valid report status.' })
+    }
+
+    const report = await Report.findByIdAndUpdate(req.params.id, update, { new: true })
+
+    if (!report) {
+      return res.status(404).json({ message: 'Report not found.' })
+    }
+
+    res.json({ report })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not update report.' })
+  }
+})
+
+app.delete('/api/admin/reports/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const report = await Report.findByIdAndDelete(req.params.id)
+
+    if (!report) {
+      return res.status(404).json({ message: 'Report not found.' })
+    }
+
+    res.json({ message: 'Report deleted successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete report.' })
+  }
+})
+
 app.get('/api/admin/contacts', authRequired, adminRequired, async (req, res) => {
   try {
     const contacts = await ContactMessage.find()
@@ -3189,6 +3369,248 @@ app.get('/api/admin/contacts', authRequired, adminRequired, async (req, res) => 
     res.json({ contacts })
   } catch (error) {
     res.status(500).json({ message: 'Could not load contact messages.' })
+  }
+})
+
+app.post('/api/feedback', optionalAuth, async (req, res) => {
+  try {
+    const {
+      rating,
+      message = '',
+      name = '',
+      email = '',
+      phoneNumber = '',
+      sourceType = 'general',
+      sourceKey = '',
+      sourceLabel = '',
+      clientKey = '',
+    } = req.body
+    const parsedRating = Number(rating)
+
+    if (!Number.isInteger(parsedRating) || parsedRating < 1 || parsedRating > 5) {
+      return res.status(400).json({ message: 'Please choose a rating between 1 and 5.' })
+    }
+
+    const normalizedSourceType = ['general', 'objective', 'test', 'topic'].includes(String(sourceType || 'general'))
+      ? String(sourceType || 'general')
+      : 'general'
+    const normalizedSourceKey = String(sourceKey || '').trim()
+    const normalizedClientKey = String(clientKey || '').trim()
+
+    const user = req.user || null
+    const userClassId = user?.classId?._id || user?.classId || null
+    const classDoc = userClassId ? await Class.findById(userClassId).lean() : null
+
+    const lookup = user?._id
+      ? { user: user._id, sourceType: normalizedSourceType, sourceKey: normalizedSourceKey }
+      : normalizedClientKey
+        ? { clientKey: normalizedClientKey, sourceType: normalizedSourceType, sourceKey: normalizedSourceKey }
+        : null
+
+    const updateData = {
+      user: user?._id || null,
+      clientKey: normalizedClientKey,
+      name: String(name || user?.name || 'Guest').trim() || 'Guest',
+      email: String(email || user?.email || '').trim(),
+      phoneNumber: String(phoneNumber || user?.phoneNumber || '').trim(),
+      classId: classDoc?._id || userClassId || null,
+      className: classDoc?.name || user?.className || '',
+      rating: parsedRating,
+      message: String(message || '').trim(),
+      sourceType: normalizedSourceType,
+      sourceKey: normalizedSourceKey,
+      sourceLabel: String(sourceLabel || '').trim(),
+    }
+
+    let feedback = null
+
+    if (lookup) {
+      feedback = await Feedback.findOne(lookup)
+    }
+
+    if (feedback) {
+      feedback.set(updateData)
+      await feedback.save()
+    } else {
+      feedback = await Feedback.create(updateData)
+    }
+
+    res.status(201).json({
+      feedback: publicFeedback(feedback),
+      message: 'Thank you for your feedback.',
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not send feedback.' })
+  }
+})
+
+app.get('/api/feedback/context', optionalAuth, async (req, res) => {
+  try {
+    const sourceType = String(req.query.sourceType || 'general').toLowerCase()
+    const sourceKey = String(req.query.sourceKey || '').trim()
+    const clientKey = String(req.query.clientKey || '').trim()
+    const normalizedSourceType = ['general', 'objective', 'test', 'topic'].includes(sourceType)
+      ? sourceType
+      : 'general'
+
+    const query = {
+      sourceType: normalizedSourceType,
+    }
+
+    if (sourceKey) {
+      query.sourceKey = sourceKey
+    }
+
+    const feedback = await Feedback.find(query)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(Number(req.query.limit) || 20, 1), 50))
+      .lean()
+
+    const dedupedFeedback = []
+    const seenFeedbackKeys = new Set()
+
+    feedback.forEach((item) => {
+      const userKey = item.user ? `user:${String(item.user)}` : ''
+      const browserKey = item.clientKey ? `client:${String(item.clientKey)}` : ''
+      const dedupeKey = userKey || browserKey || `entry:${String(item._id)}`
+
+      if (seenFeedbackKeys.has(dedupeKey)) {
+        return
+      }
+
+      seenFeedbackKeys.add(dedupeKey)
+      dedupedFeedback.push(item)
+    })
+
+    const ratingCount = dedupedFeedback.length
+    const averageRating = ratingCount
+      ? Math.round((dedupedFeedback.reduce((sum, item) => sum + Number(item.rating || 0), 0) / ratingCount) * 10) / 10
+      : 0
+    const currentUserId = req.user?._id ? String(req.user._id) : ''
+    const userRating = currentUserId
+      ? dedupedFeedback.find((item) => String(item.user || '') === currentUserId)?.rating || 0
+      : clientKey
+        ? dedupedFeedback.find((item) => String(item.clientKey || '') === clientKey)?.rating || 0
+        : 0
+
+    res.json({
+      feedback: dedupedFeedback.map(publicFeedback),
+      averageRating,
+      ratingCount,
+      userRating,
+      sourceType: normalizedSourceType,
+      sourceKey,
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load feedback.' })
+  }
+})
+
+app.get('/api/feedback/me', authRequired, async (req, res) => {
+  try {
+    const feedback = await Feedback.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .lean()
+
+    res.json({
+      feedback: feedback.map(publicFeedback),
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load your feedback.' })
+  }
+})
+
+app.get('/api/feedback/featured', async (req, res) => {
+  try {
+    const feedback = await Feedback.find({ featured: true })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .limit(Math.min(Math.max(Number(req.query.limit) || 6, 1), 20))
+      .lean()
+
+    res.json({
+      feedback: feedback.map(publicFeedback),
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load featured feedback.' })
+  }
+})
+
+app.get('/api/admin/feedback', authRequired, adminRequired, async (req, res) => {
+  try {
+    const feedback = await Feedback.find()
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
+      .populate('user classId')
+      .lean()
+
+    res.json({
+      feedback: feedback.map(publicFeedback),
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load feedback.' })
+  }
+})
+
+app.patch('/api/admin/feedback/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const { featured, status } = req.body
+    const update = {}
+
+    if (typeof featured === 'boolean') {
+      update.featured = featured
+    }
+
+    if (status && ['new', 'reviewed'].includes(status)) {
+      update.status = status
+    }
+
+    if (!Object.keys(update).length) {
+      return res.status(400).json({ message: 'Nothing to update.' })
+    }
+
+    const feedback = await Feedback.findByIdAndUpdate(req.params.id, update, { new: true })
+
+    if (!feedback) {
+      return res.status(404).json({ message: 'Feedback not found.' })
+    }
+
+    res.json({ feedback: publicFeedback(feedback) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not update feedback.' })
+  }
+})
+
+app.delete('/api/admin/feedback/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const feedback = await Feedback.findByIdAndDelete(req.params.id)
+
+    if (!feedback) {
+      return res.status(404).json({ message: 'Feedback not found.' })
+    }
+
+    res.json({ message: 'Feedback deleted successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete feedback.' })
+  }
+})
+
+app.delete('/api/feedback/:id', authRequired, async (req, res) => {
+  try {
+    const feedback = await Feedback.findById(req.params.id)
+
+    if (!feedback) {
+      return res.status(404).json({ message: 'Feedback not found.' })
+    }
+
+    if (!req.user.isAdmin && String(feedback.user || '') !== String(req.user._id)) {
+      return res.status(403).json({ message: 'You can only delete your own feedback.' })
+    }
+
+    await Feedback.findByIdAndDelete(req.params.id)
+
+    res.json({ message: 'Feedback deleted successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete feedback.' })
   }
 })
 
@@ -3981,6 +4403,10 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
 app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
   try {
     const { classId } = req.params
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50)
+    const queryLimit = Math.min(limit + 1, 51)
+    const category = String(req.query.category || '').trim()
+    const normalizedCategory = CLASS_POST_CATEGORIES.includes(category) ? category : ''
     const classDoc = await Class.findById(classId).lean()
 
     if (!classDoc) {
@@ -3993,10 +4419,35 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
       return res.status(403).json({ message: 'You do not have access to this class.' })
     }
 
-    const posts = await ClassPost.find({ classId })
+    const postQuery = {
+      classId: classDoc._id,
+    }
+
+    if (normalizedCategory) {
+      postQuery.category = normalizedCategory
+    }
+
+    const posts = await ClassPost.find(postQuery)
       .populate('createdBy', 'name isAdmin')
       .sort({ createdAt: -1 })
-      .limit(50)
+      .limit(queryLimit)
+      .select('classId shareGroupId createdBy category message createdAt photos pdf')
+      .select('-photos.data -pdf.data')
+      .lean()
+    const visiblePosts = posts.slice(0, limit)
+    const categoryCountsRaw = await ClassPost.aggregate([
+      { $match: { classId: classDoc._id } },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+    ])
+    const categoryCounts = CLASS_POST_CATEGORIES.reduce((accumulator, item) => {
+      accumulator[item] = 0
+      return accumulator
+    }, {})
+    categoryCountsRaw.forEach((entry) => {
+      if (CLASS_POST_CATEGORIES.includes(entry._id)) {
+        categoryCounts[entry._id] = Number(entry.count || 0)
+      }
+    })
 
     res.json({
       classItem: {
@@ -4005,7 +4456,9 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
         description: classDoc.description || '',
         grade: classDoc.grade || '',
       },
-      posts: posts.map(publicClassPost),
+      posts: visiblePosts.map(publicClassPost),
+      hasMore: posts.length > limit,
+      categoryCounts,
       canPost: Boolean(req.user.isAdmin),
     })
   } catch (error) {
@@ -4192,6 +4645,7 @@ app.get('/api/classes/:classId/posts/:postId/pdf', async (req, res) => {
 
     res.setHeader('Content-Type', post.pdf.contentType || 'application/pdf')
     const isDownload = String(req.query.download || '') === '1'
+    res.setHeader('Cache-Control', 'private, max-age=3600')
     res.setHeader(
       'Content-Disposition',
       `${isDownload ? 'attachment' : 'inline'}; filename="${post.pdf.originalName || 'attachment.pdf'}"`,
@@ -4230,7 +4684,27 @@ app.get('/api/classes/:classId/posts/:postId/photos/:photoId', async (req, res) 
     }
 
     const isDownload = String(req.query.download || '') === '1'
+    const isThumb = ['1', 'true', 'yes'].includes(String(req.query.thumb || '').toLowerCase())
+
+    if (isThumb) {
+      const thumbBuffer = await sharp(photo.data)
+        .rotate()
+        .resize({ width: 420, withoutEnlargement: true })
+        .webp({ quality: 72 })
+        .toBuffer()
+
+      res.setHeader('Content-Type', 'image/webp')
+      res.setHeader('Cache-Control', 'private, max-age=3600')
+      res.setHeader(
+        'Content-Disposition',
+        `${isDownload ? 'attachment' : 'inline'}; filename="${photo.originalName || 'photo'}"`,
+      )
+      res.send(thumbBuffer)
+      return
+    }
+
     res.setHeader('Content-Type', photo.contentType || 'image/jpeg')
+    res.setHeader('Cache-Control', 'private, max-age=3600')
     res.setHeader(
       'Content-Disposition',
       `${isDownload ? 'attachment' : 'inline'}; filename="${photo.originalName || 'photo'}"`,

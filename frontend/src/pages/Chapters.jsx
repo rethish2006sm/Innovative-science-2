@@ -112,7 +112,12 @@ const Chapters = () => {
     setIsLoading(true)
     try {
       const data = await apiRequest('/api/chapters')
-      setChapters(data.chapters || [])
+      const nextChapters = Array.isArray(data.chapters) ? data.chapters : []
+      setChapters(nextChapters.map((chapter) => ({
+        ...(chapter || {}),
+        sourceName: chapter.name || '',
+        name: chapter.name || '',
+      })))
     } catch (err) {
       setError(err.message)
     } finally {

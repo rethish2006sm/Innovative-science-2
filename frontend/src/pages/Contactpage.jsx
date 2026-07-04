@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { MessageCircleMore, MapPin, PhoneCall } from 'lucide-react'
 
 const WHATSAPP_NUMBER = '917304930375'
@@ -28,6 +29,13 @@ const Contactpage = () => {
             <MessageCircleMore className="h-4 w-4" />
             Contact Sir on WhatsApp
           </a>
+
+          <Link
+            to="/feedback"
+            className="mt-3 inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-white px-5 py-3.5 text-sm font-black text-emerald-700 transition hover:bg-emerald-50"
+          >
+            Leave website feedback
+          </Link>
         </div>
 
         <div className="grid gap-4 self-start rounded-[2rem] border border-emerald-100 bg-emerald-50/80 p-6 shadow-sm sm:p-8">
