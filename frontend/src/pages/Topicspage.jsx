@@ -1,18 +1,40 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { CheckCircle2, Edit3, Plus, Star, Trash2, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 import { getFeedbackClientKey } from '../lib/feedbackClient'
+import { readJsonCache, writeJsonCache } from '../lib/cacheStorage'
 
 const emptyForm = { name: '', description: '', studyText: '' }
+const TOPIC_CACHE_PREFIX = 'innovative_science_2_topics_cache'
+
+const buildTopicCacheKey = (chapterNumber) => `${TOPIC_CACHE_PREFIX}:${String(chapterNumber || '').trim()}`
+
+const normalizeChapter = (chapter = {}) => ({
+  ...(chapter || {}),
+  sourceName: chapter.name || '',
+  name: chapter.name || '',
+})
+
+const normalizeTopic = (topic = {}) => ({
+  ...(topic || {}),
+  sourceName: topic.name || '',
+  sourceDescription: topic.description || '',
+  sourceStudyText: topic.studyText || '',
+  name: topic.name || '',
+  description: topic.description || '',
+  studyText: topic.studyText || '',
+})
 
 const Topicspage = () => {
   const { chapterNumber } = useParams()
   const navigate = useNavigate()
-  const [chapter, setChapter] = useState(null)
-  const [topics, setTopics] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
+  const topicCacheKey = useMemo(() => buildTopicCacheKey(chapterNumber), [chapterNumber])
+  const cachedTopicPage = useMemo(() => readJsonCache(topicCacheKey), [topicCacheKey])
+  const [chapter, setChapter] = useState(() => normalizeChapter(cachedTopicPage?.chapter || {}))
+  const [topics, setTopics] = useState(() => Array.isArray(cachedTopicPage?.topics) ? cachedTopicPage.topics.map(normalizeTopic) : [])
+  const [isLoading, setIsLoading] = useState(() => !cachedTopicPage || !cachedTopicPage.chapter)
   const [error, setError] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingTopic, setEditingTopic] = useState(null)
@@ -26,37 +48,54 @@ const Topicspage = () => {
   const marksWithoutOption = Number(chapter?.marksWithoutOption || 0)
   const marksWithOptionPercent = Math.min(Math.max(marksWithOption * 10, 0), 100)
   const marksWithoutOptionPercent = Math.min(Math.max(marksWithoutOption * 10, 0), 100)
+  const hasCachedTopicPage = Boolean(cachedTopicPage?.chapter)
 
-  const loadTopics = async () => {
-    setIsLoading(true)
-    setError('')
+  const loadTopics = async ({ silent = false } = {}) => {
+    if (!silent || !hasCachedTopicPage) {
+      setIsLoading(true)
+    }
+
+    if (!silent) {
+      setError('')
+    }
 
     try {
       const data = await apiRequest(`/api/chapters/${chapterNumber}/topics`)
       const nextTopics = Array.isArray(data.topics) ? data.topics : []
-      setChapter({
-        ...(data.chapter || {}),
-        sourceName: data.chapter?.name || '',
-        name: data.chapter?.name || '',
+      const nextChapter = normalizeChapter(data.chapter || {})
+      const normalizedTopics = nextTopics.map(normalizeTopic)
+
+      setChapter(nextChapter)
+      setTopics(normalizedTopics)
+      writeJsonCache(topicCacheKey, {
+        chapter: nextChapter,
+        topics: normalizedTopics,
       })
-      setTopics(nextTopics.map((topic) => ({
-        ...(topic || {}),
-        sourceName: topic.name || '',
-        sourceDescription: topic.description || '',
-        sourceStudyText: topic.studyText || '',
-        name: topic.name || '',
-        description: topic.description || '',
-        studyText: topic.studyText || '',
-      })))
     } catch (err) {
-      setError(err.message)
+      if (!hasCachedTopicPage) {
+        setError(err.message)
+      }
     } finally {
-      setIsLoading(false)
+      if (!silent || !hasCachedTopicPage) {
+        setIsLoading(false)
+      }
     }
   }
 
   useEffect(() => {
-    loadTopics()
+    const nextCachedTopicPage = readJsonCache(buildTopicCacheKey(chapterNumber))
+
+    if (nextCachedTopicPage?.chapter) {
+      setChapter(normalizeChapter(nextCachedTopicPage.chapter))
+      setTopics(Array.isArray(nextCachedTopicPage.topics) ? nextCachedTopicPage.topics.map(normalizeTopic) : [])
+      setIsLoading(false)
+    } else {
+      setChapter(null)
+      setTopics([])
+      setIsLoading(true)
+    }
+
+    loadTopics({ silent: Boolean(nextCachedTopicPage?.chapter) })
   }, [chapterNumber])
 
   useEffect(() => {

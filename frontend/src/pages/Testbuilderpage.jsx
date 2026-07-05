@@ -4,6 +4,7 @@ import { ArrowRight, BarChart3, BookOpen, CheckCircle2, ChevronLeft, ChevronRigh
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 import StarFeedbackModal from '../components/StarFeedbackModal'
+import { buildSelectionKey, readJsonCache, writeJsonCache } from '../lib/cacheStorage'
 import { hasFeedbackFlowBeenSubmitted } from '../lib/feedbackFlow'
 
 const objectiveLabels = {
@@ -66,14 +67,30 @@ const ResultCard = ({ label, value, tone }) => (
   </div>
 )
 
+const TEST_BUILDER_CACHE_KEY = 'innovative_science_2_test_builder_cache'
+
+const readBuilderCache = () => readJsonCache(TEST_BUILDER_CACHE_KEY)
+
+const writeBuilderCache = (payload) => {
+  const existing = readBuilderCache() || {}
+  writeJsonCache(TEST_BUILDER_CACHE_KEY, {
+    ...existing,
+    ...payload,
+  })
+}
+
 const Testbuilderpage = () => {
+  const cachedBuilder = useMemo(() => readBuilderCache(), [])
+  const cachedSelectionKey = buildSelectionKey(cachedBuilder?.selectedChapters || [])
   const [auth, setAuth] = useState(() => getStoredAuth())
-  const [chapters, setChapters] = useState([])
-  const [availableTypes, setAvailableTypes] = useState([])
-  const [selectedChapters, setSelectedChapters] = useState([])
-  const [selectedTypes, setSelectedTypes] = useState([])
-  const [questionCount, setQuestionCount] = useState(10)
-  const [step, setStep] = useState(1)
+  const [chapters, setChapters] = useState(() => Array.isArray(cachedBuilder?.chapters) ? cachedBuilder.chapters : [])
+  const [availableTypes, setAvailableTypes] = useState(
+    () => cachedBuilder?.availableTypesBySelection?.[cachedSelectionKey] || [],
+  )
+  const [selectedChapters, setSelectedChapters] = useState(() => cachedBuilder?.selectedChapters || [])
+  const [selectedTypes, setSelectedTypes] = useState(() => cachedBuilder?.selectedTypes || [])
+  const [questionCount, setQuestionCount] = useState(() => Number(cachedBuilder?.questionCount || 10))
+  const [step, setStep] = useState(() => Number(cachedBuilder?.step || 1))
   const [generatedTest, setGeneratedTest] = useState(null)
   const [answers, setAnswers] = useState({})
   const [revealedAnswers, setRevealedAnswers] = useState({})
@@ -81,34 +98,60 @@ const Testbuilderpage = () => {
   const [markedLater, setMarkedLater] = useState({})
   const [currentIndex, setCurrentIndex] = useState(0)
   const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDashboardOpen, setIsDashboardOpen] = useState(false)
   const [error, setError] = useState('')
   const [pendingResult, setPendingResult] = useState(null)
   const [feedbackPromptStage, setFeedbackPromptStage] = useState('')
-  
+  const [loading, setLoading] = useState(
+    () => !Array.isArray(cachedBuilder?.chapters) || !cachedBuilder.chapters.length,
+  )
   // New state for controlling the mobile popup/wizard flow
   const [mobileWizard, setMobileWizard] = useState(false)
+  const selectedQuestionCount = useMemo(() => Math.max(Number(questionCount) || 10, 1), [questionCount])
+  const plannedDistribution = useMemo(
+    () => buildBalancedPlan(selectedTypes, selectedQuestionCount),
+    [selectedTypes, selectedQuestionCount],
+  )
 
   useEffect(() => {
-    const loadChapters = async () => {
-      setLoading(true)
-      setError('')
+    const hasCachedChapters = Array.isArray(cachedBuilder?.chapters) && cachedBuilder.chapters.length > 0
+
+    const loadChapters = async ({ silent = false } = {}) => {
+      if (!silent || !hasCachedChapters) {
+        setLoading(true)
+      }
+
+      if (!silent) {
+        setError('')
+      }
 
       try {
         const data = await apiRequest('/api/chapters')
-        setChapters(data.chapters || [])
+        const nextChapters = Array.isArray(data.chapters) ? data.chapters : []
+        setChapters(nextChapters)
+        writeBuilderCache({
+          chapters: nextChapters,
+        })
       } catch (err) {
-        setError(err.message)
+        if (!hasCachedChapters) {
+          setError(err.message)
+        }
       } finally {
-        setLoading(false)
+        if (!silent || !hasCachedChapters) {
+          setLoading(false)
+        }
       }
     }
 
-    loadChapters()
-  }, [])
+    if (hasCachedChapters) {
+      setChapters(cachedBuilder.chapters)
+      setLoading(false)
+    }
+
+    loadChapters({ silent: hasCachedChapters })
+  }, [cachedBuilder?.chapters])
 
   useEffect(() => {
     setAuth(getStoredAuth())
@@ -119,7 +162,23 @@ const Testbuilderpage = () => {
       if (!selectedChapters.length) {
         setAvailableTypes([])
         setSelectedTypes([])
+        writeBuilderCache({
+          selectedChapters: [],
+          selectedTypes: [],
+          availableTypesBySelection: {
+            ...(readBuilderCache()?.availableTypesBySelection || {}),
+          },
+        })
         return
+      }
+
+      const selectionKey = buildSelectionKey(selectedChapters)
+      const cachedState = readBuilderCache() || {}
+      const cachedTypes = cachedState.availableTypesBySelection?.[selectionKey]
+
+      if (Array.isArray(cachedTypes) && cachedTypes.length) {
+        setAvailableTypes(cachedTypes)
+        setSelectedTypes((current) => current.filter((type) => cachedTypes.some((item) => item.type === type)))
       }
 
       try {
@@ -127,19 +186,38 @@ const Testbuilderpage = () => {
         const nextTypes = data.objectiveTypes || []
         setAvailableTypes(nextTypes)
         setSelectedTypes((current) => current.filter((type) => nextTypes.some((item) => item.type === type)))
+        writeBuilderCache({
+          availableTypesBySelection: {
+            ...(cachedState.availableTypesBySelection || {}),
+            [selectionKey]: nextTypes,
+          },
+        })
       } catch (err) {
-        setError(err.message)
+        if (!Array.isArray(cachedTypes) || !cachedTypes.length) {
+          setError(err.message)
+        }
       }
     }
 
     loadTypes()
   }, [selectedChapters])
 
-  const selectedQuestionCount = useMemo(() => Math.max(Number(questionCount) || 10, 1), [questionCount])
-  const plannedDistribution = useMemo(
-    () => buildBalancedPlan(selectedTypes, selectedQuestionCount),
-    [selectedTypes, selectedQuestionCount],
-  )
+  useEffect(() => {
+    const selectionKey = buildSelectionKey(selectedChapters)
+    const cachedState = readBuilderCache() || {}
+
+    writeBuilderCache({
+      chapters,
+      selectedChapters,
+      selectedTypes,
+      questionCount: selectedQuestionCount,
+      step,
+      availableTypesBySelection: {
+        ...(cachedState.availableTypesBySelection || {}),
+        [selectionKey]: availableTypes,
+      },
+    })
+  }, [chapters, selectedChapters, selectedTypes, questionCount, selectedQuestionCount, step, availableTypes])
   const currentQuestion = generatedTest?.questions?.[currentIndex]
   const answeredCount = generatedTest?.questions?.filter((question) => {
     if (question.objectiveType === 'match-the-following') {

@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { Edit3, Plus, Search, Trash2, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
+import { readJsonCache, writeJsonCache } from '../lib/cacheStorage'
 
 const emptyForm = { number: '', name: '', marks: '', marksWithoutOption: '' }
+const CHAPTERS_CACHE_KEY = 'innovative_science_2_chapters_cache'
 
 const ChapterCard = ({ chapter, index, isAdmin, onEdit, onDelete }) => {
   const navigate = useNavigate()
@@ -96,38 +98,58 @@ const ChapterCard = ({ chapter, index, isAdmin, onEdit, onDelete }) => {
 }
 
 const Chapters = () => {
-  const [chapters, setChapters] = useState([])
+  const cachedChapters = useMemo(() => readJsonCache(CHAPTERS_CACHE_KEY), [])
+  const [chapters, setChapters] = useState(() => Array.isArray(cachedChapters?.chapters) ? cachedChapters.chapters : [])
   const [searchTerm, setSearchTerm] = useState('')
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingChapter, setEditingChapter] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [error, setError] = useState('')
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(
+    () => !Array.isArray(cachedChapters?.chapters) || !cachedChapters.chapters.length,
+  )
   const [isSaving, setIsSaving] = useState(false)
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
+  const hasCachedChapters = Array.isArray(cachedChapters?.chapters) && cachedChapters.chapters.length > 0
 
-  const loadChapters = async () => {
-    setIsLoading(true)
+  const loadChapters = async ({ silent = false } = {}) => {
+    if (!silent || !hasCachedChapters) {
+      setIsLoading(true)
+    }
+
+    if (!silent) {
+      setError('')
+    }
+
     try {
       const data = await apiRequest('/api/chapters')
       const nextChapters = Array.isArray(data.chapters) ? data.chapters : []
-      setChapters(nextChapters.map((chapter) => ({
+      const normalizedChapters = nextChapters.map((chapter) => ({
         ...(chapter || {}),
         sourceName: chapter.name || '',
         name: chapter.name || '',
-      })))
+      }))
+
+      setChapters(normalizedChapters)
+      writeJsonCache(CHAPTERS_CACHE_KEY, {
+        chapters: normalizedChapters,
+      })
     } catch (err) {
-      setError(err.message)
+      if (!hasCachedChapters) {
+        setError(err.message)
+      }
     } finally {
-      setIsLoading(false)
+      if (!silent || !hasCachedChapters) {
+        setIsLoading(false)
+      }
     }
   }
 
   useEffect(() => {
-    loadChapters()
-  }, [])
+    loadChapters({ silent: hasCachedChapters })
+  }, [hasCachedChapters])
 
   const filteredChapters = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()

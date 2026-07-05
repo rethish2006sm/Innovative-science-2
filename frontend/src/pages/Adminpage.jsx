@@ -25,7 +25,55 @@ import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 
 const emptyClassForm = { name: '', description: '', grade: '' }
-const emptyClassShareForm = { message: '', category: 'assignment' }
+const emptyClassShareForm = { message: '', category: 'assignment', documentLink: '' }
+const ADMIN_CACHE_KEY = 'innovative_science_2_admin_cache'
+const CLASS_FEED_CACHE_PREFIX = 'innovative_science_2_class_feed'
+
+const getClassFeedCacheKey = (classId) => `${CLASS_FEED_CACHE_PREFIX}:${String(classId || 'unknown')}`
+
+const readAdminCache = () => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(ADMIN_CACHE_KEY) || 'null')
+
+    if (!cached || typeof cached !== 'object') {
+      return null
+    }
+
+    return cached
+  } catch (error) {
+    localStorage.removeItem(ADMIN_CACHE_KEY)
+    return null
+  }
+}
+
+const writeAdminCache = (payload) => {
+  try {
+    localStorage.setItem(
+      ADMIN_CACHE_KEY,
+      JSON.stringify({
+        ...payload,
+        cachedAt: Date.now(),
+      }),
+    )
+  } catch (error) {
+    // Ignore storage limits and keep the live UI working.
+  }
+}
+
+const readClassFeedCache = (classId) => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(getClassFeedCacheKey(classId)) || 'null')
+
+    if (!cached || typeof cached !== 'object') {
+      return null
+    }
+
+    return cached
+  } catch (error) {
+    localStorage.removeItem(getClassFeedCacheKey(classId))
+    return null
+  }
+}
 
 const CLASS_POST_CATEGORIES = [
   { value: 'assignment', label: 'Assignment' },
@@ -60,16 +108,17 @@ const syncClassShareTargets = (classItems = [], currentTargets = []) => {
 const Adminpage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
+  const adminCache = useMemo(() => readAdminCache(), [])
   const [activeTab, setActiveTab] = useState('students')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [studentClassFilter, setStudentClassFilter] = useState('')
-  const [students, setStudents] = useState([])
-  const [classes, setClasses] = useState([])
-  const [reports, setReports] = useState([])
-  const [contacts, setContacts] = useState([])
-  const [feedbacks, setFeedbacks] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [students, setStudents] = useState(() => adminCache?.students || [])
+  const [classes, setClasses] = useState(() => adminCache?.classes || [])
+  const [reports, setReports] = useState(() => adminCache?.reports || [])
+  const [contacts, setContacts] = useState(() => adminCache?.contacts || [])
+  const [feedbacks, setFeedbacks] = useState(() => adminCache?.feedbacks || [])
+  const [loading, setLoading] = useState(() => !(adminCache?.students?.length || adminCache?.classes?.length))
   const [error, setError] = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [studentDetail, setStudentDetail] = useState(null)
@@ -89,25 +138,29 @@ const Adminpage = () => {
   const [selectedPhoto, setSelectedPhoto] = useState(null)
   const [selectedPdf, setSelectedPdf] = useState(null)
   const [editingClassPostId, setEditingClassPostId] = useState('')
+  const [reportsLoading, setReportsLoading] = useState(false)
+  const [contactsLoading, setContactsLoading] = useState(false)
+  const [feedbackLoading, setFeedbackLoading] = useState(false)
 
   const loadData = async (searchTerm = debouncedSearch) => {
-    setLoading(true)
     setError('')
 
     try {
-      const [studentsData, classesData, reportsData, contactsData, feedbackData] = await Promise.all([
+      const [studentsData, classesData] = await Promise.all([
         apiRequest(`/api/admin/students?search=${encodeURIComponent(searchTerm)}`),
         apiRequest('/api/admin/classes'),
-        apiRequest('/api/admin/reports?limit=50'),
-        apiRequest('/api/admin/contacts?limit=50'),
-        apiRequest('/api/admin/feedback?limit=50'),
       ])
 
       setStudents(studentsData.students || [])
       setClasses(classesData.classes || [])
-      setReports(reportsData.reports || [])
-      setContacts(contactsData.contacts || [])
-      setFeedbacks(feedbackData.feedback || [])
+      writeAdminCache({
+        searchTerm,
+        students: studentsData.students || [],
+        classes: classesData.classes || [],
+        reports,
+        contacts,
+        feedbacks,
+      })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -121,12 +174,33 @@ const Adminpage = () => {
       return
     }
 
-    setClassFeedLoading(true)
+    const cachedFeed = readClassFeedCache(classId)
+    if (cachedFeed?.posts?.length) {
+      setClassPosts(cachedFeed.posts || [])
+      setClassFeedLoading(false)
+    } else {
+      setClassFeedLoading(true)
+    }
     setClassFeedError('')
 
     try {
       const data = await apiRequest(`/api/classes/${classId}/feed`)
-      setClassPosts(data.posts || [])
+      const nextPosts = data.posts || []
+      setClassPosts(nextPosts)
+      try {
+        localStorage.setItem(
+          getClassFeedCacheKey(classId),
+          JSON.stringify({
+            posts: nextPosts,
+            activeCategory: 'all',
+            categoryCounts: data?.categoryCounts || {},
+            classItem: data?.classItem || null,
+            cachedAt: Date.now(),
+          }),
+        )
+      } catch (error) {
+        // Ignore cache write issues.
+      }
     } catch (err) {
       setClassFeedError(err.message)
       setClassPosts([])
@@ -135,9 +209,79 @@ const Adminpage = () => {
     }
   }
 
+  const updateAdminCache = (patch) => {
+    writeAdminCache({
+      ...(readAdminCache() || {}),
+      searchTerm: debouncedSearch,
+      students,
+      classes,
+      reports,
+      contacts,
+      feedbacks,
+      ...patch,
+    })
+  }
+
+  const loadReports = async () => {
+    if (reportsLoading || reports.length) {
+      return
+    }
+
+    setReportsLoading(true)
+
+    try {
+      const data = await apiRequest('/api/admin/reports?limit=50')
+      const nextReports = data.reports || []
+      setReports(nextReports)
+      updateAdminCache({ reports: nextReports })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setReportsLoading(false)
+    }
+  }
+
+  const loadContacts = async () => {
+    if (contactsLoading || contacts.length) {
+      return
+    }
+
+    setContactsLoading(true)
+
+    try {
+      const data = await apiRequest('/api/admin/contacts?limit=50')
+      const nextContacts = data.contacts || []
+      setContacts(nextContacts)
+      updateAdminCache({ contacts: nextContacts })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setContactsLoading(false)
+    }
+  }
+
+  const loadFeedback = async () => {
+    if (feedbackLoading || feedbacks.length) {
+      return
+    }
+
+    setFeedbackLoading(true)
+
+    try {
+      const data = await apiRequest('/api/admin/feedback?limit=50')
+      const nextFeedback = data.feedback || []
+      setFeedbacks(nextFeedback)
+      updateAdminCache({ feedbacks: nextFeedback })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setFeedbackLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (isAdmin) {
-      loadData()
+      loadData(debouncedSearch)
     }
   }, [isAdmin, debouncedSearch])
 
@@ -173,6 +317,66 @@ const Adminpage = () => {
       loadClassFeed(selectedClassFeedId)
     }
   }, [activeTab, selectedClassFeedId])
+
+  useEffect(() => {
+    if (!selectedClassFeedId || activeTab === 'class-board') {
+      return
+    }
+
+    const cachedFeed = readClassFeedCache(selectedClassFeedId)
+    if (cachedFeed?.posts?.length) {
+      return
+    }
+
+    let cancelled = false
+
+    const prefetch = async () => {
+      try {
+        const data = await apiRequest(`/api/classes/${selectedClassFeedId}/feed`)
+        if (cancelled) {
+          return
+        }
+
+        const nextPosts = data.posts || []
+        try {
+          localStorage.setItem(
+            getClassFeedCacheKey(selectedClassFeedId),
+            JSON.stringify({
+              posts: nextPosts,
+              activeCategory: 'all',
+              categoryCounts: data?.categoryCounts || {},
+              classItem: data?.classItem || null,
+              cachedAt: Date.now(),
+            }),
+          )
+        } catch (error) {
+          // Ignore cache write issues.
+        }
+      } catch (error) {
+        // Background warm-up only.
+      }
+    }
+
+    prefetch()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, selectedClassFeedId])
+
+  useEffect(() => {
+    if (activeTab === 'reports') {
+      loadReports()
+    }
+
+    if (activeTab === 'contacts') {
+      loadContacts()
+    }
+
+    if (activeTab === 'feedback') {
+      loadFeedback()
+    }
+  }, [activeTab])
 
   const openStudentDetail = async (student) => {
     setSelectedStudent(student)
@@ -395,10 +599,11 @@ const Adminpage = () => {
 
     const hasAnyMessage =
       classShareForm.message.trim() ||
+      classShareForm.documentLink.trim() ||
       selectedTargets.some((target) => target.message.trim())
 
     if (!hasAnyMessage && !classSharePhotos.length && !classSharePdf) {
-      setClassFeedError('Add a message, photo, or PDF before sharing.')
+      setClassFeedError('Add a message, photo, PDF, or link before sharing.')
       return
     }
 
@@ -409,6 +614,7 @@ const Adminpage = () => {
       const formData = new FormData()
       formData.append('message', classShareForm.message)
       formData.append('category', classShareForm.category || 'assignment')
+      formData.append('documentLink', classShareForm.documentLink.trim())
 
       classSharePhotos.forEach((file) => {
         formData.append('photos', file)
@@ -523,6 +729,27 @@ const Adminpage = () => {
     })
   }
 
+  const openClassDocument = (post) => {
+    if (post?.documentLink) {
+      const anchor = document.createElement('a')
+      anchor.href = post.documentLink
+      anchor.target = '_blank'
+      anchor.rel = 'noopener noreferrer'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+
+      return
+    }
+
+    if (post?.pdf?.pdfUrl) {
+      openClassPdf(post.pdf.pdfUrl)
+      return
+    }
+
+    setClassFeedError('Could not open this document.')
+  }
+
   const openClassPhoto = (photo) => {
     const previewUrl = buildProtectedPhotoUrl(photo.photoUrl)
 
@@ -545,6 +772,7 @@ const Adminpage = () => {
     setClassShareForm({
       message: post.message || '',
       category: post.category || 'assignment',
+      documentLink: post.documentLink || '',
     })
     const postClassId = String(post.classId || selectedClassFeedId || '')
     setClassShareTargets((current) => {
@@ -926,6 +1154,20 @@ const Adminpage = () => {
                         />
                       </label>
 
+                      <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
+                        Document link
+                        <input
+                          type="url"
+                          value={classShareForm.documentLink}
+                          onChange={(event) => setClassShareForm({ ...classShareForm, documentLink: event.target.value })}
+                          placeholder="https://drive.google.com/... or any PDF link"
+                          className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-emerald-400"
+                        />
+                        <p className="text-xs font-medium text-slate-400">
+                          Students will only see a review button, not the raw link.
+                        </p>
+                      </label>
+
                       <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-4">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div>
@@ -1192,14 +1434,14 @@ const Adminpage = () => {
                                         </div>
                                       )}
 
-                                      {post.pdf?.pdfUrl && (
+                                      {(post.documentLink || post.pdf?.pdfUrl) && (
                                         <button
                                           type="button"
-                                          onClick={() => openClassPdf(post.pdf.pdfUrl)}
+                                          onClick={() => openClassDocument(post)}
                                           className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100"
                                         >
                                           <FileText className="h-4 w-4 text-emerald-600" />
-                                          View PDF
+                                          Review Document
                                         </button>
                                       )}
                                     </article>
@@ -1229,7 +1471,12 @@ const Adminpage = () => {
                     </p>
 
                     <div className="mt-5 grid gap-3">
-                      {reports.map((report) => (
+                      {reportsLoading || (activeTab === 'reports' && !reports.length) ? (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          Loading reports...
+                        </div>
+                      ) : reports.length ? (
+                        reports.map((report) => (
                         <article key={report._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                           <div className="flex items-start justify-between gap-4">
                             <div>
@@ -1278,7 +1525,12 @@ const Adminpage = () => {
                             </span>
                           </div>
                         </article>
-                      ))}
+                        ))
+                      ) : (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          No reports available.
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1291,7 +1543,12 @@ const Adminpage = () => {
                     </div>
 
                     <div className="mt-5 grid gap-3">
-                      {contacts.map((contact) => (
+                      {contactsLoading || (activeTab === 'contacts' && !contacts.length) ? (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          Loading contacts...
+                        </div>
+                      ) : contacts.length ? (
+                        contacts.map((contact) => (
                         <article key={contact._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                           <div className="flex items-start justify-between gap-4">
                             <div>
@@ -1310,7 +1567,12 @@ const Adminpage = () => {
                             </span>
                           </div>
                         </article>
-                      ))}
+                        ))
+                      ) : (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          No contact messages available.
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1326,7 +1588,11 @@ const Adminpage = () => {
                     </p>
 
                     <div className="mt-5 grid gap-3">
-                      {feedbacks.length ? feedbacks.map((feedbackItem) => (
+                      {feedbackLoading || (activeTab === 'feedback' && !feedbacks.length) ? (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          Loading feedback...
+                        </div>
+                      ) : feedbacks.length ? feedbacks.map((feedbackItem) => (
                         <article key={feedbackItem.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0">

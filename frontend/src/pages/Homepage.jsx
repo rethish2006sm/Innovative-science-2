@@ -7,6 +7,7 @@ import { getStoredAuth } from '../authStorage'
 import ChapterWeightageGraph from '../components/ChapterWeightageGraph'
 
 const HOMEPAGE_CACHE_KEY = 'innovative_science_2_homepage_cache'
+const LEADERBOARD_CACHE_KEY = 'innovative_science_2_leaderboard_cache'
 
 const readHomepageCache = () => {
   try {
@@ -37,9 +38,40 @@ const writeHomepageCache = (payload) => {
   }
 }
 
+const readLeaderboardCache = () => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(LEADERBOARD_CACHE_KEY) || 'null')
+
+    if (!cached || typeof cached !== 'object') {
+      return null
+    }
+
+    return cached
+  } catch (error) {
+    localStorage.removeItem(LEADERBOARD_CACHE_KEY)
+    return null
+  }
+}
+
+const writeLeaderboardCache = (payload) => {
+  try {
+    localStorage.setItem(
+      LEADERBOARD_CACHE_KEY,
+      JSON.stringify({
+        ...payload,
+        cachedAt: Date.now(),
+      }),
+    )
+  } catch (error) {
+    // Ignore storage quota issues and keep the live UI working.
+  }
+}
+
 const clearHomepageCache = () => {
   localStorage.removeItem(HOMEPAGE_CACHE_KEY)
 }
+
+const normalizeTopFiveRows = (rows = []) => (Array.isArray(rows) ? rows.slice(0, 5) : [])
 
 // --- Animation Variants ---
 const fadeUp = {
@@ -57,14 +89,36 @@ const staggerContainer = {
 
 const Homepage = () => {
   const navigate = useNavigate()
-  const [leaderboard, setLeaderboard] = useState(() => readHomepageCache()?.leaderboard || [])
-  const [classOptions, setClassOptions] = useState(() => readHomepageCache()?.classOptions || [])
-  const [leaderboardScope, setLeaderboardScope] = useState(() => readHomepageCache()?.leaderboardScope || 'all')
-  const [selectedClassId, setSelectedClassId] = useState(() => readHomepageCache()?.selectedClassId || getStoredAuth()?.user?.classId || '')
-  const [chapters, setChapters] = useState(() => readHomepageCache()?.chapters || [])
-  const [progress, setProgress] = useState(() => readHomepageCache()?.progress || null)
-  const [featuredFeedback, setFeaturedFeedback] = useState(() => readHomepageCache()?.featuredFeedback || [])
-  const [loading, setLoading] = useState(() => !readHomepageCache())
+  const homepageCache = useMemo(() => readHomepageCache(), [])
+  const leaderboardCache = useMemo(() => readLeaderboardCache(), [])
+  const initialLeaderboardCache = useMemo(() => {
+    const homepageHasLeaderboard = Array.isArray(homepageCache?.leaderboard) && homepageCache.leaderboard.length > 0
+    const leaderboardHasLeaderboard = Array.isArray(leaderboardCache?.leaderboard) && leaderboardCache.leaderboard.length > 0
+
+    if (!homepageHasLeaderboard && !leaderboardHasLeaderboard) {
+      return null
+    }
+
+    if (homepageHasLeaderboard && leaderboardHasLeaderboard) {
+      return Number(leaderboardCache?.cachedAt || 0) >= Number(homepageCache?.cachedAt || 0)
+        ? leaderboardCache
+        : homepageCache
+    }
+
+    return leaderboardHasLeaderboard ? leaderboardCache : homepageCache
+  }, [homepageCache, leaderboardCache])
+  const hasCachedLeaderboard = Array.isArray(initialLeaderboardCache?.leaderboard) && initialLeaderboardCache.leaderboard.length > 0
+  const hasCachedChapters = Array.isArray(homepageCache?.chapters) && homepageCache.chapters.length > 0
+  const [leaderboard, setLeaderboard] = useState(() => normalizeTopFiveRows(initialLeaderboardCache?.leaderboard))
+  const [classOptions, setClassOptions] = useState(() => homepageCache?.classOptions || leaderboardCache?.classOptions || [])
+  const [leaderboardScope, setLeaderboardScope] = useState(() => initialLeaderboardCache?.leaderboardScope || initialLeaderboardCache?.scope || homepageCache?.leaderboardScope || leaderboardCache?.scope || 'all')
+  const [selectedClassId, setSelectedClassId] = useState(() => initialLeaderboardCache?.selectedClassId || homepageCache?.selectedClassId || leaderboardCache?.selectedClassId || getStoredAuth()?.user?.classId || '')
+  const [chapters, setChapters] = useState(() => homepageCache?.chapters || [])
+  const [progress, setProgress] = useState(() => homepageCache?.progress || null)
+  const [featuredFeedback, setFeaturedFeedback] = useState(() => homepageCache?.featuredFeedback || [])
+  const [leaderboardLoading, setLeaderboardLoading] = useState(() => !hasCachedLeaderboard)
+  const [chaptersLoading, setChaptersLoading] = useState(() => !hasCachedChapters)
+  const [leaderboardRefreshTick, setLeaderboardRefreshTick] = useState(0)
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [isAiTeacherOpen, setIsAiTeacherOpen] = useState(false)
   const [aiTeacherInput, setAiTeacherInput] = useState('')
@@ -77,78 +131,141 @@ const Homepage = () => {
   const [isAiTeacherSending, setIsAiTeacherSending] = useState(false)
   const canViewClassLeaderboard = Boolean(auth?.user?.classId)
 
-  // Data fetching logic remains exactly the same
   useEffect(() => {
-    const cached = readHomepageCache()
     let cancelled = false
 
-    const load = async () => {
-      if (!cached) {
-        setLoading(true)
+    const loadLeaderboard = async () => {
+      if (leaderboardScope === 'class' && !selectedClassId && classOptions.length) {
+        setSelectedClassId(classOptions[0]._id)
+        return
       }
 
       try {
-        const [leaderboardData, chaptersData, classesData] = await Promise.all([
-          apiRequest('/api/leaderboard?scope=all&limit=5'),
-          apiRequest('/api/chapters'),
-          apiRequest('/api/classes'),
-        ])
-        const feedbackData = await apiRequest('/api/feedback/featured?limit=3').catch(() => ({ feedback: [] }))
+        const classQuery = leaderboardScope === 'class' && selectedClassId ? `&classId=${selectedClassId}` : ''
+        const data = await apiRequest(`/api/leaderboard?scope=${leaderboardScope}${classQuery}&limit=5`)
         if (cancelled) return
 
-        const nextLeaderboard = leaderboardData.leaderboard || []
-        const nextChapters = chaptersData.chapters || []
-        const nextClassOptions = classesData.classes || []
-        const nextFeaturedFeedback = feedbackData.feedback || []
-
+        const nextLeaderboard = normalizeTopFiveRows(data.leaderboard)
         setLeaderboard(nextLeaderboard)
-        setChapters(nextChapters)
-        setClassOptions(nextClassOptions)
-        setFeaturedFeedback(nextFeaturedFeedback)
-        if (auth?.token) {
-          const progressData = await apiRequest('/api/progress/me')
-          if (cancelled) return
-          const nextProgress = progressData.progress || null
-          setProgress(nextProgress)
-          writeHomepageCache({
-            leaderboard: nextLeaderboard,
-            chapters: nextChapters,
-            classOptions: nextClassOptions,
-            featuredFeedback: nextFeaturedFeedback,
-            leaderboardScope: 'all',
-            selectedClassId: auth?.user?.classId || '',
-            progress: nextProgress,
-            profile: auth?.user || null,
-          })
-        } else {
-          setProgress(null)
-          writeHomepageCache({
-            leaderboard: nextLeaderboard,
-            chapters: nextChapters,
-            classOptions: nextClassOptions,
-            featuredFeedback: nextFeaturedFeedback,
-            leaderboardScope: 'all',
-            selectedClassId: auth?.user?.classId || '',
-            progress: null,
-            profile: auth?.user || null,
-          })
+        writeLeaderboardCache({
+          scope: leaderboardScope,
+          selectedClassId,
+          leaderboard: nextLeaderboard,
+          classOptions,
+        })
+      } catch (error) {
+        if (!cancelled && leaderboard.length === 0) {
+          setLeaderboard([])
         }
       } finally {
         if (!cancelled) {
-          setLoading(false)
+          setLeaderboardLoading(false)
         }
       }
     }
-    load().catch(() => {
-      if (!cached) {
-        setLoading(false)
+    loadLeaderboard().catch(() => {
+      if (!cancelled && leaderboard.length === 0) {
+        setLeaderboard([])
+        setLeaderboardLoading(false)
       }
     })
 
     return () => {
       cancelled = true
     }
-  }, [auth?.token, auth?.user?.classId])
+  }, [leaderboardScope, selectedClassId, classOptions.length, leaderboardRefreshTick])
+
+  useEffect(() => {
+    const syncLeaderboardFromCache = () => {
+      const cached = readLeaderboardCache()
+      if (!cached) {
+        setLeaderboardRefreshTick((current) => current + 1)
+        return
+      }
+
+      const sameScope = String(cached.scope || 'all') === String(leaderboardScope || 'all')
+      const sameClass = String(cached.selectedClassId || '') === String(selectedClassId || '')
+
+      if (sameScope && sameClass) {
+        setLeaderboard(normalizeTopFiveRows(cached.leaderboard))
+        setLeaderboardLoading(false)
+      }
+
+      setLeaderboardRefreshTick((current) => current + 1)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncLeaderboardFromCache()
+      }
+    }
+
+    window.addEventListener('innovative-science-leaderboard-updated', syncLeaderboardFromCache)
+    window.addEventListener('storage', syncLeaderboardFromCache)
+    window.addEventListener('focus', syncLeaderboardFromCache)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('innovative-science-progress-updated', syncLeaderboardFromCache)
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        syncLeaderboardFromCache()
+      }
+    }, 5000)
+
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener('innovative-science-leaderboard-updated', syncLeaderboardFromCache)
+      window.removeEventListener('storage', syncLeaderboardFromCache)
+      window.removeEventListener('focus', syncLeaderboardFromCache)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('innovative-science-progress-updated', syncLeaderboardFromCache)
+    }
+  }, [leaderboardScope, selectedClassId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadStaticContent = async () => {
+      if (!homepageCache?.chapters) {
+        setChaptersLoading(true)
+      }
+
+      try {
+        const [chaptersData, classesData, feedbackData, progressData] = await Promise.all([
+          apiRequest('/api/chapters').catch(() => null),
+          apiRequest('/api/classes').catch(() => null),
+          apiRequest('/api/feedback/featured?limit=3').catch(() => ({ feedback: [] })),
+          auth?.token ? apiRequest('/api/progress/me').catch(() => null) : Promise.resolve(null),
+        ])
+
+        if (cancelled) return
+
+        if (chaptersData) {
+          setChapters(chaptersData.chapters || [])
+        }
+
+        if (classesData) {
+          setClassOptions(classesData.classes || [])
+        }
+
+        setFeaturedFeedback(feedbackData.feedback || [])
+        setProgress(progressData?.progress || null)
+      } finally {
+        if (!cancelled) {
+          setChaptersLoading(false)
+        }
+      }
+    }
+
+    loadStaticContent().catch(() => {
+      if (!cancelled) {
+        setChaptersLoading(false)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [auth?.token, homepageCache?.chapters])
 
   useEffect(() => {
     if (!selectedClassId && auth?.user?.classId) {
@@ -177,13 +294,9 @@ const Homepage = () => {
   }, [])
 
   useEffect(() => {
-    if (loading) {
-      return
-    }
-
     writeHomepageCache({
       chapters,
-      leaderboard,
+      leaderboard: normalizeTopFiveRows(leaderboard),
       classOptions,
       featuredFeedback,
       leaderboardScope,
@@ -191,37 +304,7 @@ const Homepage = () => {
       progress,
       profile: auth?.user || null,
     })
-  }, [loading, chapters, leaderboard, classOptions, featuredFeedback, leaderboardScope, selectedClassId, progress, auth?.user])
-
-  useEffect(() => {
-    const loadLeaderboard = async () => {
-      if (leaderboardScope === 'class' && !selectedClassId) {
-        if (classOptions.length) {
-          setSelectedClassId(classOptions[0]._id)
-        }
-        return
-      }
-      try {
-        const classQuery = leaderboardScope === 'class' && selectedClassId ? `&classId=${selectedClassId}` : ''
-        const data = await apiRequest(`/api/leaderboard?scope=${leaderboardScope}${classQuery}&limit=5`)
-        const nextLeaderboard = data.leaderboard || []
-        setLeaderboard(nextLeaderboard)
-        writeHomepageCache({
-          ...readHomepageCache(),
-          leaderboard: nextLeaderboard,
-          leaderboardScope,
-          selectedClassId,
-          chapters,
-          classOptions,
-          progress,
-          profile: auth?.user || null,
-        })
-      } catch {
-        setLeaderboard([])
-      }
-    }
-    loadLeaderboard()
-  }, [leaderboardScope, selectedClassId, classOptions.length, chapters, classOptions, progress, auth?.user])
+  }, [chapters, leaderboard, classOptions, featuredFeedback, leaderboardScope, selectedClassId, progress, auth?.user])
 
   const stats = useMemo(() => [
     { label: 'Chapters', value: chapters.length || 0, icon: BookOpen },
@@ -315,7 +398,7 @@ const Homepage = () => {
   return (
     <section className="relative min-h-screen w-full overflow-hidden bg-slate-50 px-0 py-0 sm:px-0 sm:py-0">
       {/* Animated Background Effects */}
-      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+      <div className="absolute inset-0 z-0 hidden overflow-hidden pointer-events-none sm:block">
         <motion.div 
           animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.4, 0.3] }}
           transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
@@ -336,7 +419,7 @@ const Homepage = () => {
             initial="hidden"
             animate="visible"
             variants={staggerContainer}
-            className="flex flex-col rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-2xl sm:rounded-[2.5rem] sm:p-10"
+            className="flex flex-col rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-lg sm:rounded-[2.5rem] sm:backdrop-blur-2xl sm:p-10"
           >
             <motion.div variants={fadeUp} className="inline-flex self-start items-center gap-2 rounded-full border border-cyan-200 bg-cyan-100/50 px-4 py-1.5 text-xs font-black uppercase tracking-widest text-cyan-800 backdrop-blur-md">
               <Sparkles className="h-4 w-4" />
@@ -400,13 +483,8 @@ const Homepage = () => {
           </motion.div>
 
           {/* Right Column / Leaderboard */}
-          <motion.div 
-            initial={{ opacity: 0, x: 30 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="flex flex-col gap-4 lg:gap-6"
-          >
-            <div className="rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-xl sm:rounded-[2.5rem] sm:p-8">
+          <div className="flex flex-col gap-4 lg:gap-6">
+            <div className="rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 sm:text-xs">Top 5 students</p>
@@ -465,20 +543,38 @@ const Homepage = () => {
               </AnimatePresence>
 
               <div className="mt-5 min-h-[260px] sm:mt-6 sm:min-h-[300px]">
-                {loading ? (
-                  <div className="flex h-full items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 py-12 text-sm font-medium text-slate-500">
-                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}>
-                      <Brain className="h-6 w-6 opacity-50" />
-                    </motion.div>
-                    <span className="ml-3">Syncing leaderboard...</span>
+                {leaderboardLoading ? (
+                  <div className="flex h-full flex-col justify-center rounded-3xl border-2 border-dashed border-slate-200 px-4 py-10 text-sm font-medium text-slate-500">
+                    <div className="flex items-center gap-2">
+                      <Brain className="h-5 w-5 opacity-50" />
+                      <span>Loading top 5 students...</span>
+                    </div>
+                    <div className="mt-5 grid gap-3">
+                      {Array.from({ length: 5 }).map((_, index) => (
+                        <div
+                          key={`leaderboard-placeholder-${index}`}
+                          className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white/70 p-3"
+                        >
+                          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-xs font-black text-slate-400">
+                            {index + 1}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="h-3.5 w-2/3 rounded-full bg-slate-200" />
+                            <div className="mt-2 h-3 w-1/3 rounded-full bg-slate-100" />
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="h-3 w-10 rounded-full bg-slate-100" />
+                            <div className="mt-2 h-5 w-14 rounded-full bg-slate-200" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                ) : (
-                  <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="grid gap-3">
+                ) : leaderboard.length ? (
+                  <div className="grid gap-3">
                     {leaderboard.map((student, index) => (
-                      <motion.article 
+                      <article 
                         key={student.id} 
-                        variants={fadeUp}
-                        whileHover={{ x: 4, scale: 1.01 }}
                         className="group flex items-center gap-3 rounded-2xl border border-white/50 bg-white/40 p-3 shadow-sm transition-all hover:bg-white/80 hover:shadow-md sm:gap-4 sm:p-3"
                       >
                         <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white text-sm font-black shadow-inner sm:h-12 sm:w-12 sm:text-base ${index === 0 ? 'bg-amber-400' : index === 1 ? 'bg-slate-400' : index === 2 ? 'bg-amber-700' : 'bg-slate-900'}`}>
@@ -492,14 +588,18 @@ const Homepage = () => {
                           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Cells</p>
                           <p className="font-mono text-lg font-black text-slate-900 sm:text-xl">{student.totalBrainCells}</p>
                         </div>
-                      </motion.article>
+                      </article>
                     ))}
-                  </motion.div>
+                  </div>
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white/50 px-4 py-12 text-center text-sm text-slate-500">
+                    No leaderboard entries yet.
+                  </div>
                 )}
               </div>
             </div>
 
-          </motion.div>
+          </div>
         </div>
 
         <motion.div
@@ -507,7 +607,7 @@ const Homepage = () => {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-80px' }}
           transition={{ duration: 0.5, delay: 0.15 }}
-          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-xl sm:mt-6 sm:rounded-[2.5rem] sm:p-8"
+          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:mt-6 sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8"
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -524,7 +624,22 @@ const Homepage = () => {
           </div>
 
           <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-slate-50 p-3 sm:mt-6 sm:rounded-[2rem] sm:p-5">
-            <ChapterWeightageGraph chapters={chapters} />
+            {chaptersLoading ? (
+              <div className="grid gap-3 rounded-[1.25rem] border border-dashed border-slate-200 bg-white/80 p-5 sm:grid-cols-[auto_1fr] sm:items-center sm:p-6">
+                <div className="mx-auto h-24 w-24 animate-pulse rounded-full bg-slate-200/80 sm:h-32 sm:w-32" />
+                <div className="grid gap-2">
+                  <div className="h-4 w-40 rounded-full bg-slate-200/80" />
+                  <div className="h-3 w-56 rounded-full bg-slate-200/80" />
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="h-16 rounded-2xl bg-slate-100" />
+                    <div className="h-16 rounded-2xl bg-slate-100" />
+                    <div className="h-16 rounded-2xl bg-slate-100" />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <ChapterWeightageGraph chapters={chapters} animateIntro={false} />
+            )}
           </div>
         </motion.div>
 
@@ -533,7 +648,7 @@ const Homepage = () => {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-80px' }}
           transition={{ duration: 0.5, delay: 0.1 }}
-          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-xl sm:mt-6 sm:rounded-[2.5rem] sm:p-8"
+          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:mt-6 sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8"
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -603,7 +718,7 @@ const Homepage = () => {
             </div>
           </motion.div>
 
-          <motion.div variants={fadeUp} className="rounded-[2.5rem] border border-cyan-100/50 bg-white/60 p-8 shadow-sm backdrop-blur-xl sm:p-10">
+          <motion.div variants={fadeUp} className="rounded-[2.5rem] border border-cyan-100/50 bg-white/60 p-8 shadow-sm backdrop-blur-md sm:backdrop-blur-xl sm:p-10">
             <p className="text-xs font-black uppercase tracking-widest text-cyan-600">Why students like it</p>
             <h2 className="mt-3 font-serif text-3xl text-slate-900 sm:text-4xl">Everything needed to keep moving</h2>
             <p className="mt-5 max-w-xl text-base leading-relaxed text-slate-600">

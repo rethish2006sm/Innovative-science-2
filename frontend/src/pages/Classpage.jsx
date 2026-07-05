@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Download, FileText, Image as ImageIcon, X, Eye } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { API_BASE_URL, apiRequest } from "../api";
 import { getStoredAuth } from "../authStorage";
 
+const ALL_POST_CATEGORY = { id: "all", label: "All" };
 const CLASS_POST_CATEGORIES = [
   { id: "assignment", label: "Assignment" },
   { id: "practice-paper", label: "Practice Paper" },
@@ -94,18 +95,31 @@ function formatDate(value) {
 export default function Classpage() {
   const { classId } = useParams();
   const cachedFeed = readClassFeedCache(classId)
-  const [activeCategory, setActiveCategory] = useState(() => cachedFeed?.activeCategory || "assignment");
+  const [activeCategory, setActiveCategory] = useState(() => cachedFeed?.activeCategory || "all");
   const [posts, setPosts] = useState(() => cachedFeed?.posts || []);
   const [loading, setLoading] = useState(() => !cachedFeed);
-  const [feedLimit, setFeedLimit] = useState(20);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(Boolean(cachedFeed?.hasMore));
   const [categoryCounts, setCategoryCounts] = useState(() => cachedFeed?.categoryCounts || EMPTY_CATEGORY_COUNTS);
   const [error, setError] = useState("");
   const [viewerPost, setViewerPost] = useState(null);
   const [viewerPhoto, setViewerPhoto] = useState(null);
   const [viewerPdf, setViewerPdf] = useState(null);
   const [isZoomed, setIsZoomed] = useState(false);
+
+  const visiblePosts = useMemo(() => {
+    if (activeCategory === ALL_POST_CATEGORY.id) {
+      return posts;
+    }
+
+    return posts.filter((post) => normalizeCategory(post?.category) === activeCategory);
+  }, [posts, activeCategory]);
+
+  const categoryCountsWithAll = useMemo(
+    () => ({
+      ...categoryCounts,
+      [ALL_POST_CATEGORY.id]: posts.length,
+    }),
+    [categoryCounts, posts.length]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -118,28 +132,20 @@ export default function Classpage() {
         return;
       }
 
-      const cachedMatchesCategory = cachedFeed?.activeCategory === activeCategory && Array.isArray(cachedFeed?.posts)
-      if (!cachedMatchesCategory) {
+      if (!cachedFeed) {
         setLoading(true);
       }
       setError("");
 
       try {
-        const data = await apiRequest(`/api/classes/${classId}/feed?limit=${feedLimit}&category=${encodeURIComponent(activeCategory)}`);
+        const data = await apiRequest(`/api/classes/${classId}/feed?limit=20&category=all`);
         const nextPosts = Array.isArray(data?.posts) ? data.posts : [];
 
         if (!cancelled) {
           setPosts(nextPosts);
-          setHasMore(Boolean(data?.hasMore));
           setCategoryCounts(data?.categoryCounts || EMPTY_CATEGORY_COUNTS);
-          const firstAvailableCategory = CLASS_POST_CATEGORIES.find((item) => Number(data?.categoryCounts?.[item.id] || 0) > 0)?.id || 'assignment'
-          if (!cachedFeed && activeCategory === 'assignment' && !nextPosts.length && firstAvailableCategory !== 'assignment') {
-            setActiveCategory(firstAvailableCategory)
-            return
-          }
           writeClassFeedCache(classId, {
             posts: nextPosts,
-            hasMore: Boolean(data?.hasMore),
             activeCategory,
             categoryCounts: data?.categoryCounts || EMPTY_CATEGORY_COUNTS,
             classItem: data?.classItem || null,
@@ -148,14 +154,11 @@ export default function Classpage() {
       } catch (fetchError) {
         if (!cancelled) {
           setError(fetchError?.message || "Failed to load class posts.");
-          if (!cachedMatchesCategory) {
-            setPosts([]);
-          }
+          setPosts([]);
         }
       } finally {
         if (!cancelled) {
           setLoading(false);
-          setIsLoadingMore(false);
         }
       }
     }
@@ -165,7 +168,7 @@ export default function Classpage() {
     return () => {
       cancelled = true;
     };
-  }, [classId, activeCategory, feedLimit]);
+  }, [classId]);
 
   useEffect(() => {
     if (!classId) {
@@ -199,19 +202,25 @@ export default function Classpage() {
     setIsZoomed(false);
   };
 
-  const openPdfViewer = (post, pdf) => {
-    const pdfUrl = pdf?.pdfUrl ? buildAuthedUrl(pdf.pdfUrl) : "";
+  const openDocument = (post) => {
+    const targetUrl = post?.documentLink
+      ? post.documentLink
+      : post?.pdf?.pdfUrl
+        ? buildAuthedUrl(post.pdf.pdfUrl)
+        : "";
 
-    if (!pdfUrl) {
-      setError("Could not open this PDF.");
+    if (!targetUrl) {
+      setError("Could not open this document.");
       return;
     }
 
-    const newWindow = window.open(pdfUrl, "_blank", "noopener,noreferrer");
-
-    if (!newWindow) {
-      window.location.assign(pdfUrl);
-    }
+    const anchor = document.createElement("a");
+    anchor.href = targetUrl;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   };
 
   const handleDownload = () => {
@@ -223,25 +232,18 @@ export default function Classpage() {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  const currentCategoryLabel = CATEGORY_LABELS[activeCategory] || "Notes";
-
-  const loadMorePosts = () => {
-    if (isLoadingMore || loading) {
-      return;
-    }
-
-    setIsLoadingMore(true);
-    setFeedLimit((current) => current + 20);
-  };
+  const currentCategoryLabel = activeCategory === ALL_POST_CATEGORY.id
+    ? "All Materials"
+    : CATEGORY_LABELS[activeCategory] || "Notes";
+  const emptyCategoryLabel = activeCategory === ALL_POST_CATEGORY.id
+    ? "class material"
+    : currentCategoryLabel.toLowerCase();
 
   const changeCategory = (nextCategory) => {
     if (nextCategory === activeCategory) {
       return;
     }
 
-    setLoading(true);
-    setIsLoadingMore(false);
-    setFeedLimit(20);
     setActiveCategory(nextCategory);
   };
 
@@ -269,7 +271,7 @@ export default function Classpage() {
         {/* Categories Horizontal Menu Bar (Responsive Scroll) */}
         <div className="sticky top-4 z-40 mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white/85 p-2 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-md">
           <div className="flex overflow-x-auto no-scrollbar gap-2 pb-1 sm:pb-0 sm:grid sm:grid-cols-3 lg:grid-cols-6">
-            {CLASS_POST_CATEGORIES.map((category) => {
+            {[ALL_POST_CATEGORY, ...CLASS_POST_CATEGORIES].map((category) => {
               const active = activeCategory === category.id;
               return (
                 <button
@@ -290,7 +292,7 @@ export default function Classpage() {
                       active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500",
                     ].join(" ")}
                   >
-                    {categoryCounts[category.id]}
+                    {categoryCountsWithAll[category.id] || 0}
                   </span>
                 </button>
               );
@@ -322,28 +324,29 @@ export default function Classpage() {
               </div>
             ))}
           </div>
-        ) : posts.length === 0 ? (
+        ) : visiblePosts.length === 0 ? (
           <div id="class-notes" className="rounded-3xl border border-dashed border-slate-200 bg-white/60 py-16 px-4 text-center backdrop-blur-sm animate-in fade-in duration-300">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-50 border border-slate-100 text-slate-400 shadow-sm">
               <CalendarDays className="h-6 w-6 text-slate-400" />
             </div>
             <h3 className="mt-4 text-base font-semibold text-slate-900">Desk looks clean!</h3>
             <p className="mt-1.5 text-sm text-slate-400 max-w-xs mx-auto">
-              No new {currentCategoryLabel.toLowerCase()} entries have been documented in this folder.
+              No {emptyCategoryLabel} entries have been documented in this folder.
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
+            <div className="space-y-6">
             <div id="class-notes" className="space-y-6">
-            {posts.map((post) => {
+            {visiblePosts.map((post) => {
               const category = normalizeCategory(post?.category);
               const photos = Array.isArray(post?.photos) ? post.photos : [];
-              const pdfUrl = post?.pdf?.pdfUrl ? buildAuthedUrl(post.pdf.pdfUrl) : "";
+              const hasDocument = Boolean(post?.documentLink || post?.pdf?.pdfUrl);
 
               return (
                 <article
                   key={post._id || post.id}
                   className="group relative bg-white border border-slate-100 rounded-3xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(0,0,0,0.02)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.04)] transition-all duration-300 transform-gpu"
+                  style={{ contentVisibility: "auto", containIntrinsicSize: "1px 320px" }}
                 >
                   {/* Meta Strip */}
                   <div className="flex items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
@@ -427,16 +430,16 @@ export default function Classpage() {
                   ) : null}
 
                   {/* PDF Action Bar */}
-                  {pdfUrl ? (
+                  {hasDocument ? (
                     <div className="flex items-center pt-1">
                       <button
                         type="button"
-                        onClick={() => openPdfViewer(post, post.pdf)}
+                        onClick={() => openDocument(post)}
                         className="inline-flex w-full sm:w-auto items-center justify-center gap-2.5 rounded-xl border border-slate-200/80 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 hover:border-slate-300 hover:text-slate-950 active:scale-98"
                       >
                         <FileText className="h-4 w-4 text-rose-500 shrink-0" />
                         <span className="truncate max-w-[200px] text-left">
-                          {post.pdf?.fileName || "Review Documentation"}
+                          Review Document
                         </span>
                       </button>
                     </div>
@@ -445,19 +448,6 @@ export default function Classpage() {
               );
             })}
             </div>
-
-            {hasMore ? (
-              <div className="flex justify-center pt-2">
-                <button
-                  type="button"
-                  onClick={loadMorePosts}
-                  disabled={isLoadingMore}
-                  className="inline-flex h-11 items-center justify-center rounded-full border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isLoadingMore ? 'Loading more...' : 'Load older posts'}
-                </button>
-              </div>
-            ) : null}
           </div>
         )}
       </div>

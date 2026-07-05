@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowRight, BookOpen, Target } from 'lucide-react'
@@ -33,7 +33,11 @@ const createArc = (cx, cy, r, startAngle, endAngle) => {
   `
 }
 
-const ChapterWeightagePieChart = ({ chapters = [], distributionMode = 'withOption' }) => {
+const ChapterWeightagePieChart = ({
+  chapters = [],
+  distributionMode = 'withOption',
+  animateIntro = true,
+}) => {
   const [activeIndex, setActiveIndex] = useState(null)
 
   const totalMarks = chapters.reduce(
@@ -85,9 +89,13 @@ const ChapterWeightagePieChart = ({ chapters = [], distributionMode = 'withOptio
         <motion.svg
           viewBox="0 0 300 300"
           className="h-[230px] w-[230px] min-[380px]:h-[270px] min-[380px]:w-[270px] sm:h-[360px] sm:w-[360px]"
-          initial={{ rotate: -90 }}
-          animate={{ rotate: 0 }}
-          transition={{ duration: 1.2, ease: 'easeOut' }}
+          {...(animateIntro
+            ? {
+                initial: { rotate: -90 },
+                animate: { rotate: 0 },
+                transition: { duration: 1.2, ease: 'easeOut' },
+              }
+            : {})}
         >
           <circle
             cx="150"
@@ -100,6 +108,29 @@ const ChapterWeightagePieChart = ({ chapters = [], distributionMode = 'withOptio
 
           {segments.map((segment, index) => {
             const isActive = activeIndex === index
+            const pathMotionProps = animateIntro
+              ? {
+                  initial: { pathLength: 0, opacity: 0 },
+                  animate: {
+                    pathLength: 1,
+                    opacity: 1,
+                    scale: isActive ? 1.03 : 1,
+                  },
+                  transition: {
+                    duration: 1,
+                    delay: index * 0.08,
+                    ease: [0.16, 1, 0.3, 1],
+                  },
+                }
+              : {
+                  animate: {
+                    opacity: 1,
+                    scale: isActive ? 1.03 : 1,
+                  },
+                  transition: {
+                    duration: 0.18,
+                  },
+                }
 
             return (
               <motion.path
@@ -110,21 +141,11 @@ const ChapterWeightagePieChart = ({ chapters = [], distributionMode = 'withOptio
                   isActive ? 118 : 105,
                   segment.startAngle,
                   segment.endAngle
-                )}
+                )} 
                 fill="transparent"
                 stroke={segment.color}
                 strokeWidth={isActive ? 42 : 34}
-                initial={{ pathLength: 0, opacity: 0 }}
-                animate={{
-                  pathLength: 1,
-                  opacity: 1,
-                  scale: isActive ? 1.03 : 1,
-                }}
-                transition={{
-                  duration: 1,
-                  delay: index * 0.08,
-                  ease: [0.16, 1, 0.3, 1],
-                }}
+                {...pathMotionProps}
                 whileHover={{
                   scale: 1.05,
                   filter: 'drop-shadow(0px 0px 16px rgba(0,0,0,0.15))',
@@ -267,4 +288,4 @@ const ChapterWeightagePieChart = ({ chapters = [], distributionMode = 'withOptio
   )
 }
 
-export default ChapterWeightagePieChart
+export default memo(ChapterWeightagePieChart)

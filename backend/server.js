@@ -50,6 +50,36 @@ const CLASS_POST_PHOTO_FORMAT = String(process.env.CLASS_POST_PHOTO_FORMAT || 'w
   ? 'avif'
   : 'webp'
 const CLASS_POST_PHOTO_CONTENT_TYPE = CLASS_POST_PHOTO_FORMAT === 'avif' ? 'image/avif' : 'image/webp'
+const RESPONSE_CACHE = new Map()
+const getCachedResponse = (key) => {
+  const entry = RESPONSE_CACHE.get(key)
+
+  if (!entry) {
+    return null
+  }
+
+  if (entry.expiresAt <= Date.now()) {
+    RESPONSE_CACHE.delete(key)
+    return null
+  }
+
+  return entry.value
+}
+
+const setCachedResponse = (key, value, ttlMs = 30000) => {
+  RESPONSE_CACHE.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  })
+}
+
+const clearCachedResponses = (prefix) => {
+  for (const key of RESPONSE_CACHE.keys()) {
+    if (key.startsWith(prefix)) {
+      RESPONSE_CACHE.delete(key)
+    }
+  }
+}
 
 const PORT = process.env.PORT || 5000
 const MONGODB_URI = process.env.MONGODB_URI
@@ -640,6 +670,12 @@ const classPostSchema = new mongoose.Schema(
       maxlength: 4000,
       default: '',
     },
+    documentLink: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: '',
+    },
     photos: {
       type: [{
         data: Buffer,
@@ -919,6 +955,7 @@ const publicClassPost = (post) => {
     category: normalizedPost.category || 'assignment',
     categoryLabel: CLASS_POST_CATEGORY_LABELS[normalizedPost.category || 'assignment'] || 'Assignment',
     message: normalizedPost.message || '',
+    documentLink: normalizedPost.documentLink || '',
     createdAt: normalizedPost.createdAt,
     createdBy: normalizedPost.createdBy
       ? {
@@ -970,6 +1007,26 @@ const cloneClassAttachments = (photos = [], pdfFile = null) => ({
       }
     : undefined,
 })
+
+const normalizeDocumentLink = (value) => {
+  const trimmed = String(value || '').trim()
+
+  if (!trimmed) {
+    return ''
+  }
+
+  try {
+    const resolvedUrl = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+
+    if (!['http:', 'https:'].includes(resolvedUrl.protocol)) {
+      return ''
+    }
+
+    return resolvedUrl.toString()
+  } catch (error) {
+    return ''
+  }
+}
 
 const getAuthenticatedUserFromRequest = async (req) => {
   const headerToken = String(req.headers.authorization || '').startsWith('Bearer ')
@@ -1078,13 +1135,12 @@ const buildChapterBreakdownEntry = ({ chapter, score, totalQuestions, objectiveL
 
 const normalizeQuestionId = (value = '') => String(value || '').trim()
 
-const summarizeAttemptHistory = (attempts = []) => {
-  const chapterTotals = new Map()
+const summarizeAttemptHistory = (attempts = [], { includeChapterProgress = true } = {}) => {
+  const chapterTotals = includeChapterProgress ? new Map() : null
   const rewardedQuestionIds = new Set()
   let totalBrainCells = 0
   let totalScore = 0
   let totalQuestions = 0
-  let attemptCount = attempts.length
   const orderedAttempts = [...attempts].sort(
     (left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0),
   )
@@ -1092,6 +1148,37 @@ const summarizeAttemptHistory = (attempts = []) => {
   orderedAttempts.forEach((attempt) => {
     totalScore += safeNumber(attempt.totalScore)
     totalQuestions += safeNumber(attempt.totalQuestions)
+
+    if (!includeChapterProgress) {
+      const questionBreakdown = Array.isArray(attempt.questionBreakdown) ? attempt.questionBreakdown : []
+
+      if (questionBreakdown.length) {
+        questionBreakdown.forEach((item) => {
+          if (item.status !== 'correct') {
+            return
+          }
+
+          const questionId = normalizeQuestionId(item.questionId)
+          if (!questionId || rewardedQuestionIds.has(questionId)) {
+            return
+          }
+
+          rewardedQuestionIds.add(questionId)
+          totalBrainCells += 1
+        })
+      } else {
+        const fallbackBrainCells = safeNumber(attempt.brainCellsEarned)
+
+        if (fallbackBrainCells) {
+          totalBrainCells += fallbackBrainCells
+        } else {
+          totalBrainCells += (Array.isArray(attempt.chapterBreakdown) ? attempt.chapterBreakdown : [])
+            .reduce((sum, chapterEntry) => sum + safeNumber(chapterEntry.brainCells), 0)
+        }
+      }
+
+      return
+    }
 
     const chapterAttemptMap = new Map()
     const questionBreakdown = Array.isArray(attempt.questionBreakdown) ? attempt.questionBreakdown : []
@@ -1197,14 +1284,16 @@ const summarizeAttemptHistory = (attempts = []) => {
     })
   })
 
-  const chapterProgress = [...chapterTotals.values()].sort((left, right) => left.chapterNumber - right.chapterNumber)
+  const chapterProgress = includeChapterProgress
+    ? [...chapterTotals.values()].sort((left, right) => left.chapterNumber - right.chapterNumber)
+    : []
 
   return {
     chapterProgress,
     totalBrainCells,
     totalScore,
     totalQuestions,
-    attemptCount,
+    attemptCount: orderedAttempts.length,
     averagePercent: totalQuestions ? Math.round((totalScore / totalQuestions) * 100) : 0,
   }
 }
@@ -1217,7 +1306,7 @@ const buildUserProgress = async (userDoc) => {
     classId ? Class.findById(classId).lean() : Promise.resolve(null),
   ])
 
-  const summary = summarizeAttemptHistory(attempts)
+  const summary = summarizeAttemptHistory(attempts, { includeChapterProgress: true })
   const chapterReports = summary.chapterProgress.map((chapterEntry) => ({
     ...chapterEntry,
     latestSuggestion: chapterEntry.conceptSummary?.summary || '',
@@ -1252,7 +1341,7 @@ const buildUserProgress = async (userDoc) => {
   }
 }
 
-const buildProgressRowsForUsers = async (users = []) => {
+const buildProgressRowsForUsers = async (users = [], { includeChapterProgress = false } = {}) => {
   const userIds = users.map((user) => user._id)
   const attempts = await PracticeAttempt.find({ user: { $in: userIds } }).sort({ createdAt: -1 }).lean()
   const attemptMap = new Map()
@@ -1265,7 +1354,9 @@ const buildProgressRowsForUsers = async (users = []) => {
   })
 
   return Promise.all(users.map(async (user) => {
-    const summary = summarizeAttemptHistory(attemptMap.get(String(user._id)) || [])
+    const summary = summarizeAttemptHistory(attemptMap.get(String(user._id)) || [], {
+      includeChapterProgress,
+    })
     const classId = user.classId?._id || user.classId || null
     const classDoc = classId && typeof classId === 'object' && classId.name
       ? classId
@@ -2044,8 +2135,19 @@ app.get('/api/objective-questions/:id/answer-image', async (req, res) => {
 
 app.get('/api/chapters', async (req, res) => {
   try {
+    const cacheKey = 'chapters:list'
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=60')
+      return res.json(cached)
+    }
+
     const chapters = await Chapter.find().sort({ number: 1 })
-    res.json({ chapters })
+    const payload = { chapters }
+    setCachedResponse(cacheKey, payload, 60000)
+    res.set('Cache-Control', 'private, max-age=60')
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load chapters.' })
   }
@@ -2066,6 +2168,7 @@ app.post('/api/chapters', authRequired, adminRequired, async (req, res) => {
       marksWithoutOption: Number(marksWithoutOption),
     })
 
+    clearCachedResponses('chapters:')
     res.status(201).json({ chapter })
   } catch (error) {
     if (error.code === 11000) {
@@ -2094,6 +2197,7 @@ app.patch('/api/chapters/:id', authRequired, adminRequired, async (req, res) => 
       return res.status(404).json({ message: 'Chapter not found.' })
     }
 
+    clearCachedResponses('chapters:')
     res.json({ chapter })
   } catch (error) {
     if (error.code === 11000) {
@@ -2119,6 +2223,7 @@ app.delete('/api/chapters/:id', authRequired, adminRequired, async (req, res) =>
     await ObjectiveType.deleteMany({ topic: { $in: topicIds } })
     await Topic.deleteMany({ chapter: chapter._id })
 
+    clearCachedResponses('chapters:')
     res.json({ message: 'Chapter and its topics deleted successfully.' })
   } catch (error) {
     res.status(500).json({ message: 'Could not delete chapter.' })
@@ -2824,6 +2929,8 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
       questionBreakdown: [],
     })
 
+    clearCachedResponses('leaderboard:')
+    clearCachedResponses('admin:students:')
     res.json({ bestScore: savedScore, isDone: true })
   } catch (error) {
     res.status(500).json({ message: 'Could not mark practice as done.' })
@@ -2940,6 +3047,8 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
       questionBreakdown,
     })
 
+    clearCachedResponses('leaderboard:')
+    clearCachedResponses('admin:students:')
     res.json({
       score,
       totalQuestions: questions.length,
@@ -3012,13 +3121,27 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
     const scope = String(req.query.scope || 'all').toLowerCase()
     const requestedClassId = String(req.query.classId || req.user?.classId || '').trim()
     const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 100)
+    const cacheKey = `leaderboard:${scope}:${requestedClassId || 'all'}`
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=15')
+      return res.json({
+        ...cached,
+        leaderboard: cached.leaderboard.slice(0, limit),
+      })
+    }
+
     const classFilter = scope === 'class' && requestedClassId ? { classId: requestedClassId } : {}
     const users = await User.find({
       isAdmin: false,
       ...classFilter,
-    }).populate('classId')
+    })
+      .select('name email classId isAdmin')
+      .populate('classId')
+      .lean()
 
-    const rows = await buildProgressRowsForUsers(users)
+    const rows = await buildProgressRowsForUsers(users, { includeChapterProgress: false })
     rows.sort((left, right) => {
       if (right.totalBrainCells !== left.totalBrainCells) {
         return right.totalBrainCells - left.totalBrainCells
@@ -3031,11 +3154,23 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
       return right.attemptCount - left.attemptCount
     })
 
-    res.json({
-      leaderboard: rows.slice(0, limit),
+    const payload = {
+      leaderboard: rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        className: row.className || '',
+        totalBrainCells: row.totalBrainCells,
+      })),
       scope,
       classId: requestedClassId,
       className: requestedClassId ? (await Class.findById(requestedClassId).lean())?.name || '' : '',
+    }
+
+    setCachedResponse(cacheKey, payload, 5000)
+    res.set('Cache-Control', 'private, max-age=5')
+    res.json({
+      ...payload,
+      leaderboard: payload.leaderboard.slice(0, limit),
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load leaderboard.' })
@@ -3046,9 +3181,12 @@ app.get('/api/leaderboard/me', authRequired, async (req, res) => {
   try {
     const users = await User.find({
       isAdmin: false,
-    }).populate('classId')
+    })
+      .select('name email classId isAdmin')
+      .populate('classId')
+      .lean()
 
-    const rows = await buildProgressRowsForUsers(users)
+    const rows = await buildProgressRowsForUsers(users, { includeChapterProgress: false })
     rows.sort((left, right) => {
       if (right.totalBrainCells !== left.totalBrainCells) {
         return right.totalBrainCells - left.totalBrainCells
@@ -3076,6 +3214,14 @@ app.get('/api/leaderboard/me', authRequired, async (req, res) => {
 
 app.get('/api/classes', async (req, res) => {
   try {
+    const cacheKey = 'classes:list'
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=60')
+      return res.json(cached)
+    }
+
     const classes = await Class.find().sort({ name: 1 }).lean()
     const classIds = classes.map((item) => item._id)
     const studentCounts = await User.aggregate([
@@ -3084,12 +3230,16 @@ app.get('/api/classes', async (req, res) => {
     ])
     const countMap = new Map(studentCounts.map((item) => [String(item._id), item.count]))
 
-    res.json({
+    const payload = {
       classes: classes.map((item) => ({
         ...item,
         studentCount: countMap.get(String(item._id)) || 0,
       })),
-    })
+    }
+
+    setCachedResponse(cacheKey, payload, 60000)
+    res.set('Cache-Control', 'private, max-age=60')
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load classes.' })
   }
@@ -3098,8 +3248,19 @@ app.get('/api/classes', async (req, res) => {
 app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => {
   try {
     const search = String(req.query.search || '').trim().toLowerCase()
-    const users = await User.find({ isAdmin: false }).populate('classId')
-    const rows = await buildProgressRowsForUsers(users)
+    const cacheKey = `admin:students:${search || 'all'}`
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=15')
+      return res.json(cached)
+    }
+
+    const users = await User.find({ isAdmin: false })
+      .select('name email phoneNumber password passwordHash classId isAdmin')
+      .populate('classId')
+      .lean()
+    const rows = await buildProgressRowsForUsers(users, { includeChapterProgress: false })
 
     const filtered = search
       ? rows.filter((student) => (
@@ -3119,14 +3280,18 @@ app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => 
     ])
     const classCountMap = new Map(classCounts.map((item) => [String(item._id), item.count]))
 
-    res.json({
+    const payload = {
       totalStudents: rows.length,
       students: filtered,
       classes: classes.map((item) => ({
         ...item,
         studentCount: classCountMap.get(String(item._id)) || 0,
       })),
-    })
+    }
+
+    setCachedResponse(cacheKey, payload, 15000)
+    res.set('Cache-Control', 'private, max-age=15')
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load student list.' })
   }
@@ -3152,6 +3317,14 @@ app.get('/api/admin/students/:id', authRequired, adminRequired, async (req, res)
 
 app.get('/api/admin/classes', authRequired, adminRequired, async (req, res) => {
   try {
+    const cacheKey = 'admin:classes:list'
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=60')
+      return res.json(cached)
+    }
+
     const classes = await Class.find().sort({ createdAt: -1 }).lean()
     const classIds = classes.map((item) => item._id)
     const studentCounts = await User.aggregate([
@@ -3160,12 +3333,16 @@ app.get('/api/admin/classes', authRequired, adminRequired, async (req, res) => {
     ])
     const countMap = new Map(studentCounts.map((item) => [String(item._id), item.count]))
 
-    res.json({
+    const payload = {
       classes: classes.map((item) => ({
         ...item,
         studentCount: countMap.get(String(item._id)) || 0,
       })),
-    })
+    }
+
+    setCachedResponse(cacheKey, payload, 60000)
+    res.set('Cache-Control', 'private, max-age=60')
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load classes.' })
   }
@@ -3186,6 +3363,9 @@ app.post('/api/admin/classes', authRequired, adminRequired, async (req, res) => 
     })
 
     res.status(201).json({ class: classDoc })
+    clearCachedResponses('classes:')
+    clearCachedResponses('admin:classes')
+    clearCachedResponses('admin:students:')
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: 'This class already exists.' })
@@ -3213,6 +3393,9 @@ app.patch('/api/admin/classes/:id', authRequired, adminRequired, async (req, res
     }
 
     res.json({ class: classDoc })
+    clearCachedResponses('classes:')
+    clearCachedResponses('admin:classes')
+    clearCachedResponses('admin:students:')
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: 'This class already exists.' })
@@ -3232,6 +3415,9 @@ app.delete('/api/admin/classes/:id', authRequired, adminRequired, async (req, re
 
     await User.updateMany({ classId: classDoc._id }, { $set: { classId: null } })
 
+    clearCachedResponses('classes:')
+    clearCachedResponses('admin:classes')
+    clearCachedResponses('admin:students:')
     res.json({ message: 'Class deleted successfully.' })
   } catch (error) {
     res.status(500).json({ message: 'Could not delete class.' })
@@ -3264,6 +3450,8 @@ app.post('/api/admin/classes/:id/students', authRequired, adminRequired, async (
 
     const updatedStudents = await User.find({ _id: { $in: studentIds } }).populate('classId')
 
+    clearCachedResponses('admin:classes')
+    clearCachedResponses('admin:students:')
     res.json({
       class: classDoc,
       students: updatedStudents.map((student) => publicUser(student)),
@@ -3297,6 +3485,8 @@ app.patch('/api/admin/students/:id/class', authRequired, adminRequired, async (r
     }
 
     const refreshedUser = await User.findById(user._id).populate('classId')
+    clearCachedResponses('admin:classes')
+    clearCachedResponses('admin:students:')
     res.json({ user: publicUser(refreshedUser) })
   } catch (error) {
     res.status(500).json({ message: 'Could not update student class.' })
@@ -3722,6 +3912,7 @@ app.post('/api/admin/pyqs', authRequired, adminRequired, pdfUpload.single('pdf')
       },
     })
 
+    clearCachedResponses('pyqs:')
     res.status(201).json({
       message: 'PYQ uploaded successfully.',
       pyq: publicPyq(pyq),
@@ -3739,6 +3930,7 @@ app.delete('/api/admin/pyqs/:id', authRequired, adminRequired, async (req, res) 
       return res.status(404).json({ message: 'PYQ not found.' })
     }
 
+    clearCachedResponses('pyqs:')
     res.json({ message: 'PYQ deleted successfully.' })
   } catch (error) {
     res.status(500).json({ message: 'Could not delete PYQ.' })
@@ -3747,11 +3939,23 @@ app.delete('/api/admin/pyqs/:id', authRequired, adminRequired, async (req, res) 
 
 app.get('/api/pyqs', optionalAuth, async (req, res) => {
   try {
+    const cacheKey = 'pyqs:list'
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=60')
+      return res.json(cached)
+    }
+
     const pyqs = await Pyq.find().sort({ createdAt: -1 }).lean()
 
-    res.json({
+    const payload = {
       pyqs: pyqs.map(publicPyq),
-    })
+    }
+
+    setCachedResponse(cacheKey, payload, 60000)
+    res.set('Cache-Control', 'private, max-age=60')
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load PYQs.' })
   }
@@ -3815,7 +4019,7 @@ app.get('/api/pyqs/:id/pdf', async (req, res) => {
 
     res.setHeader('Content-Type', pyq.pdf.contentType || 'application/pdf')
     res.setHeader('Content-Disposition', `inline; filename="${safeName || 'pyq'}.pdf"`)
-    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('Cache-Control', 'private, max-age=3600')
     res.send(Buffer.from(pyq.pdf.data))
   } catch (error) {
     res.status(500).json({ message: 'Could not open PYQ file.' })
@@ -4376,6 +4580,8 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
       questionBreakdown,
     })
 
+    clearCachedResponses('leaderboard:')
+    clearCachedResponses('admin:students:')
     res.json({
       score,
       totalQuestions: questionBreakdown.length,
@@ -4403,10 +4609,20 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
 app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
   try {
     const { classId } = req.params
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50)
-    const queryLimit = Math.min(limit + 1, 51)
+    const rawLimit = String(req.query.limit || '').trim().toLowerCase()
+    const loadAll = rawLimit === 'all' || req.query.all === '1'
+    const limit = loadAll ? null : Math.min(Math.max(Number(req.query.limit) || 20, 1), 50)
+    const queryLimit = loadAll ? null : Math.min((limit || 20) + 1, 51)
     const category = String(req.query.category || '').trim()
-    const normalizedCategory = CLASS_POST_CATEGORIES.includes(category) ? category : ''
+    const normalizedCategory = category && category !== 'all' && CLASS_POST_CATEGORIES.includes(category) ? category : ''
+    const cacheKey = `class-feed:${classId}:${loadAll ? 'all' : limit}:${normalizedCategory || 'all'}`
+    const cached = getCachedResponse(cacheKey)
+
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=20')
+      return res.json(cached)
+    }
+
     const classDoc = await Class.findById(classId).lean()
 
     if (!classDoc) {
@@ -4427,14 +4643,19 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
       postQuery.category = normalizedCategory
     }
 
-    const posts = await ClassPost.find(postQuery)
+    let postFinder = ClassPost.find(postQuery)
       .populate('createdBy', 'name isAdmin')
       .sort({ createdAt: -1 })
-      .limit(queryLimit)
-      .select('classId shareGroupId createdBy category message createdAt photos pdf')
+      .select('classId shareGroupId createdBy category message documentLink createdAt photos pdf')
       .select('-photos.data -pdf.data')
       .lean()
-    const visiblePosts = posts.slice(0, limit)
+
+    if (!loadAll && queryLimit) {
+      postFinder = postFinder.limit(queryLimit)
+    }
+
+    const posts = await postFinder
+    const visiblePosts = loadAll ? posts : posts.slice(0, limit)
     const categoryCountsRaw = await ClassPost.aggregate([
       { $match: { classId: classDoc._id } },
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -4449,7 +4670,7 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
       }
     })
 
-    res.json({
+    const payload = {
       classItem: {
         id: String(classDoc._id),
         name: classDoc.name,
@@ -4457,10 +4678,14 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
         grade: classDoc.grade || '',
       },
       posts: visiblePosts.map(publicClassPost),
-      hasMore: posts.length > limit,
+      hasMore: loadAll ? false : posts.length > limit,
       categoryCounts,
       canPost: Boolean(req.user.isAdmin),
-    })
+    }
+
+    setCachedResponse(cacheKey, payload, 20000)
+    res.set('Cache-Control', 'private, max-age=20')
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load class feed.' })
   }
@@ -4498,6 +4723,8 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
     }
 
     const message = typeof req.body.message === 'string' ? req.body.message.trim() : post.message
+    const hasDocumentLinkField = Object.prototype.hasOwnProperty.call(req.body, 'documentLink')
+    const documentLink = hasDocumentLinkField ? normalizeDocumentLink(req.body.documentLink) : String(post.documentLink || '')
     const classMessages = parseJsonValue(req.body.classMessages, {})
     const category = typeof req.body.category === 'string' && CLASS_POST_CATEGORIES.includes(req.body.category)
       ? req.body.category
@@ -4505,7 +4732,7 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
     const photos = Array.isArray(req.files?.photos) ? req.files.photos : null
     const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
 
-    if (!message && (!photos || !photos.length) && !pdfFile && !post.pdf?.data && !(post.photos || []).length) {
+    if (!message && (!photos || !photos.length) && !pdfFile && !post.pdf?.data && !(post.photos || []).length && !documentLink && !post.documentLink) {
       return res.status(400).json({ message: 'Post cannot be empty.' })
     }
 
@@ -4558,6 +4785,9 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
         existingPost.classId = classItem._id
         existingPost.shareGroupId = groupId
         existingPost.message = resolvedMessage
+        if (hasDocumentLinkField) {
+          existingPost.documentLink = documentLink
+        }
         existingPost.category = category
         existingPost.photos = nextAttachments.photos.map((photo) => ({ ...photo }))
         existingPost.pdf = nextAttachments.pdf
@@ -4575,6 +4805,7 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
         createdBy: req.user._id,
         category,
         message: resolvedMessage,
+        documentLink,
         photos: nextAttachments.photos.map((photo) => ({ ...photo })),
         pdf: nextAttachments.pdf
           ? { ...nextAttachments.pdf }
@@ -4593,6 +4824,7 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
     }
 
     const primaryPost = savedPosts[0] || post
+    clearCachedResponses('class-feed:')
     res.json({
       post: publicClassPost(primaryPost),
       posts: savedPosts.map(publicClassPost),
@@ -4616,6 +4848,7 @@ app.delete('/api/classes/:classId/posts/:postId', authRequired, async (req, res)
       return res.status(404).json({ message: 'Post not found.' })
     }
 
+    clearCachedResponses('class-feed:')
     res.json({ message: 'Deleted successfully.' })
   } catch (error) {
     res.status(500).json({ message: 'Could not delete class post.' })
@@ -4736,14 +4969,15 @@ app.post(
       }
 
       const message = String(req.body.message || '').trim()
+      const documentLink = normalizeDocumentLink(req.body.documentLink)
       const category = CLASS_POST_CATEGORIES.includes(String(req.body.category || 'assignment'))
         ? String(req.body.category || 'assignment')
         : 'assignment'
       const photos = Array.isArray(req.files?.photos) ? req.files.photos : []
       const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
 
-      if (!message && !photos.length && !pdfFile) {
-        return res.status(400).json({ message: 'Add a message, a photo, or a PDF before sharing.' })
+      if (!message && !photos.length && !pdfFile && !documentLink) {
+        return res.status(400).json({ message: 'Add a message, a photo, a PDF, or a link before sharing.' })
       }
 
       if (photos.some((file) => !file.mimetype?.startsWith('image/'))) {
@@ -4771,6 +5005,7 @@ app.post(
         createdBy: req.user._id,
         category,
         message,
+        documentLink,
         photos: await Promise.all(photos.map(convertClassPhoto)),
         pdf: pdfFile
           ? {
@@ -4784,6 +5019,7 @@ app.post(
 
       await post.populate('createdBy', 'name isAdmin')
 
+      clearCachedResponses('class-feed:')
       res.status(201).json({
         post: publicClassPost(post),
         message: 'Shared successfully.',
@@ -4812,6 +5048,7 @@ app.post(
         : []
       const classMessages = parseJsonValue(req.body.classMessages, {})
       const defaultMessage = String(req.body.message || '').trim()
+      const documentLink = normalizeDocumentLink(req.body.documentLink)
       const category = CLASS_POST_CATEGORIES.includes(String(req.body.category || 'assignment'))
         ? String(req.body.category || 'assignment')
         : 'assignment'
@@ -4852,8 +5089,8 @@ app.post(
         defaultMessage ||
         selectedClassIds.some((classId) => String(classMessages?.[classId] || '').trim())
 
-      if (!hasAnyMessage && !photos.length && !pdfFile) {
-        return res.status(400).json({ message: 'Add a message, a photo, or a PDF before sharing.' })
+      if (!hasAnyMessage && !photos.length && !pdfFile && !documentLink) {
+        return res.status(400).json({ message: 'Add a message, a photo, a PDF, or a link before sharing.' })
       }
 
       const classMap = new Map(matchingClasses.map((classItem) => [String(classItem._id), classItem]))
@@ -4869,7 +5106,7 @@ app.post(
 
         const classMessage = String(classMessages?.[classId] || defaultMessage || '').trim()
 
-        if (!classMessage && !convertedPhotos.length && !pdfFile) {
+        if (!classMessage && !convertedPhotos.length && !pdfFile && !documentLink) {
           continue
         }
 
@@ -4880,6 +5117,7 @@ app.post(
           createdBy: req.user._id,
           category,
           message: classMessage,
+          documentLink,
           photos: attachmentBundle.photos,
           pdf: attachmentBundle.pdf,
         })
@@ -4892,6 +5130,7 @@ app.post(
         return res.status(400).json({ message: 'Please add a message for at least one selected class.' })
       }
 
+      clearCachedResponses('class-feed:')
       res.status(201).json({
         posts: createdPosts,
         message: 'Shared successfully.',

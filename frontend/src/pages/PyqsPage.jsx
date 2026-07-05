@@ -7,6 +7,7 @@ import { authEvents, getStoredAuth } from '../authStorage'
 
 const FIXED_TITLE = 'Class 10 Science 2'
 const FIXED_SUBJECT = 'Science 2'
+const PYQS_CACHE_KEY = 'innovative_science_2_pyqs_cache'
 
 const MONTH_OPTIONS = [
   'January',
@@ -29,12 +30,42 @@ const initialUploadForm = {
   pdf: null,
 }
 
+const readPyqsCache = () => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(PYQS_CACHE_KEY) || 'null')
+
+    if (!cached || typeof cached !== 'object') {
+      return null
+    }
+
+    return cached
+  } catch (error) {
+    localStorage.removeItem(PYQS_CACHE_KEY)
+    return null
+  }
+}
+
+const writePyqsCache = (payload) => {
+  try {
+    localStorage.setItem(
+      PYQS_CACHE_KEY,
+      JSON.stringify({
+        ...payload,
+        cachedAt: Date.now(),
+      }),
+    )
+  } catch (error) {
+    // Ignore storage quota issues and keep the live UI working.
+  }
+}
+
 const PyqsPage = () => {
+  const cachedPyqs = readPyqsCache()
   const [auth, setAuth] = useState(() => getStoredAuth())
-  const [pyqs, setPyqs] = useState([])
-  const [selectedPyqId, setSelectedPyqId] = useState('')
+  const [pyqs, setPyqs] = useState(() => cachedPyqs?.pyqs || [])
+  const [selectedPyqId, setSelectedPyqId] = useState(() => cachedPyqs?.selectedPyqId || '')
   const [uploadForm, setUploadForm] = useState(initialUploadForm)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(() => !Array.isArray(cachedPyqs?.pyqs) || !cachedPyqs?.pyqs.length)
   const [isUploading, setIsUploading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -77,14 +108,21 @@ const PyqsPage = () => {
 
   useEffect(() => {
     const loadPyqs = async () => {
-      setIsLoading(true)
+      if (!cachedPyqs?.pyqs) {
+        setIsLoading(true)
+      }
       setError('')
 
       try {
         const data = await apiRequest('/api/pyqs')
         const nextPyqs = data.pyqs || []
+        const nextSelectedPyqId = selectedPyqId || nextPyqs[0]?.id || ''
         setPyqs(nextPyqs)
-        setSelectedPyqId((current) => current || nextPyqs[0]?.id || '')
+        setSelectedPyqId(nextSelectedPyqId)
+        writePyqsCache({
+          pyqs: nextPyqs,
+          selectedPyqId: nextSelectedPyqId,
+        })
       } catch (err) {
         setError(err.message)
       } finally {
@@ -96,11 +134,18 @@ const PyqsPage = () => {
   }, [])
 
   useEffect(() => {
-    setPdfObjectUrl('')
-    setPdfLoading(false)
-    setIsMobileViewerOpen(false)
-    setIsMobilePdfLoading(false)
-  }, [selectedPyqId])
+    const nextPdfUrl = selectedPyq?.pdfUrl ? buildProtectedPdfUrl(selectedPyq.pdfUrl) : ''
+
+    setPdfObjectUrl(nextPdfUrl)
+    setPdfLoading(Boolean(nextPdfUrl))
+
+    if (!nextPdfUrl) {
+      setIsMobilePdfLoading(false)
+      return
+    }
+
+    setIsMobilePdfLoading(isMobileViewerOpen)
+  }, [selectedPyqId, selectedPyq?.pdfUrl, auth?.token, isMobileViewerOpen, isMobile])
 
   const handleUploadChange = (field, value) => {
     setUploadForm((current) => ({ ...current, [field]: value }))
@@ -127,19 +172,8 @@ const PyqsPage = () => {
 
     setSelectedPyqId(pyq.id)
     setIsSignInPopupOpen(false)
-
-    const pdfUrl = buildProtectedPdfUrl(pyq.pdfUrl)
-
-    if (!pdfUrl) {
-      setError('Could not open this PDF.')
-      return
-    }
-
-    const newWindow = window.open(pdfUrl, '_blank', 'noopener,noreferrer')
-
-    if (!newWindow) {
-      window.location.assign(pdfUrl)
-    }
+    setIsMobileViewerOpen(isMobile)
+    setIsMobilePdfLoading(Boolean(isMobile))
   }
 
   const handleUpload = async (event) => {
@@ -166,7 +200,12 @@ const PyqsPage = () => {
       const refreshed = await apiRequest('/api/pyqs')
       const nextPyqs = refreshed.pyqs || []
       setPyqs(nextPyqs)
-      setSelectedPyqId(data.pyq?.id || nextPyqs[0]?.id || '')
+      const nextSelectedPyqId = data.pyq?.id || nextPyqs[0]?.id || ''
+      setSelectedPyqId(nextSelectedPyqId)
+      writePyqsCache({
+        pyqs: nextPyqs,
+        selectedPyqId: nextSelectedPyqId,
+      })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -195,6 +234,10 @@ const PyqsPage = () => {
         }
 
         return current || nextPyqs[0]?.id || ''
+      })
+      writePyqsCache({
+        pyqs: nextPyqs,
+        selectedPyqId: nextPyqs[0]?.id || '',
       })
       setIsMobileViewerOpen(false)
       setIsMobilePdfLoading(false)
@@ -382,14 +425,25 @@ const PyqsPage = () => {
                 </div>
               </div>
 
-              <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-100">
+              <div className="relative mt-5 overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-100">
                 {pdfObjectUrl ? (
-                  <iframe
-                    key={selectedPyq.id}
-                    title={selectedPyq.title}
-                    src={pdfObjectUrl}
-                    className="h-[75vh] w-full bg-white"
-                  />
+                  <>
+                    <iframe
+                      key={pdfObjectUrl}
+                      title={selectedPyq?.title || FIXED_TITLE}
+                      src={pdfObjectUrl}
+                      onLoad={() => setPdfLoading(false)}
+                      className="h-[75vh] w-full bg-white"
+                    />
+                    {pdfLoading && (
+                      <div className="absolute inset-0 grid place-items-center bg-slate-50/90 px-6 text-center text-slate-500">
+                        <div>
+                          <Loader2 className="mx-auto h-10 w-10 animate-spin text-cyan-600" />
+                          <p className="mt-3 text-sm font-medium">Opening PDF...</p>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 ) : pdfLoading ? (
                   <div className="grid h-[75vh] place-items-center bg-slate-50 px-6 text-center text-slate-500">
                     <div>
@@ -417,9 +471,9 @@ const PyqsPage = () => {
             <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 text-white">
               <div className="min-w-0">
                 <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300">PDF open</p>
-                <h2 className="truncate text-base font-black">{selectedPyq.title}</h2>
+                <h2 className="truncate text-base font-black">{selectedPyq?.title || FIXED_TITLE}</h2>
                 <p className="truncate text-xs text-slate-300">
-                  {[selectedPyq.subject, selectedPyq.month, selectedPyq.year].filter(Boolean).join(' - ')}
+                  {[selectedPyq?.subject, selectedPyq?.month, selectedPyq?.year].filter(Boolean).join(' - ')}
                 </p>
               </div>
               <button
@@ -436,53 +490,47 @@ const PyqsPage = () => {
               </button>
             </div>
 
-            <div className="grid flex-1 place-items-center px-4 text-center">
-              {isMobilePdfLoading ? (
-                <div className="flex flex-col items-center gap-3 text-white">
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
-                    className="rounded-full border-4 border-white/20 border-t-cyan-300 p-3"
-                  >
-                    <Loader2 className="h-6 w-6 text-cyan-300" />
-                  </motion.div>
-                  <p className="text-sm font-semibold text-slate-200">Opening PDF...</p>
-                  <p className="max-w-sm text-xs leading-6 text-slate-400">
-                    Your PDF is opening in a new tab for better mobile support.
-                  </p>
-                </div>
-              ) : pdfObjectUrl ? (
-                <div className="flex max-w-sm flex-col items-center gap-4 text-white">
-                  <BookOpen className="h-10 w-10 text-cyan-300" />
-                  <p className="text-sm font-semibold text-slate-200">
-                    If the PDF did not open automatically, tap the button below.
-                  </p>
-                  <div className="flex w-full flex-col gap-3 sm:flex-row">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const win = window.open(pdfObjectUrl, '_blank')
-                        if (win) {
-                          win.focus()
-                        }
-                      }}
-                      className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl bg-cyan-400 px-5 font-bold text-slate-950 transition hover:bg-cyan-300"
+            <div className="relative flex-1 overflow-hidden bg-slate-100">
+              {pdfObjectUrl ? (
+                <iframe
+                  key={pdfObjectUrl}
+                  title={selectedPyq?.title || FIXED_TITLE}
+                  src={pdfObjectUrl}
+                  onLoad={() => {
+                    setPdfLoading(false)
+                    setIsMobilePdfLoading(false)
+                  }}
+                  className="h-full w-full border-0 bg-white"
+                />
+              ) : null}
+
+              {(pdfLoading || isMobilePdfLoading) && (
+                <div className="absolute inset-0 grid place-items-center bg-slate-950/95 px-4 text-center text-white">
+                  <div className="flex flex-col items-center gap-3">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+                      className="rounded-full border-4 border-white/20 border-t-cyan-300 p-3"
                     >
-                      Open PDF
-                    </button>
+                      <Loader2 className="h-6 w-6 text-cyan-300" />
+                    </motion.div>
+                    <p className="text-sm font-semibold text-slate-200">Opening PDF...</p>
+                    <p className="max-w-sm text-xs leading-6 text-slate-400">
+                      The paper is loading directly in the app for a faster view.
+                    </p>
                     <button
                       type="button"
                       onClick={() => {
                         setIsMobileViewerOpen(false)
                         closeMobilePdfWindow()
                       }}
-                      className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-5 font-bold text-white transition hover:bg-white/10"
+                      className="inline-flex h-12 w-full items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-5 font-bold text-white transition hover:bg-white/10"
                     >
                       Close
                     </button>
                   </div>
                 </div>
-              ) : null}
+              )}
             </div>
           </div>
         </div>
