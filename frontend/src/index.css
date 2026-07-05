@@ -1,1 +1,22 @@
 @import "tailwindcss";
+
+@keyframes notice-marquee {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.notice-marquee-track {
+  animation: notice-marquee 20s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-marquee-track {
+    animation: none;
+    transform: none;
+  }
+}

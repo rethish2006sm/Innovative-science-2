@@ -86,29 +86,15 @@ const Homepage = () => {
   useEffect(() => {
     let cancelled = false
 
-    const loadStaticContent = async () => {
+    const loadChapterData = async () => {
       setChaptersLoading(true)
 
       try {
-        const [chaptersData, classesData, feedbackData, progressData] = await Promise.all([
-          apiRequest('/api/chapters').catch(() => null),
-          apiRequest('/api/classes').catch(() => null),
-          apiRequest('/api/feedback/featured?limit=3').catch(() => ({ feedback: [] })),
-          auth?.token ? apiRequest('/api/progress/me').catch(() => null) : Promise.resolve(null),
-        ])
+        const chaptersData = await apiRequest('/api/chapters').catch(() => null)
 
         if (cancelled) return
 
-        if (chaptersData) {
-          setChapters(chaptersData.chapters || [])
-        }
-
-        if (classesData) {
-          setClassOptions(classesData.classes || [])
-        }
-
-        setFeaturedFeedback(feedbackData.feedback || [])
-        setProgress(progressData?.progress || null)
+        setChapters(chaptersData?.chapters || [])
       } finally {
         if (!cancelled) {
           setChaptersLoading(false)
@@ -116,14 +102,52 @@ const Homepage = () => {
       }
     }
 
-    loadStaticContent().catch(() => {
+    const loadBackgroundData = async () => {
+      try {
+        const [classesData, feedbackData, progressData] = await Promise.all([
+          apiRequest('/api/classes').catch(() => null),
+          apiRequest('/api/feedback/featured?limit=3').catch(() => ({ feedback: [] })),
+          auth?.token ? apiRequest('/api/progress/me').catch(() => null) : Promise.resolve(null),
+        ])
+
+        if (cancelled) return
+
+        if (classesData) {
+          setClassOptions(classesData.classes || [])
+        }
+
+        setFeaturedFeedback(feedbackData.feedback || [])
+        setProgress(progressData?.progress || null)
+      } catch (error) {
+        if (!cancelled) {
+          setFeaturedFeedback([])
+        }
+      }
+    }
+
+    loadChapterData().catch(() => {
       if (!cancelled) {
         setChaptersLoading(false)
       }
     })
 
+    const scheduleBackgroundLoad = () => {
+      loadBackgroundData()
+    }
+
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(scheduleBackgroundLoad)
+      return () => {
+        cancelled = true
+        window.cancelIdleCallback(idleId)
+      }
+    }
+
+    const timeoutId = window.setTimeout(scheduleBackgroundLoad, 0)
+
     return () => {
       cancelled = true
+      window.clearTimeout(timeoutId)
     }
   }, [auth?.token])
 

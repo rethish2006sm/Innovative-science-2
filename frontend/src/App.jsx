@@ -3,6 +3,7 @@ import { HashRouter, Link, Navigate, Route, Routes, useLocation } from 'react-ro
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
+import SiteNoticeBanner from './components/SiteNoticeBanner'
 import Aboutpage from './pages/Aboutpage'
 import ChapterWeightage from './pages/Chapter_weightage'
 import Chapters from './pages/Chapters'
@@ -28,6 +29,7 @@ import Testbuilderpage from './pages/Testbuilderpage'
 import Topicspage from './pages/Topicspage'
 import TrueorFalse from './pages/TrueorFalse'
 import Seo from './components/Seo'
+import { apiRequest } from './api'
 import { authEvents, getStoredAuth } from './authStorage'
 
 const SITE_DESCRIPTION =
@@ -287,9 +289,13 @@ const AppLayout = () => {
   const { pathname } = useLocation()
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [showSigninReminder, setShowSigninReminder] = useState(false)
+  const [siteNotice, setSiteNotice] = useState(null)
+  const [dismissedNoticeKey, setDismissedNoticeKey] = useState('')
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
   const isAuthRoute = pathname === '/signin' || pathname === '/signup'
   const seo = getSeoFromPathname(pathname)
+  const siteNoticeKey = siteNotice?.id ? `${siteNotice.id}:${siteNotice.updatedAt || ''}` : ''
+  const showSiteNotice = Boolean(siteNotice?.message && !isObjectivePracticeRoute && siteNoticeKey && dismissedNoticeKey !== siteNoticeKey)
 
   useEffect(() => {
     const syncAuth = () => setAuth(getStoredAuth())
@@ -317,6 +323,34 @@ const AppLayout = () => {
     return () => window.clearInterval(timer)
   }, [auth?.token, isAuthRoute, pathname])
 
+  useEffect(() => {
+    let active = true
+
+    const loadSiteNotice = async () => {
+      try {
+        const data = await apiRequest('/api/announcement')
+        if (!active) {
+          return
+        }
+
+        setSiteNotice(data.announcement || null)
+      } catch {
+        if (active) {
+          setSiteNotice(null)
+        }
+      }
+    }
+
+    loadSiteNotice()
+
+    const timer = window.setInterval(loadSiteNotice, 30000)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [pathname])
+
   return (
     <>
       <Seo
@@ -327,8 +361,16 @@ const AppLayout = () => {
       />
       <RankNotifier />
       {!isObjectivePracticeRoute && <Navbar />}
-      <main className={`min-h-screen w-full bg-slate-50 text-slate-950 ${isObjectivePracticeRoute ? 'pt-0' : 'pt-24'}`}>
-        <Routes>
+      <div className={isObjectivePracticeRoute ? '' : 'pt-24'}>
+        {showSiteNotice && (
+          <SiteNoticeBanner
+            message={siteNotice.message}
+            color={siteNotice.color}
+            onClose={() => setDismissedNoticeKey(siteNoticeKey)}
+          />
+        )}
+        <main className="min-h-screen w-full bg-slate-50 text-slate-950">
+          <Routes>
           <Route path="/" element={<Homepage />} />
           <Route path="/about" element={<Aboutpage />} />
           <Route path="/contact" element={<Contactpage />} />
@@ -377,8 +419,9 @@ const AppLayout = () => {
               </AuthRedirect>
             }
           />
-        </Routes>
-      </main>
+          </Routes>
+        </main>
+      </div>
       {!isObjectivePracticeRoute && <Footer />}
       {showSigninReminder && !auth?.token && !isAuthRoute && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">

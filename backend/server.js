@@ -8,6 +8,7 @@ const fs = require('fs')
 const multer = require('multer')
 const sharp = require('sharp')
 const path = require('path')
+const compression = require('compression')
 
 dotenv.config()
 
@@ -98,6 +99,7 @@ app.use(
     credentials: true,
   }),
 )
+app.use(compression())
 app.use(express.json({ limit: '2mb' }))
 
 const frontendDistPath = path.resolve(__dirname, '..', 'frontend', 'dist')
@@ -154,9 +156,48 @@ const userSchema = new mongoose.Schema(
       ref: 'Class',
       default: null,
     },
+    totalScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalMarks: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalCorrect: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalBrainCells: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    leaderboardQuestionIds: {
+      type: [String],
+      default: [],
+    },
+    totalAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true },
 )
+
+userSchema.index({ isAdmin: 1, classId: 1 })
+userSchema.index({ isAdmin: 1, createdAt: -1 })
+userSchema.index({ isAdmin: 1, totalScore: -1 })
+userSchema.index({ isAdmin: 1, totalBrainCells: -1 })
+userSchema.index({ isAdmin: 1, classId: 1, totalScore: -1 })
+userSchema.index({ isAdmin: 1, classId: 1, totalBrainCells: -1 })
+userSchema.index({ isAdmin: 1, name: 1 })
+userSchema.index({ isAdmin: 1, email: 1 })
+userSchema.index({ isAdmin: 1, phoneNumber: 1 })
 
 const User = mongoose.model('User', userSchema)
 
@@ -524,6 +565,9 @@ const practiceAttemptSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+practiceAttemptSchema.index({ user: 1, createdAt: -1 })
+practiceAttemptSchema.index({ user: 1, attemptType: 1, createdAt: -1 })
+
 const reportSchema = new mongoose.Schema(
   {
     user: {
@@ -566,6 +610,8 @@ const reportSchema = new mongoose.Schema(
   },
   { timestamps: true },
 )
+
+reportSchema.index({ createdAt: -1 })
 
 const messageSchema = new mongoose.Schema(
   {
@@ -612,6 +658,8 @@ const messageSchema = new mongoose.Schema(
   },
   { timestamps: true },
 )
+
+messageSchema.index({ createdAt: -1 })
 
 const classPostSchema = new mongoose.Schema(
   {
@@ -703,6 +751,12 @@ const pyqSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    linkUrl: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: '',
+    },
     pdf: {
       data: Buffer,
       contentType: String,
@@ -713,11 +767,36 @@ const pyqSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+pyqSchema.index({ createdAt: -1 })
+
 const Class = mongoose.model('Class', classSchema)
 const PracticeAttempt = mongoose.model('PracticeAttempt', practiceAttemptSchema)
 const Report = mongoose.model('Report', reportSchema)
 const Message = mongoose.model('Message', messageSchema)
 const Pyq = mongoose.model('Pyq', pyqSchema)
+const siteNoticeSchema = new mongoose.Schema(
+  {
+    message: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 500,
+    },
+    color: {
+      type: String,
+      trim: true,
+      maxlength: 20,
+      default: 'amber',
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  { timestamps: true },
+)
+const SiteNotice = mongoose.model('SiteNotice', siteNoticeSchema)
 const ContactMessage = mongoose.model(
   'ContactMessage',
   new mongoose.Schema(
@@ -755,6 +834,8 @@ const ContactMessage = mongoose.model(
     { timestamps: true },
   ),
 )
+
+ContactMessage.schema.index({ createdAt: -1 })
 
 const feedbackSchema = new mongoose.Schema(
   {
@@ -840,6 +921,8 @@ const feedbackSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+feedbackSchema.index({ createdAt: -1 })
+
 const Feedback = mongoose.model('Feedback', feedbackSchema)
 
 const publicUser = (user, { includePassword = false } = {}) => ({
@@ -856,6 +939,17 @@ const publicUser = (user, { includePassword = false } = {}) => ({
         user.profileImage.updatedAt?.getTime() || Date.now()
       }`
     : '',
+})
+
+const formatLeaderboardUser = (user) => ({
+  id: String(user._id || user.id || ''),
+  name: String(user.name || 'Student').trim() || 'Student',
+  className: String(user.classId?.name || user.className || '').trim(),
+  totalScore: safeNumber(user.totalScore),
+  totalBrainCells: safeNumber(user.totalBrainCells),
+  totalMarks: safeNumber(user.totalMarks),
+  totalCorrect: safeNumber(user.totalCorrect),
+  totalAttempts: safeNumber(user.totalAttempts),
 })
 
 const publicTopic = (topic, isAdmin = false) => {
@@ -887,11 +981,26 @@ const publicPyq = (pyq) => ({
   month: pyq.month || '',
   subject: pyq.subject || '',
   year: pyq.year || '',
+  linkUrl: normalizeDocumentLink(pyq.linkUrl)
+    || (pyq.pdf?.data ? `/api/pyqs/${pyq._id}/pdf?v=${pyq.pdf.updatedAt?.getTime() || Date.now()}` : ''),
   pdfUrl: pyq.pdf?.data
     ? `/api/pyqs/${pyq._id}/pdf?v=${pyq.pdf.updatedAt?.getTime() || Date.now()}`
     : '',
   uploadedAt: pyq.createdAt,
 })
+
+const publicSiteNotice = (notice) => {
+  if (!notice) {
+    return null
+  }
+
+  return {
+    id: String(notice._id),
+    message: String(notice.message || ''),
+    color: String(notice.color || 'amber'),
+    updatedAt: notice.updatedAt,
+  }
+}
 
 const bufferToDataUrl = (file = {}) => {
   if (!file?.data || !file?.contentType) {
@@ -1020,7 +1129,7 @@ const getAuthenticatedUserFromRequest = async (req) => {
       return null
     }
 
-    const user = await User.findById(userId).populate('classId')
+    const user = await User.findById(userId).populate('classId', 'name')
     return user || null
   } catch (error) {
     return null
@@ -1089,6 +1198,57 @@ const allocateBrainCellsByWeight = (entries = [], totalBrainCells = 0, getWeight
 const safeNumber = (value) => {
   const number = Number(value)
   return Number.isFinite(number) ? number : 0
+}
+
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const summarizeStoredUserProgress = (user = {}) => {
+  const totalScore = safeNumber(user.totalCorrect ?? user.totalScore)
+  const totalQuestions = safeNumber(user.totalMarks)
+  const totalBrainCells = safeNumber(user.totalBrainCells)
+  const attemptCount = safeNumber(user.totalAttempts)
+
+  return {
+    totalBrainCells,
+    totalScore,
+    totalQuestions,
+    attemptCount,
+    averagePercent: totalQuestions ? Math.round((totalScore / totalQuestions) * 100) : 0,
+  }
+}
+
+const calculateLeaderboardCellsFromAttempt = (attempt = {}, rewardedQuestionIds = new Set()) => {
+  const nextRewardedQuestionIds = new Set(rewardedQuestionIds)
+  const questionBreakdown = Array.isArray(attempt.questionBreakdown) ? attempt.questionBreakdown : []
+
+  if (questionBreakdown.length) {
+    let leaderboardCells = 0
+
+    questionBreakdown.forEach((item) => {
+      if (item.status !== 'correct') {
+        return
+      }
+
+      const questionId = normalizeQuestionId(item.questionId)
+      if (!questionId || nextRewardedQuestionIds.has(questionId)) {
+        return
+      }
+
+      nextRewardedQuestionIds.add(questionId)
+      leaderboardCells += 1
+    })
+
+    return {
+      leaderboardCells,
+      nextRewardedQuestionIds,
+    }
+  }
+
+  const chapterBreakdown = Array.isArray(attempt.chapterBreakdown) ? attempt.chapterBreakdown : []
+  return {
+    leaderboardCells: chapterBreakdown.reduce((sum, chapterEntry) => sum + safeNumber(chapterEntry.brainCells), 0),
+    nextRewardedQuestionIds,
+  }
 }
 
 const buildChapterBreakdownEntry = ({ chapter, score, totalQuestions, objectiveLabel = '', brainCells = null }) => {
@@ -1275,18 +1435,21 @@ const buildUserProgress = async (userDoc) => {
   const user = userDoc?.toObject ? userDoc.toObject() : userDoc
   const classId = user.classId?._id || user.classId || null
   const [attempts, classDoc] = await Promise.all([
-    PracticeAttempt.find({ user: user._id }).sort({ createdAt: -1 }).lean(),
-    classId ? Class.findById(classId).lean() : Promise.resolve(null),
+    PracticeAttempt.find({ user: user._id })
+      .sort({ createdAt: -1 })
+      .select('attemptType sourceName totalScore totalQuestions brainCellsEarned createdAt chapterBreakdown conceptSummary questionBreakdown')
+      .lean(),
+    classId ? Class.findById(classId).select('name').lean() : Promise.resolve(null),
   ])
 
-  const summary = summarizeAttemptHistory(attempts, { includeChapterProgress: true })
-  const chapterReports = summary.chapterProgress.map((chapterEntry) => ({
+  const summary = summarizeStoredUserProgress(user)
+  const chapterSummary = summarizeAttemptHistory(attempts, { includeChapterProgress: true })
+  const chapterReports = chapterSummary.chapterProgress.map((chapterEntry) => ({
     ...chapterEntry,
     latestSuggestion: chapterEntry.conceptSummary?.summary || '',
     weakAreas: chapterEntry.conceptSummary?.focusAreas || [],
     solutionSteps: chapterEntry.conceptSummary?.solutionSteps || [],
   }))
-  const overallBrainCells = summary.totalBrainCells
 
   return {
     userId: String(user._id),
@@ -1294,7 +1457,7 @@ const buildUserProgress = async (userDoc) => {
     email: user.email,
     classId: classDoc?._id ? String(classDoc._id) : String(user.classId || ''),
     className: classDoc?.name || '',
-    totalBrainCells: overallBrainCells,
+    totalBrainCells: summary.totalBrainCells,
     averagePercent: summary.averagePercent,
     attemptCount: summary.attemptCount,
     totalScore: summary.totalScore,
@@ -1316,20 +1479,28 @@ const buildUserProgress = async (userDoc) => {
 
 const buildProgressRowsForUsers = async (users = [], { includeChapterProgress = false } = {}) => {
   const userIds = users.map((user) => user._id)
-  const attempts = await PracticeAttempt.find({ user: { $in: userIds } }).sort({ createdAt: -1 }).lean()
-  const attemptMap = new Map()
+  const attemptMap = includeChapterProgress ? new Map() : null
 
-  attempts.forEach((attempt) => {
-    const key = String(attempt.user)
-    const current = attemptMap.get(key) || []
-    current.push(attempt)
-    attemptMap.set(key, current)
-  })
+  if (includeChapterProgress) {
+    const attempts = await PracticeAttempt.find({ user: { $in: userIds } })
+      .sort({ createdAt: -1 })
+      .select('user attemptType sourceName totalScore totalQuestions brainCellsEarned createdAt chapterBreakdown conceptSummary questionBreakdown')
+      .lean()
+
+    attempts.forEach((attempt) => {
+      const key = String(attempt.user)
+      const current = attemptMap.get(key) || []
+      current.push(attempt)
+      attemptMap.set(key, current)
+    })
+  }
 
   return Promise.all(users.map(async (user) => {
-    const summary = summarizeAttemptHistory(attemptMap.get(String(user._id)) || [], {
-      includeChapterProgress,
-    })
+    const summary = includeChapterProgress
+      ? summarizeAttemptHistory(attemptMap.get(String(user._id)) || [], {
+          includeChapterProgress,
+        })
+      : summarizeStoredUserProgress(user)
     const classId = user.classId?._id || user.classId || null
     const classDoc = classId && typeof classId === 'object' && classId.name
       ? classId
@@ -1351,9 +1522,200 @@ const buildProgressRowsForUsers = async (users = [], { includeChapterProgress = 
       attemptCount: summary.attemptCount,
       totalScore: summary.totalScore,
       totalQuestions: summary.totalQuestions,
-      chapterProgress: summary.chapterProgress,
+      chapterProgress: summary.chapterProgress || [],
     }
   }))
+}
+
+const buildAdminStudentRow = (user) => {
+  const classDoc = user.classId && typeof user.classId === 'object'
+    ? user.classId
+    : null
+  const summary = summarizeStoredUserProgress(user)
+
+  return {
+    id: String(user._id),
+    name: String(user.name || 'Student').trim() || 'Student',
+    email: String(user.email || '').trim(),
+    phoneNumber: String(user.phoneNumber || '').trim(),
+    classId: classDoc?._id ? String(classDoc._id) : String(user.classId || ''),
+    className: classDoc?.name || '',
+    totalBrainCells: summary.totalBrainCells,
+    averagePercent: summary.averagePercent,
+    attemptCount: summary.attemptCount,
+    totalScore: summary.totalScore,
+    totalQuestions: summary.totalQuestions,
+  }
+}
+
+const buildAdminStudentQuery = async ({ search = '', classId = '' } = {}) => {
+  const query = { isAdmin: false }
+  const trimmedClassId = String(classId || '').trim()
+
+  if (trimmedClassId === '__no_class__') {
+    query.classId = null
+  } else if (trimmedClassId) {
+    query.classId = trimmedClassId
+  }
+
+  const trimmedSearch = String(search || '').trim()
+  if (!trimmedSearch) {
+    return query
+  }
+
+  const escapedSearch = escapeRegex(trimmedSearch)
+  const classMatches = await Class.find({
+    name: { $regex: escapedSearch, $options: 'i' },
+  })
+    .select('_id')
+    .lean()
+
+  const orClauses = [
+    { name: { $regex: escapedSearch, $options: 'i' } },
+    { email: { $regex: escapedSearch, $options: 'i' } },
+    { phoneNumber: { $regex: escapedSearch, $options: 'i' } },
+  ]
+
+  if (classMatches.length) {
+    orClauses.push({
+      classId: {
+        $in: classMatches.map((item) => item._id),
+      },
+    })
+  }
+
+  query.$or = orClauses
+  return query
+}
+
+const buildAdminDashboardCounts = async () => {
+  const [totalStudents, totalClasses, totalReports, totalFeedback] = await Promise.all([
+    User.countDocuments({ isAdmin: false }),
+    Class.countDocuments({}),
+    Report.countDocuments({}),
+    Feedback.countDocuments({}),
+  ])
+
+  return {
+    totalStudents,
+    totalClasses,
+    totalReports,
+    totalFeedback,
+  }
+}
+
+const updateLeaderboardTotals = async (userId, attemptData = {}) => {
+  if (!userId) {
+    return
+  }
+
+  try {
+    const user = await User.findById(userId).select('leaderboardQuestionIds').lean()
+    if (!user) {
+      return
+    }
+
+    const rewardedQuestionIds = new Set((user.leaderboardQuestionIds || []).map((item) => String(item)))
+    const { leaderboardCells, nextRewardedQuestionIds } = calculateLeaderboardCellsFromAttempt(attemptData, rewardedQuestionIds)
+    const score = safeNumber(attemptData.score ?? attemptData.totalScore ?? 0)
+    const totalQuestions = safeNumber(attemptData.totalQuestions)
+
+    await User.updateOne(
+      { _id: userId, isAdmin: false },
+      {
+        $inc: {
+          totalScore: leaderboardCells,
+          totalMarks: safeNumber(totalQuestions),
+          totalCorrect: safeNumber(score),
+          totalBrainCells: leaderboardCells,
+          totalAttempts: 1,
+        },
+        $set: {
+          leaderboardQuestionIds: [...nextRewardedQuestionIds],
+        },
+      },
+    )
+  } catch (error) {
+    console.error(`Could not update leaderboard totals for user ${userId}:`, error.message)
+  }
+}
+
+const syncLeaderboardTotalsFromAttempts = async () => {
+  const users = await User.find({ isAdmin: false }).select('_id').lean()
+  const userIdSet = new Set(users.map((user) => String(user._id)))
+  const attempts = await PracticeAttempt.find({ user: { $in: [...userIdSet] } })
+    .sort({ createdAt: 1 })
+    .lean()
+
+  const totals = new Map([...userIdSet].map((userId) => ([
+    userId,
+    {
+      totalScore: 0,
+      totalMarks: 0,
+      totalCorrect: 0,
+      totalBrainCells: 0,
+      totalAttempts: 0,
+      leaderboardQuestionIds: [],
+    },
+  ])))
+
+  const rewardedQuestionIdsMap = new Map([...userIdSet].map((userId) => [userId, new Set()]))
+
+  attempts.forEach((attempt) => {
+    const userId = String(attempt.user || '')
+    const currentTotals = totals.get(userId)
+    if (!currentTotals) {
+      return
+    }
+
+    const rewardedQuestionIds = rewardedQuestionIdsMap.get(userId) || new Set()
+    const { leaderboardCells, nextRewardedQuestionIds } = calculateLeaderboardCellsFromAttempt(attempt, rewardedQuestionIds)
+    rewardedQuestionIdsMap.set(userId, nextRewardedQuestionIds)
+
+    currentTotals.totalScore += leaderboardCells
+    currentTotals.totalMarks += safeNumber(attempt.totalQuestions)
+    currentTotals.totalCorrect += safeNumber(attempt.totalScore)
+    currentTotals.totalBrainCells += leaderboardCells
+    currentTotals.totalAttempts += 1
+    currentTotals.leaderboardQuestionIds = [...nextRewardedQuestionIds]
+  })
+
+  await User.updateMany(
+    { isAdmin: false },
+    {
+      $set: {
+        totalScore: 0,
+        totalMarks: 0,
+        totalCorrect: 0,
+        totalBrainCells: 0,
+        leaderboardQuestionIds: [],
+        totalAttempts: 0,
+      },
+    },
+  )
+
+  if (!totals.size) {
+    return
+  }
+
+  await User.bulkWrite(
+    [...totals.entries()].map(([userId, entry]) => ({
+      updateOne: {
+        filter: { _id: userId, isAdmin: false },
+        update: {
+          $set: {
+            totalScore: safeNumber(entry.totalScore),
+            totalMarks: safeNumber(entry.totalMarks),
+            totalCorrect: safeNumber(entry.totalCorrect),
+            totalBrainCells: safeNumber(entry.totalBrainCells),
+            leaderboardQuestionIds: entry.leaderboardQuestionIds || [],
+            totalAttempts: safeNumber(entry.totalAttempts),
+          },
+        },
+      },
+    })),
+    { ordered: false },
+  )
 }
 
 const dedupeByKey = (items, getKey) => {
@@ -1872,7 +2234,7 @@ app.post('/api/auth/signup', async (req, res) => {
       password: String(password),
       passwordHash: '',
     })
-    await user.populate('classId')
+    await user.populate('classId', 'name')
     const token = createToken(user)
 
     res.status(201).json({
@@ -1906,7 +2268,7 @@ app.post('/api/auth/signin', async (req, res) => {
       return res.status(401).json({ message: 'Password is wrong.' })
     }
 
-    await user.populate('classId')
+    await user.populate('classId', 'name')
 
     res.json({
       token: createToken(user),
@@ -1948,7 +2310,7 @@ app.post('/api/auth/forgot-password/reset', async (req, res) => {
 })
 
 app.get('/api/auth/me', authRequired, async (req, res) => {
-  await req.user.populate('classId')
+  await req.user.populate('classId', 'name')
   res.json({ user: publicUser(req.user) })
 })
 
@@ -1962,7 +2324,7 @@ app.patch('/api/auth/profile', authRequired, async (req, res) => {
 
     req.user.name = name.trim()
     await req.user.save()
-    const refreshedUser = await User.findById(req.user._id).populate('classId')
+    const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
 
     res.json({ user: publicUser(refreshedUser) })
   } catch (error) {
@@ -1996,7 +2358,7 @@ app.patch('/api/auth/update-email', authRequired, async (req, res) => {
 
     req.user.email = normalizedEmail
     await req.user.save()
-    const refreshedUser = await User.findById(req.user._id).populate('classId')
+    const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
 
     res.json({ user: publicUser(refreshedUser) })
   } catch (error) {
@@ -2050,7 +2412,7 @@ app.post('/api/auth/profile-image', authRequired, upload.single('profileImage'),
       updatedAt: new Date(),
     }
     await req.user.save()
-    const refreshedUser = await User.findById(req.user._id).populate('classId')
+    const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
 
     res.json({ user: publicUser(refreshedUser) })
   } catch (error) {
@@ -2511,7 +2873,7 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
         },
       },
       {
-        new: true,
+        returnDocument: 'after',
         upsert: true,
         setDefaultsOnInsert: true,
       },
@@ -2861,7 +3223,7 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
             isDone: false,
           },
         },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     )
 
     if (!shouldMarkDone) {
@@ -2895,6 +3257,20 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
         solutionSteps: ['Review the completed table carefully.', 'Repeat the chapter once more to keep the pattern fresh.'],
       },
       questionBreakdown: [],
+    })
+    await updateLeaderboardTotals(req.user._id, {
+      score: totalQuestions,
+      totalQuestions,
+      brainCellsEarned: totalBrainCells,
+      chapterBreakdown: [
+        buildChapterBreakdownEntry({
+          chapter: objectiveType.topic?.chapter,
+          score: totalQuestions,
+          totalQuestions,
+          objectiveLabel: objectiveType.type,
+          brainCells: totalBrainCells,
+        }),
+      ],
     })
 
     clearCachedResponses('leaderboard:')
@@ -2981,7 +3357,7 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
         rewardedQuestionIds: [...rewardedQuestionIds],
         isDone: true,
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     )
     const suggestion = await generateProgressSuggestion({
       objectiveType: objectiveType.type,
@@ -3013,6 +3389,13 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
         solutionSteps: suggestion.solutionSteps,
       },
       questionBreakdown,
+    })
+    await updateLeaderboardTotals(req.user._id, {
+      score,
+      totalQuestions: questions.length,
+      brainCellsEarned,
+      questionBreakdown,
+      chapterBreakdown,
     })
 
     clearCachedResponses('leaderboard:')
@@ -3066,7 +3449,7 @@ app.delete('/api/topics/:id', authRequired, adminRequired, async (req, res) => {
 
 app.get('/api/progress/me', authRequired, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate('classId')
+    const user = await User.findById(req.user._id).populate('classId', 'name')
     const progress = await buildUserProgress(user)
     res.json({ user: publicUser(user), progress })
   } catch (error) {
@@ -3076,7 +3459,7 @@ app.get('/api/progress/me', authRequired, async (req, res) => {
 
 app.get('/api/progress/improvement', authRequired, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate('classId')
+    const user = await User.findById(req.user._id).populate('classId', 'name')
     const progress = await buildUserProgress(user)
     res.json({ user: publicUser(user), progress })
   } catch (error) {
@@ -3084,50 +3467,42 @@ app.get('/api/progress/improvement', authRequired, async (req, res) => {
   }
 })
 
+app.get('/api/admin/dashboard', authRequired, adminRequired, async (req, res) => {
+  try {
+    const counts = await buildAdminDashboardCounts()
+
+    res.set('Cache-Control', 'no-store')
+    res.json({ counts })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load dashboard counts.' })
+  }
+})
+
 app.get('/api/leaderboard', optionalAuth, async (req, res) => {
   try {
     const scope = String(req.query.scope || 'all').toLowerCase()
     const requestedClassId = String(req.query.classId || req.user?.classId || '').trim()
-    const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 100)
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 20)
     const classFilter = scope === 'class' && requestedClassId ? { classId: requestedClassId } : {}
     const users = await User.find({
       isAdmin: false,
       ...classFilter,
     })
-      .select('name email classId isAdmin')
-      .populate('classId')
+      .select('name classId totalScore totalMarks totalCorrect totalBrainCells totalAttempts')
+      .populate('classId', 'name')
+      .sort({ totalScore: -1 })
+      .limit(limit)
       .lean()
 
-    const rows = await buildProgressRowsForUsers(users, { includeChapterProgress: false })
-    rows.sort((left, right) => {
-      if (right.totalBrainCells !== left.totalBrainCells) {
-        return right.totalBrainCells - left.totalBrainCells
-      }
-
-      if (right.averagePercent !== left.averagePercent) {
-        return right.averagePercent - left.averagePercent
-      }
-
-      return right.attemptCount - left.attemptCount
-    })
-
     const payload = {
-      leaderboard: rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        className: row.className || '',
-        totalBrainCells: row.totalBrainCells,
-      })),
+      leaderboard: users.map((user) => formatLeaderboardUser(user)),
       scope,
       classId: requestedClassId,
       className: requestedClassId ? (await Class.findById(requestedClassId).select('name').lean())?.name || '' : '',
     }
 
     res.set('Cache-Control', 'no-store')
-    res.json({
-      ...payload,
-      leaderboard: payload.leaderboard.slice(0, limit),
-    })
+    res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load leaderboard.' })
   }
@@ -3135,33 +3510,34 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
 
 app.get('/api/leaderboard/me', authRequired, async (req, res) => {
   try {
-    const users = await User.find({
-      isAdmin: false,
-    })
-      .select('name email classId isAdmin')
-      .populate('classId')
+    const totalStudents = await User.countDocuments({ isAdmin: false })
+
+    if (req.user.isAdmin) {
+      return res.json({
+        rank: null,
+        totalStudents,
+        currentUser: null,
+      })
+    }
+
+    const currentUser = await User.findById(req.user._id)
+      .select('name classId totalScore totalMarks totalCorrect totalBrainCells totalAttempts isAdmin')
+      .populate('classId', 'name')
       .lean()
 
-    const rows = await buildProgressRowsForUsers(users, { includeChapterProgress: false })
-    rows.sort((left, right) => {
-      if (right.totalBrainCells !== left.totalBrainCells) {
-        return right.totalBrainCells - left.totalBrainCells
-      }
+    if (!currentUser) {
+      return res.status(404).json({ message: 'Could not load your rank.' })
+    }
 
-      if (right.averagePercent !== left.averagePercent) {
-        return right.averagePercent - left.averagePercent
-      }
-
-      return right.attemptCount - left.attemptCount
+    const betterScoreCount = await User.countDocuments({
+      isAdmin: false,
+      totalScore: { $gt: safeNumber(currentUser.totalScore) },
     })
 
-    const currentUserIndex = rows.findIndex((row) => row.id === req.user._id.toString())
-    const currentUser = currentUserIndex >= 0 ? rows[currentUserIndex] : null
-
     res.json({
-      rank: currentUserIndex >= 0 ? currentUserIndex + 1 : null,
-      totalStudents: rows.length,
-      currentUser,
+      rank: betterScoreCount + 1,
+      totalStudents,
+      currentUser: formatLeaderboardUser(currentUser),
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load your rank.' })
@@ -3170,7 +3546,7 @@ app.get('/api/leaderboard/me', authRequired, async (req, res) => {
 
 app.get('/api/classes', async (req, res) => {
   try {
-    const classes = await Class.find().sort({ name: 1 }).lean()
+    const classes = await Class.find().select('name description grade').sort({ name: 1 }).lean()
     const classIds = classes.map((item) => item._id)
     const studentCounts = await User.aggregate([
       { $match: { isAdmin: false, classId: { $in: classIds } } },
@@ -3194,42 +3570,32 @@ app.get('/api/classes', async (req, res) => {
 
 app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => {
   try {
-    const search = String(req.query.search || '').trim().toLowerCase()
-    const users = await User.find({ isAdmin: false })
-      .select('name email phoneNumber password passwordHash classId isAdmin')
-      .populate('classId')
+    const search = String(req.query.search || '').trim()
+    const classId = String(req.query.classId || '').trim()
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+    const page = Math.max(Number(req.query.page) || 1, 1)
+    const query = await buildAdminStudentQuery({ search, classId })
+    const totalStudents = await User.countDocuments(query)
+    const totalPages = totalStudents ? Math.max(Math.ceil(totalStudents / limit), 1) : 0
+    const safePage = totalPages ? Math.min(page, totalPages) : 1
+    const users = await User.find(query)
+      .select('name email phoneNumber classId totalBrainCells totalMarks totalCorrect totalAttempts')
+      .populate('classId', 'name')
+      .sort({ totalBrainCells: -1, name: 1, _id: 1 })
+      .skip((safePage - 1) * limit)
+      .limit(limit)
       .lean()
-    const rows = await buildProgressRowsForUsers(users, { includeChapterProgress: false })
-
-    const filtered = search
-      ? rows.filter((student) => (
-        student.name.toLowerCase().includes(search) ||
-        student.email.toLowerCase().includes(search) ||
-        student.phoneNumber.toLowerCase().includes(search) ||
-        student.className.toLowerCase().includes(search)
-      ))
-      : rows
-
-    filtered.sort((left, right) => right.totalBrainCells - left.totalBrainCells)
-
-    const classes = await Class.find().sort({ name: 1 }).lean()
-    const classCounts = await User.aggregate([
-      { $match: { isAdmin: false, classId: { $ne: null } } },
-      { $group: { _id: '$classId', count: { $sum: 1 } } },
-    ])
-    const classCountMap = new Map(classCounts.map((item) => [String(item._id), item.count]))
-
-    const payload = {
-      totalStudents: rows.length,
-      students: filtered,
-      classes: classes.map((item) => ({
-        ...item,
-        studentCount: classCountMap.get(String(item._id)) || 0,
-      })),
-    }
 
     res.set('Cache-Control', 'no-store')
-    res.json(payload)
+    res.json({
+      students: users.map(buildAdminStudentRow),
+      totalStudents,
+      totalPages,
+      page: safePage,
+      limit,
+      search,
+      classId,
+    })
   } catch (error) {
     res.status(500).json({ message: 'Could not load student list.' })
   }
@@ -3237,7 +3603,9 @@ app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => 
 
 app.get('/api/admin/students/:id', authRequired, adminRequired, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).populate('classId')
+    const user = await User.findById(req.params.id)
+      .select('name email phoneNumber classId isAdmin password passwordHash profileImage totalBrainCells totalMarks totalCorrect totalAttempts')
+      .populate('classId', 'name')
 
     if (!user || user.isAdmin) {
       return res.status(404).json({ message: 'Student not found.' })
@@ -3255,7 +3623,10 @@ app.get('/api/admin/students/:id', authRequired, adminRequired, async (req, res)
 
 app.get('/api/admin/classes', authRequired, adminRequired, async (req, res) => {
   try {
-    const classes = await Class.find().sort({ createdAt: -1 }).lean()
+    const classes = await Class.find()
+      .select('name description grade createdAt')
+      .sort({ createdAt: -1 })
+      .lean()
     const classIds = classes.map((item) => item._id)
     const studentCounts = await User.aggregate([
       { $match: { isAdmin: false, classId: { $in: classIds } } },
@@ -3377,7 +3748,7 @@ app.post('/api/admin/classes/:id/students', authRequired, adminRequired, async (
       { $set: { classId: classDoc._id } },
     )
 
-    const updatedStudents = await User.find({ _id: { $in: studentIds } }).populate('classId')
+    const updatedStudents = await User.find({ _id: { $in: studentIds } }).populate('classId', 'name')
 
     clearCachedResponses('admin:classes')
     clearCachedResponses('admin:students:')
@@ -3393,7 +3764,7 @@ app.post('/api/admin/classes/:id/students', authRequired, adminRequired, async (
 app.patch('/api/admin/students/:id/class', authRequired, adminRequired, async (req, res) => {
   try {
     const { classId } = req.body
-    const user = await User.findById(req.params.id)
+    const user = await User.findById(req.params.id).select('classId isAdmin name email phoneNumber totalBrainCells totalMarks totalCorrect totalAttempts')
 
     if (!user || user.isAdmin) {
       return res.status(404).json({ message: 'Student not found.' })
@@ -3413,7 +3784,9 @@ app.patch('/api/admin/students/:id/class', authRequired, adminRequired, async (r
       await user.save()
     }
 
-    const refreshedUser = await User.findById(user._id).populate('classId')
+    const refreshedUser = await User.findById(user._id)
+      .select('name email phoneNumber classId isAdmin password passwordHash profileImage totalBrainCells totalMarks totalCorrect totalAttempts')
+      .populate('classId', 'name')
     clearCachedResponses('admin:classes')
     clearCachedResponses('admin:students:')
     res.json({ user: publicUser(refreshedUser) })
@@ -3425,13 +3798,34 @@ app.patch('/api/admin/students/:id/class', authRequired, adminRequired, async (r
 app.get('/api/admin/reports', authRequired, adminRequired, async (req, res) => {
   try {
     const reports = await Report.find()
+      .select('user objectiveType chapterId questionId reason details status createdAt')
       .sort({ createdAt: -1 })
       .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
       .populate([
-        { path: 'user' },
-        { path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter' } } },
-        { path: 'chapterId' },
-        { path: 'questionId', populate: { path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter' } } } },
+        { path: 'user', select: 'name email phoneNumber classId' },
+        {
+          path: 'objectiveType',
+          select: 'type topic',
+          populate: {
+            path: 'topic',
+            select: 'name chapter',
+            populate: { path: 'chapter', select: 'number name' },
+          },
+        },
+        { path: 'chapterId', select: 'number name' },
+        {
+          path: 'questionId',
+          select: 'question options objectiveType',
+          populate: {
+            path: 'objectiveType',
+            select: 'type topic',
+            populate: {
+              path: 'topic',
+              select: 'name chapter',
+              populate: { path: 'chapter', select: 'number name' },
+            },
+          },
+        },
       ])
       .lean()
 
@@ -3481,6 +3875,7 @@ app.delete('/api/admin/reports/:id', authRequired, adminRequired, async (req, re
 app.get('/api/admin/contacts', authRequired, adminRequired, async (req, res) => {
   try {
     const contacts = await ContactMessage.find()
+      .select('name email subject message createdAt')
       .sort({ createdAt: -1 })
       .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
       .lean()
@@ -3657,9 +4052,13 @@ app.get('/api/feedback/featured', async (req, res) => {
 app.get('/api/admin/feedback', authRequired, adminRequired, async (req, res) => {
   try {
     const feedback = await Feedback.find()
+      .select('user classId clientKey name className rating message featured status createdAt')
       .sort({ createdAt: -1 })
       .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
-      .populate('user classId')
+      .populate([
+        { path: 'user', select: 'name email classId' },
+        { path: 'classId', select: 'name grade' },
+      ])
       .lean()
 
     res.json({
@@ -3735,7 +4134,7 @@ app.delete('/api/feedback/:id', authRequired, async (req, res) => {
 
 app.get('/api/messages/me', authRequired, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate('classId')
+    const user = await User.findById(req.user._id).populate('classId', 'name')
     const classId = user.classId?._id || user.classId
     const messages = await Message.find({
       $or: [
@@ -3754,6 +4153,17 @@ app.get('/api/messages/me', authRequired, async (req, res) => {
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load messages.' })
+  }
+})
+
+app.get('/api/announcement', async (req, res) => {
+  try {
+    const notice = await SiteNotice.findOne().sort({ updatedAt: -1 }).lean()
+
+    res.set('Cache-Control', 'no-store')
+    res.json({ announcement: publicSiteNotice(notice) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load announcement.' })
   }
 })
 
@@ -3808,23 +4218,72 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
   }
 })
 
-app.post('/api/admin/pyqs', authRequired, adminRequired, pdfUpload.single('pdf'), async (req, res) => {
+app.get('/api/admin/announcement', authRequired, adminRequired, async (req, res) => {
+  try {
+    const notice = await SiteNotice.findOne().sort({ updatedAt: -1 }).lean()
+    res.json({ announcement: publicSiteNotice(notice) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load announcement.' })
+  }
+})
+
+app.post('/api/admin/announcement', authRequired, adminRequired, async (req, res) => {
+  try {
+    const message = String(req.body.message || '').trim()
+    const color = ['amber', 'teal', 'rose', 'sky', 'emerald', 'violet', 'orange', 'lime'].includes(String(req.body.color || '').trim())
+      ? String(req.body.color || '').trim()
+      : 'amber'
+
+    if (!message) {
+      return res.status(400).json({ message: 'Please add a notice message.' })
+    }
+
+    const announcement = await SiteNotice.findOneAndUpdate(
+      {},
+      {
+        message,
+        color,
+        updatedBy: req.user._id,
+      },
+      {
+        returnDocument: 'after',
+        upsert: true,
+        setDefaultsOnInsert: true,
+      },
+    )
+
+    res.json({
+      announcement: publicSiteNotice(announcement),
+      message: 'Notice saved successfully.',
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not save notice.' })
+  }
+})
+
+app.delete('/api/admin/announcement', authRequired, adminRequired, async (req, res) => {
+  try {
+    await SiteNotice.deleteMany({})
+    res.json({ message: 'Notice removed successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not remove notice.' })
+  }
+})
+
+app.post('/api/admin/pyqs', authRequired, adminRequired, async (req, res) => {
   try {
     const title = PYQ_FIXED_TITLE
     const month = String(req.body.month || '').trim()
     const subject = PYQ_FIXED_SUBJECT
     const year = String(req.body.year || '').trim()
+    const linkUrl = normalizeDocumentLink(req.body.link || req.body.linkUrl || req.body.pdfUrl)
 
     if (!month) {
       return res.status(400).json({ message: 'Month is required.' })
     }
 
-    if (!req.file) {
-      return res.status(400).json({ message: 'Please upload a PDF file.' })
-    }
-
-    if (req.file.mimetype !== 'application/pdf') {
-      return res.status(400).json({ message: 'Only PDF files are allowed.' })
+    if (!linkUrl) {
+      return res.status(400).json({ message: 'Please add a valid PDF link.' })
     }
 
     const pyq = await Pyq.create({
@@ -3833,21 +4292,16 @@ app.post('/api/admin/pyqs', authRequired, adminRequired, pdfUpload.single('pdf')
       subject,
       year,
       uploadedBy: req.user._id,
-      pdf: {
-        data: req.file.buffer,
-        contentType: req.file.mimetype,
-        originalName: req.file.originalname,
-        updatedAt: new Date(),
-      },
+      linkUrl,
     })
 
     clearCachedResponses('pyqs:')
     res.status(201).json({
-      message: 'PYQ uploaded successfully.',
+      message: 'PYQ link saved successfully.',
       pyq: publicPyq(pyq),
     })
   } catch (error) {
-    res.status(500).json({ message: 'Could not upload PYQ.' })
+    res.status(500).json({ message: 'Could not save PYQ link.' })
   }
 })
 
@@ -4498,6 +4952,13 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
       conceptSummary,
       questionBreakdown,
     })
+    await updateLeaderboardTotals(req.user._id, {
+      score,
+      totalQuestions: questionBreakdown.length,
+      brainCellsEarned,
+      questionBreakdown,
+      chapterBreakdown,
+    })
 
     clearCachedResponses('leaderboard:')
     clearCachedResponses('admin:students:')
@@ -4535,7 +4996,7 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
     const category = String(req.query.category || '').trim()
     const normalizedCategory = category && category !== 'all' && CLASS_POST_CATEGORIES.includes(category) ? category : ''
 
-    const classDoc = await Class.findById(classId).lean()
+    const classDoc = await Class.findById(classId).select('name description grade').lean()
 
     if (!classDoc) {
       return res.status(404).json({ message: 'Class not found.' })
@@ -5080,26 +5541,31 @@ const ensureAdminUser = async () => {
       passwordHash: '',
       isAdmin: true,
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
   )
 }
 
 const startServer = async () => {
+  console.log(`Starting backend on http://localhost:${PORT}...`)
   app.listen(PORT, () => {
     console.log(`Backend running on http://localhost:${PORT}`)
   })
 
   if (!MONGODB_URI || MONGODB_URI === 'add_your_mongodb_url_here') {
     console.warn('MONGODB_URI is not set. Add your MongoDB URL in backend/.env.')
-  } else {
-    try {
-      await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 15000 })
-      await ensureAdminUser()
-      console.log('MongoDB connected')
-      console.log(`Admin ready: ${ADMIN_EMAIL}`)
-    } catch (error) {
-      console.error('MongoDB connection failed:', error.message)
-    }
+    return
+  }
+
+  try {
+    console.log('Connecting to MongoDB...')
+    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 15000 })
+    console.log('MongoDB connected')
+
+    await ensureAdminUser()
+    await syncLeaderboardTotalsFromAttempts()
+    console.log(`Admin ready: ${ADMIN_EMAIL}`)
+  } catch (error) {
+    console.error('MongoDB connection failed:', error.message)
   }
 }
 

@@ -194,7 +194,7 @@ const LeaderboardPage = () => {
     }
 
     loadLeaderboard(scope, selectedClassId, { silent: true })
-  }, [scope, selectedClassId, classOptions.length])
+  }, [scope, selectedClassId])
 
   const sortedLeaderboard = useMemo(() => mergeSortLeaderboard(leaderboard), [leaderboard])
   const topThree = useMemo(() => sortedLeaderboard.slice(0, 3), [sortedLeaderboard])

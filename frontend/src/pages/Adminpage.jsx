@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import {
   BadgePlus,
   BellRing,
-  BookOpen,
   CalendarDays,
   Download,
   Edit3,
@@ -14,7 +13,6 @@ import {
   Search,
   Send,
   Shield,
-  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -26,6 +24,16 @@ import { getStoredAuth } from '../authStorage'
 
 const emptyClassForm = { name: '', description: '', grade: '' }
 const emptyClassShareForm = { message: '', category: 'assignment', documentLink: '' }
+const NOTICE_COLOR_OPTIONS = [
+  { value: 'amber', label: 'Amber' },
+  { value: 'teal', label: 'Teal' },
+  { value: 'rose', label: 'Rose' },
+  { value: 'sky', label: 'Sky' },
+  { value: 'emerald', label: 'Emerald' },
+  { value: 'violet', label: 'Violet' },
+  { value: 'orange', label: 'Orange' },
+  { value: 'lime', label: 'Lime' },
+]
 const CLASS_POST_CATEGORIES = [
   { value: 'assignment', label: 'Assignment' },
   { value: 'practice-paper', label: 'Practice Paper' },
@@ -35,10 +43,7 @@ const CLASS_POST_CATEGORIES = [
   { value: 'test-paper', label: 'Test Paper' },
 ]
 
-const CLASS_POST_CATEGORY_LABELS = CLASS_POST_CATEGORIES.reduce((accumulator, item) => {
-  accumulator[item.value] = item.label
-  return accumulator
-}, {})
+const STUDENT_PAGE_SIZE = 20
 
 const syncClassShareTargets = (classItems = [], currentTargets = []) => {
   const targetMap = new Map(currentTargets.map((target) => [String(target.classId), target]))
@@ -56,6 +61,8 @@ const syncClassShareTargets = (classItems = [], currentTargets = []) => {
   })
 }
 
+const getStudentRowId = (student) => String(student?.id || student?._id || '')
+
 const Adminpage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
@@ -63,12 +70,35 @@ const Adminpage = () => {
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [studentClassFilter, setStudentClassFilter] = useState('')
+  const [studentQuery, setStudentQuery] = useState({
+    search: '',
+    classId: '',
+    page: 1,
+  })
+  const [dashboardCounts, setDashboardCounts] = useState({
+    totalStudents: null,
+    totalClasses: null,
+    totalReports: null,
+    totalFeedback: null,
+  })
+  const [dashboardLoading, setDashboardLoading] = useState(true)
   const [students, setStudents] = useState([])
+  const [studentsTotalCount, setStudentsTotalCount] = useState(0)
+  const [studentsTotalPages, setStudentsTotalPages] = useState(0)
+  const [studentsLoading, setStudentsLoading] = useState(true)
+  const [studentsReady, setStudentsReady] = useState(false)
   const [classes, setClasses] = useState([])
+  const [classesLoading, setClassesLoading] = useState(true)
   const [reports, setReports] = useState([])
   const [contacts, setContacts] = useState([])
   const [feedbacks, setFeedbacks] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [siteNotice, setSiteNotice] = useState(null)
+  const [siteNoticeMessage, setSiteNoticeMessage] = useState('')
+  const [siteNoticeColor, setSiteNoticeColor] = useState('amber')
+  const [reportsLoaded, setReportsLoaded] = useState(false)
+  const [contactsLoaded, setContactsLoaded] = useState(false)
+  const [noticeLoading, setNoticeLoading] = useState(false)
+  const [noticeSaving, setNoticeSaving] = useState(false)
   const [error, setError] = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [studentDetail, setStudentDetail] = useState(null)
@@ -92,21 +122,240 @@ const Adminpage = () => {
   const [contactsLoading, setContactsLoading] = useState(false)
   const [feedbackLoading, setFeedbackLoading] = useState(false)
 
-  const loadData = async (searchTerm = debouncedSearch) => {
-    setError('')
+  const dashboardRequestRef = useRef(0)
+  const studentsRequestRef = useRef(0)
+  const classesRequestRef = useRef(0)
+  const studentQueryRef = useRef(null)
+
+  const updateDashboardCount = (key, delta) => {
+    setDashboardCounts((current) => {
+      const nextValue = Math.max((Number(current[key]) || 0) + delta, 0)
+      return {
+        ...current,
+        [key]: nextValue,
+      }
+    })
+  }
+
+  const mergeStudentRecord = (student, patch = {}) => {
+    const nextClassId = Object.prototype.hasOwnProperty.call(patch, 'classId')
+      ? String(patch.classId || '')
+      : String(student?.classId || '')
+    const nextClassName = Object.prototype.hasOwnProperty.call(patch, 'className')
+      ? String(patch.className || '')
+      : String(student?.className || '')
+    return {
+      ...student,
+      ...patch,
+      id: student?.id || student?._id || patch.id || '',
+      classId: nextClassId,
+      className: nextClassName,
+      totalBrainCells: Number(patch.totalBrainCells ?? student?.totalBrainCells ?? 0),
+      averagePercent: Number(patch.averagePercent ?? student?.averagePercent ?? 0),
+      attemptCount: Number(patch.attemptCount ?? student?.attemptCount ?? 0),
+      totalScore: Number(patch.totalScore ?? student?.totalScore ?? 0),
+      totalQuestions: Number(patch.totalQuestions ?? student?.totalQuestions ?? 0),
+    }
+  }
+
+  const patchStudentState = (studentId, patch = {}) => {
+    const normalizedId = String(studentId || '')
+
+    setStudents((current) => current.map((student) => (
+      getStudentRowId(student) === normalizedId
+        ? mergeStudentRecord(student, patch)
+        : student
+    )))
+
+    setSelectedStudent((current) => (
+      current && getStudentRowId(current) === normalizedId
+        ? mergeStudentRecord(current, patch)
+        : current
+    ))
+
+    setStudentDetail((current) => {
+      if (!current || getStudentRowId(current.user) !== normalizedId) {
+        return current
+      }
+
+      return {
+        ...current,
+        user: {
+          ...current.user,
+          ...patch,
+          id: current.user.id || normalizedId,
+          classId: Object.prototype.hasOwnProperty.call(patch, 'classId')
+            ? String(patch.classId || '')
+            : String(current.user.classId || ''),
+          className: Object.prototype.hasOwnProperty.call(patch, 'className')
+            ? String(patch.className || '')
+            : String(current.user.className || ''),
+        },
+      }
+    })
+  }
+
+  const updateStudentsForClassChange = (classId, patch = {}) => {
+    const normalizedClassId = String(classId || '')
+    const normalizedPatch = {
+      ...patch,
+      classId: Object.prototype.hasOwnProperty.call(patch, 'classId') ? patch.classId : normalizedClassId,
+    }
+
+    setStudents((current) =>
+      current.map((student) =>
+        String(student.classId || '') === normalizedClassId
+          ? mergeStudentRecord(student, normalizedPatch)
+          : student,
+      ),
+    )
+
+    setSelectedStudent((current) => (
+      current && String(current.classId || '') === normalizedClassId
+        ? mergeStudentRecord(current, normalizedPatch)
+        : current
+    ))
+
+    setStudentDetail((current) => {
+      if (!current || String(current.user?.classId || '') !== normalizedClassId) {
+        return current
+      }
+
+      return {
+        ...current,
+        user: {
+          ...current.user,
+          ...normalizedPatch,
+          classId: Object.prototype.hasOwnProperty.call(normalizedPatch, 'classId')
+            ? String(normalizedPatch.classId || '')
+            : String(current.user.classId || ''),
+          className: Object.prototype.hasOwnProperty.call(normalizedPatch, 'className')
+            ? String(normalizedPatch.className || '')
+            : String(current.user.className || ''),
+        },
+      }
+    })
+  }
+
+  const loadDashboard = async () => {
+    const requestId = dashboardRequestRef.current + 1
+    dashboardRequestRef.current = requestId
+    setDashboardLoading(true)
 
     try {
-      const [studentsData, classesData] = await Promise.all([
-        apiRequest(`/api/admin/students?search=${encodeURIComponent(searchTerm)}`),
-        apiRequest('/api/admin/classes'),
-      ])
+      const data = await apiRequest('/api/admin/dashboard')
+      if (requestId !== dashboardRequestRef.current) {
+        return
+      }
 
-      setStudents(studentsData.students || [])
-      setClasses(classesData.classes || [])
+      setDashboardCounts(data.counts || {
+        totalStudents: 0,
+        totalClasses: 0,
+        totalReports: 0,
+        totalFeedback: 0,
+      })
     } catch (err) {
+      if (requestId !== dashboardRequestRef.current) {
+        return
+      }
       setError(err.message)
     } finally {
-      setLoading(false)
+      if (requestId === dashboardRequestRef.current) {
+        setDashboardLoading(false)
+      }
+    }
+  }
+
+  const loadStudents = async ({ page = 1, searchTerm = studentQuery.search, classId = studentQuery.classId, silent = false, markReady = false } = {}) => {
+    const requestId = studentsRequestRef.current + 1
+    studentsRequestRef.current = requestId
+    setStudentsLoading(true)
+
+    if (!silent) {
+      setError('')
+    }
+
+    try {
+      const params = new URLSearchParams({
+        page: String(Math.max(Number(page) || 1, 1)),
+        limit: String(STUDENT_PAGE_SIZE),
+      })
+
+      const normalizedSearch = String(searchTerm || '').trim()
+      const normalizedClassId = String(classId || '').trim()
+
+      if (normalizedSearch) {
+        params.set('search', normalizedSearch)
+      }
+
+      if (normalizedClassId) {
+        params.set('classId', normalizedClassId)
+      }
+
+      const data = await apiRequest(`/api/admin/students?${params.toString()}`)
+
+      if (requestId !== studentsRequestRef.current) {
+        return
+      }
+
+      const nextStudents = Array.isArray(data.students) ? data.students : []
+      const nextPage = Math.max(Number(data.page) || page || 1, 1)
+      setStudents(nextStudents)
+      setStudentsTotalCount(Number(data.totalStudents || 0))
+      setStudentsTotalPages(Number(data.totalPages || 0))
+      setStudentQuery({
+        search: normalizedSearch,
+        classId: normalizedClassId,
+        page: nextPage,
+      })
+      studentQueryRef.current = {
+        search: normalizedSearch,
+        classId: normalizedClassId,
+        page: nextPage,
+      }
+    } catch (err) {
+      if (requestId !== studentsRequestRef.current) {
+        return
+      }
+
+      setError(err.message)
+    } finally {
+      if (requestId === studentsRequestRef.current) {
+        setStudentsLoading(false)
+      }
+
+      if (markReady) {
+        setStudentsReady(true)
+      }
+    }
+  }
+
+  const loadClasses = async ({ silent = false } = {}) => {
+    const requestId = classesRequestRef.current + 1
+    classesRequestRef.current = requestId
+    setClassesLoading(true)
+
+    if (!silent) {
+      setError('')
+    }
+
+    try {
+      const data = await apiRequest('/api/admin/classes')
+      if (requestId !== classesRequestRef.current) {
+        return
+      }
+
+      setClasses(data.classes || [])
+    } catch (err) {
+      if (requestId !== classesRequestRef.current) {
+        return
+      }
+
+      setError(err.message)
+    } finally {
+      if (requestId === classesRequestRef.current) {
+        setClassesLoading(false)
+      }
     }
   }
 
@@ -132,7 +381,7 @@ const Adminpage = () => {
   }
 
   const loadReports = async () => {
-    if (reportsLoading || reports.length) {
+    if (reportsLoading || reportsLoaded) {
       return
     }
 
@@ -145,12 +394,13 @@ const Adminpage = () => {
     } catch (err) {
       setError(err.message)
     } finally {
+      setReportsLoaded(true)
       setReportsLoading(false)
     }
   }
 
   const loadContacts = async () => {
-    if (contactsLoading || contacts.length) {
+    if (contactsLoading || contactsLoaded) {
       return
     }
 
@@ -163,6 +413,7 @@ const Adminpage = () => {
     } catch (err) {
       setError(err.message)
     } finally {
+      setContactsLoaded(true)
       setContactsLoading(false)
     }
   }
@@ -185,11 +436,104 @@ const Adminpage = () => {
     }
   }
 
-  useEffect(() => {
-    if (isAdmin) {
-      loadData(debouncedSearch)
+  const loadSiteNotice = async () => {
+    if (noticeLoading) {
+      return
     }
-  }, [isAdmin, debouncedSearch])
+
+    setNoticeLoading(true)
+    setError('')
+
+    try {
+      const data = await apiRequest('/api/admin/announcement')
+      const nextNotice = data.announcement || null
+      setSiteNotice(nextNotice)
+      setSiteNoticeMessage(nextNotice?.message || '')
+      setSiteNoticeColor(nextNotice?.color || 'amber')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setNoticeLoading(false)
+    }
+  }
+
+  const saveSiteNotice = async (event) => {
+    event.preventDefault()
+    setNoticeSaving(true)
+    setError('')
+
+    try {
+      const data = await apiRequest('/api/admin/announcement', {
+        method: 'POST',
+        body: JSON.stringify({ message: siteNoticeMessage, color: siteNoticeColor }),
+      })
+
+      const nextNotice = data.announcement || null
+      setSiteNotice(nextNotice)
+      setSiteNoticeMessage(nextNotice?.message || '')
+      setSiteNoticeColor(nextNotice?.color || 'amber')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setNoticeSaving(false)
+    }
+  }
+
+  const removeSiteNotice = async () => {
+    if (!window.confirm('Remove the current site notice?')) {
+      return
+    }
+
+    setNoticeSaving(true)
+    setError('')
+
+    try {
+      await apiRequest('/api/admin/announcement', {
+        method: 'DELETE',
+      })
+
+      setSiteNotice(null)
+      setSiteNoticeMessage('')
+      setSiteNoticeColor('amber')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setNoticeSaving(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return undefined
+    }
+
+    loadDashboard()
+
+    const scheduleInitialLoad = () => {
+      loadClasses({ silent: true })
+      loadStudents({
+        page: 1,
+        searchTerm: '',
+        classId: '',
+        silent: true,
+        markReady: true,
+      })
+      loadReports()
+      loadContacts()
+    }
+
+    const idleId = typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(scheduleInitialLoad)
+      : window.setTimeout(scheduleInitialLoad, 0)
+
+    return () => {
+      if (typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function' && typeof idleId === 'number') {
+        window.cancelIdleCallback(idleId)
+      } else {
+        window.clearTimeout(idleId)
+      }
+    }
+  }, [isAdmin])
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -198,6 +542,45 @@ const Adminpage = () => {
 
     return () => clearTimeout(timeoutId)
   }, [search])
+
+  useEffect(() => {
+    setStudentQuery((current) => {
+      const nextSearch = debouncedSearch.trim()
+      const nextClassId = studentClassFilter.trim()
+
+      if (current.search === nextSearch && current.classId === nextClassId && current.page === 1) {
+        return current
+      }
+
+      return {
+        search: nextSearch,
+        classId: nextClassId,
+        page: 1,
+      }
+    })
+  }, [debouncedSearch, studentClassFilter])
+
+  useEffect(() => {
+    if (!isAdmin || !studentsReady) {
+      return
+    }
+
+    const currentQuery = studentQueryRef.current
+    if (
+      currentQuery &&
+      currentQuery.search === studentQuery.search &&
+      currentQuery.classId === studentQuery.classId &&
+      currentQuery.page === studentQuery.page
+    ) {
+      return
+    }
+
+    loadStudents({
+      page: studentQuery.page,
+      searchTerm: studentQuery.search,
+      classId: studentQuery.classId,
+    })
+  }, [isAdmin, studentsReady, studentQuery])
 
   useEffect(() => {
     if (!classes.length) {
@@ -229,24 +612,15 @@ const Adminpage = () => {
       return
     }
 
-    let cancelled = false
-
     const prefetch = async () => {
       try {
-        const data = await apiRequest(`/api/classes/${selectedClassFeedId}/feed`)
-        if (cancelled) {
-          return
-        }
-      } catch (error) {
+        await apiRequest(`/api/classes/${selectedClassFeedId}/feed`)
+      } catch {
         // Background warm-up only.
       }
     }
 
     prefetch()
-
-    return () => {
-      cancelled = true
-    }
   }, [activeTab, selectedClassFeedId])
 
   useEffect(() => {
@@ -260,6 +634,10 @@ const Adminpage = () => {
 
     if (activeTab === 'feedback') {
       loadFeedback()
+    }
+
+    if (activeTab === 'message') {
+      loadSiteNotice()
     }
   }, [activeTab])
 
@@ -287,13 +665,42 @@ const Adminpage = () => {
       const path = editingClassId ? `/api/admin/classes/${editingClassId}` : '/api/admin/classes'
       const method = editingClassId ? 'PATCH' : 'POST'
 
-      await apiRequest(path, {
+      const data = await apiRequest(path, {
         method,
         body: JSON.stringify(classForm),
       })
+
+      const savedClass = {
+        ...(classes.find((classItem) => classItem._id === editingClassId) || {}),
+        ...(data.class || {}),
+      }
+
       setClassForm(emptyClassForm)
       setEditingClassId('')
-      await loadData()
+
+      if (editingClassId) {
+        setClasses((current) =>
+          current.map((classItem) =>
+            classItem._id === editingClassId
+              ? {
+                  ...classItem,
+                  ...savedClass,
+                  studentCount: classItem.studentCount || 0,
+                }
+              : classItem,
+          ),
+        )
+        updateStudentsForClassChange(editingClassId, { className: savedClass.name || classForm.name || '' })
+      } else if (savedClass?._id) {
+        setClasses((current) => [
+          {
+            ...savedClass,
+            studentCount: 0,
+          },
+          ...current,
+        ])
+        updateDashboardCount('totalClasses', 1)
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -303,11 +710,26 @@ const Adminpage = () => {
 
   const assignStudentClass = async (studentId, classId) => {
     try {
-      await apiRequest(`/api/admin/students/${studentId}/class`, {
+      const data = await apiRequest(`/api/admin/students/${studentId}/class`, {
         method: 'PATCH',
         body: JSON.stringify({ classId }),
       })
-      await loadData()
+
+      const updatedUser = data.user || {}
+      patchStudentState(studentId, {
+        classId: updatedUser.classId ?? classId ?? '',
+        className: updatedUser.className || '',
+      })
+
+      const currentQuery = studentQueryRef.current
+      if (currentQuery && (currentQuery.search || currentQuery.classId)) {
+        await loadStudents({
+          page: currentQuery.page,
+          searchTerm: currentQuery.search,
+          classId: currentQuery.classId,
+          silent: true,
+        })
+      }
     } catch (err) {
       setError(err.message)
     }
@@ -357,7 +779,12 @@ const Adminpage = () => {
         cancelClassEdit()
       }
 
-      await loadData()
+      setClasses((current) => current.filter((item) => item._id !== classItem._id))
+      updateDashboardCount('totalClasses', -1)
+      updateStudentsForClassChange(classItem._id, {
+        classId: '',
+        className: '',
+      })
     } catch (err) {
       setError(err.message)
     }
@@ -383,6 +810,7 @@ const Adminpage = () => {
         method: 'DELETE',
       })
       setReports((current) => current.filter((report) => report._id !== reportId))
+      updateDashboardCount('totalReports', -1)
     } catch (err) {
       setError(err.message)
     }
@@ -429,6 +857,7 @@ const Adminpage = () => {
       })
 
       setFeedbacks((current) => current.filter((item) => item.id !== feedbackId))
+      updateDashboardCount('totalFeedback', -1)
     } catch (err) {
       setError(err.message)
     }
@@ -701,17 +1130,6 @@ const Adminpage = () => {
   const activeClassItem = classes.find((classItem) => classItem._id === selectedClassFeedId) || null
 
   const classOptions = useMemo(() => classes, [classes])
-  const filteredStudents = useMemo(() => {
-    if (!studentClassFilter) {
-      return students
-    }
-
-    if (studentClassFilter === '__no_class__') {
-      return students.filter((student) => !String(student.classId || '').trim())
-    }
-
-    return students.filter((student) => String(student.classId || '') === studentClassFilter)
-  }, [students, studentClassFilter])
   const selectedClassTargetCount = classShareTargets.filter((target) => target.enabled).length
   const groupedClassPosts = useMemo(
     () =>
@@ -722,6 +1140,195 @@ const Adminpage = () => {
     [classPosts],
   )
   const openReports = useMemo(() => reports.filter((report) => report.status === 'open'), [reports])
+
+  const renderReportsContent = () => {
+    if (reportsLoading || (activeTab === 'reports' && !reportsLoaded)) {
+      return (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          Loading reports...
+        </div>
+      )
+    }
+
+    if (!reports.length) {
+      return (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          No reports available.
+        </div>
+      )
+    }
+
+    return reports.map((report) => (
+      <article key={report._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+              {report.user?.name || 'Student'} - {report.reason}
+            </p>
+            <div className="mt-3 grid gap-3 text-sm leading-7 text-slate-600">
+              <DetailLine label="Student" value={report.user?.name || 'Student'} />
+              <DetailLine label="Message" value={report.details || 'No extra details.'} />
+              <DetailLine label="Chapter" value={formatReportChapter(report)} />
+              <DetailLine label="Topic" value={report.questionId?.objectiveType?.topic?.name || report.objectiveType?.topic?.name || 'N/A'} />
+              <DetailLine label="Objective" value={report.questionId?.objectiveType?.type || report.objectiveType?.type || 'N/A'} />
+              <DetailLine
+                label="Question"
+                value={report.questionId?.question || 'N/A'}
+              />
+              <DetailLine
+                label="Options"
+                value={Array.isArray(report.questionId?.options) && report.questionId.options.length
+                  ? report.questionId.options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join(' | ')
+                  : 'N/A'}
+              />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => updateReport(report._id, 'resolved')}
+                className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-emerald-700"
+              >
+                Mark done
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteReport(report._id)}
+                className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
+              >
+                Delete
+              </button>
+              <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${report.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                {report.status || 'open'}
+              </span>
+            </div>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+            {new Date(report.createdAt).toLocaleDateString()}
+          </span>
+        </div>
+      </article>
+    ))
+  }
+
+  const renderContactsContent = () => {
+    if (contactsLoading || (activeTab === 'contacts' && !contactsLoaded)) {
+      return (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          Loading contacts...
+        </div>
+      )
+    }
+
+    if (!contacts.length) {
+      return (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          No contact messages available.
+        </div>
+      )
+    }
+
+    return contacts.map((contact) => (
+      <article key={contact._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+              {contact.name} - {contact.subject || 'General enquiry'}
+            </p>
+            <p className="mt-2 text-sm leading-7 text-slate-600">
+              {contact.message}
+            </p>
+            <p className="mt-2 text-xs font-bold text-slate-400">
+              {contact.email}
+            </p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+            {new Date(contact.createdAt).toLocaleDateString()}
+          </span>
+        </div>
+      </article>
+    ))
+  }
+
+  const renderFeedbackContent = () => {
+    if (feedbackLoading || (activeTab === 'feedback' && !feedbacks.length)) {
+      return (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          Loading feedback...
+        </div>
+      )
+    }
+
+    if (!feedbacks.length) {
+      return (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          No feedback has been submitted yet.
+        </div>
+      )
+    }
+
+    return feedbacks.map((feedbackItem) => (
+      <article key={feedbackItem.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+              {feedbackItem.name} {feedbackItem.className ? `- ${feedbackItem.className}` : ''}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <Star
+                  key={`${feedbackItem.id}-star-${index}`}
+                  className={`h-4 w-4 ${index < feedbackItem.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
+                />
+              ))}
+              <span className={`ml-2 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${feedbackItem.featured ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-500'}`}>
+                {feedbackItem.featured ? 'Featured' : 'Hidden'}
+              </span>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${feedbackItem.status === 'reviewed' ? 'bg-cyan-100 text-cyan-700' : 'bg-amber-100 text-amber-700'}`}>
+                {feedbackItem.status || 'new'}
+              </span>
+            </div>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+            {new Date(feedbackItem.createdAt).toLocaleDateString()}
+          </span>
+        </div>
+
+        {feedbackItem.message ? (
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">
+            {feedbackItem.message}
+          </p>
+        ) : (
+          <p className="mt-3 text-sm leading-7 text-slate-400">
+            No text message was added.
+          </p>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => toggleFeedbackFeatured(feedbackItem)}
+            className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-black"
+          >
+            {feedbackItem.featured ? 'Unfeature' : 'Feature on home'}
+          </button>
+          <button
+            type="button"
+            onClick={() => markFeedbackReviewed(feedbackItem)}
+            className="inline-flex items-center gap-2 rounded-2xl border border-cyan-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-700 transition hover:bg-cyan-50"
+          >
+            Mark reviewed
+          </button>
+          <button
+            type="button"
+            onClick={() => deleteFeedback(feedbackItem.id)}
+            className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
+          >
+            Delete
+          </button>
+        </div>
+      </article>
+    ))
+  }
 
   if (!isAdmin) {
     return <Navigate to="/" replace />
@@ -746,15 +1353,15 @@ const Adminpage = () => {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[560px] lg:grid-cols-4">
-              <Stat label="Students" value={students.length} />
-              <Stat label="Classes" value={classes.length} />
-              <Stat label="Reports" value={reports.length} />
-              <Stat label="Feedback" value={feedbacks.length} />
+              <Stat label="Students" value={dashboardCounts.totalStudents ?? '—'} loading={dashboardLoading} />
+              <Stat label="Classes" value={dashboardCounts.totalClasses ?? '—'} loading={dashboardLoading} />
+              <Stat label="Reports" value={dashboardCounts.totalReports ?? '—'} loading={dashboardLoading} />
+              <Stat label="Feedback" value={dashboardCounts.totalFeedback ?? '—'} loading={dashboardLoading} />
             </div>
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'class-board', 'reports', 'contacts', 'feedback'].map((tab) => (
+            {['students', 'classes', 'class-board', 'reports', 'contacts', 'feedback', 'message'].map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -772,51 +1379,59 @@ const Adminpage = () => {
             </div>
           )}
 
-          {loading ? (
-            <div className="mt-8 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-12 text-center text-slate-500">
-              Loading admin data...
-            </div>
-          ) : (
-            <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_0.85fr]">
-              <div className="grid gap-6">
-                {activeTab === 'students' && (
-                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <h2 className="font-serif text-3xl text-slate-950">Students</h2>
-                        <p className="mt-1 text-sm text-slate-500">Search by name, email, phone number, or class.</p>
-                      </div>
-                      <div className="grid gap-3 sm:min-w-[420px] sm:grid-cols-2">
-                        <label className="relative w-full">
-                          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                          <input
-                            value={search}
-                            onChange={(event) => setSearch(event.target.value)}
-                            placeholder="Search students..."
-                            className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
-                          />
-                        </label>
-                        <label className="grid gap-2 text-sm font-bold text-slate-600">
-                          Class filter
-                          <select
-                            value={studentClassFilter}
-                            onChange={(event) => setStudentClassFilter(event.target.value)}
-                            className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
-                          >
-                            <option value="">All classes</option>
-                            <option value="__no_class__">No class</option>
-                            {classOptions.map((classItem) => (
-                              <option key={classItem._id} value={classItem._id}>
-                                {classItem.name}{classItem.grade ? ` (${classItem.grade})` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
+          <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_0.85fr]">
+            <div className="grid gap-6">
+              {activeTab === 'students' && (
+                <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 className="font-serif text-3xl text-slate-950">Students</h2>
+                      <p className="mt-1 text-sm text-slate-500">Search by name, email, phone number, or class.</p>
                     </div>
+                    <div className="grid gap-3 sm:min-w-[420px] sm:grid-cols-2">
+                      <label className="relative w-full">
+                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <input
+                          value={search}
+                          onChange={(event) => setSearch(event.target.value)}
+                          placeholder="Search students..."
+                          className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
+                        />
+                      </label>
+                      <label className="grid gap-2 text-sm font-bold text-slate-600">
+                        Class filter
+                        <select
+                          value={studentClassFilter}
+                          onChange={(event) => setStudentClassFilter(event.target.value)}
+                          className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
+                        >
+                          <option value="">All classes</option>
+                          <option value="__no_class__">No class</option>
+                          {classOptions.map((classItem) => (
+                            <option key={classItem._id} value={classItem._id}>
+                              {classItem.name}{classItem.grade ? ` (${classItem.grade})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
 
-                    <div className="mt-5 grid gap-3">
-                      {filteredStudents.map((student) => (
+                  <div className="mt-5 grid gap-3">
+                    {studentsLoading && !students.length ? (
+                      Array.from({ length: 3 }).map((_, index) => (
+                        <div key={index} className="animate-pulse rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="h-5 w-44 rounded bg-slate-200" />
+                          <div className="mt-3 h-4 w-56 rounded bg-slate-200" />
+                          <div className="mt-3 h-4 w-40 rounded bg-slate-200" />
+                          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_250px]">
+                            <div className="h-20 rounded-2xl bg-white" />
+                            <div className="h-20 rounded-2xl bg-white" />
+                          </div>
+                        </div>
+                      ))
+                    ) : students.length ? (
+                      students.map((student) => (
                         <article key={student.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                             <button
@@ -868,15 +1483,44 @@ const Adminpage = () => {
                             </div>
                           </div>
                         </article>
-                      ))}
-                      {!filteredStudents.length && (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          No students match this search or class filter.
-                        </div>
-                      )}
+                      ))
+                    ) : (
+                      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                        No students match this search or class filter.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm font-medium text-slate-500">
+                      {studentsLoading
+                        ? 'Loading the current student page...'
+                        : `${studentsTotalCount} student${studentsTotalCount === 1 ? '' : 's'} found`}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setStudentQuery((current) => ({ ...current, page: Math.max((current.page || 1) - 1, 1) }))}
+                        disabled={studentsLoading || studentQuery.page <= 1}
+                        className="inline-flex h-11 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-sm font-semibold text-slate-500">
+                        Page {studentsTotalPages ? Math.min(studentQuery.page, studentsTotalPages) : 0} of {studentsTotalPages || 0}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setStudentQuery((current) => ({ ...current, page: current.page + 1 }))}
+                        disabled={studentsLoading || !studentsTotalPages || studentQuery.page >= studentsTotalPages}
+                        className="inline-flex h-11 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Next
+                      </button>
                     </div>
                   </div>
-                )}
+                </div>
+              )}
 
                 {activeTab === 'classes' && (
                   <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
@@ -921,41 +1565,51 @@ const Adminpage = () => {
                     </form>
 
                     <div className="mt-5 grid gap-3">
-                      {classes.map((classItem) => (
-                        <article key={classItem._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div>
-                              <h3 className="text-lg font-black text-slate-950">{classItem.name}</h3>
-                              <p className="mt-1 text-sm text-slate-500">{classItem.description || 'No description.'}</p>
-                              <p className="mt-2 text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                                {classItem.grade || 'No grade'} - {classItem.studentCount || 0} students
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2 self-start sm:self-auto">
-                              <div className="rounded-2xl bg-white px-4 py-3 text-right">
-                                <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Students</p>
-                                <p className="mt-2 text-2xl font-black text-slate-950">{classItem.studentCount || 0}</p>
+                      {classesLoading && !classes.length ? (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          Loading classes...
+                        </div>
+                      ) : classes.length ? (
+                        classes.map((classItem) => (
+                          <article key={classItem._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <h3 className="text-lg font-black text-slate-950">{classItem.name}</h3>
+                                <p className="mt-1 text-sm text-slate-500">{classItem.description || 'No description.'}</p>
+                                <p className="mt-2 text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+                                  {classItem.grade || 'No grade'} - {classItem.studentCount || 0} students
+                                </p>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => openClassEdit(classItem)}
-                                className="grid h-11 w-11 place-items-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
-                                aria-label={`Edit ${classItem.name}`}
-                              >
-                                <Edit3 className="h-4 w-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteClass(classItem)}
-                                className="grid h-11 w-11 place-items-center rounded-2xl border border-red-100 bg-white text-red-500 transition hover:bg-red-50 hover:text-red-700"
-                                aria-label={`Delete ${classItem.name}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
+                              <div className="flex items-center gap-2 self-start sm:self-auto">
+                                <div className="rounded-2xl bg-white px-4 py-3 text-right">
+                                  <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Students</p>
+                                  <p className="mt-2 text-2xl font-black text-slate-950">{classItem.studentCount || 0}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => openClassEdit(classItem)}
+                                  className="grid h-11 w-11 place-items-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
+                                  aria-label={`Edit ${classItem.name}`}
+                                >
+                                  <Edit3 className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteClass(classItem)}
+                                  className="grid h-11 w-11 place-items-center rounded-2xl border border-red-100 bg-white text-red-500 transition hover:bg-red-50 hover:text-red-700"
+                                  aria-label={`Delete ${classItem.name}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                        </article>
-                      ))}
+                          </article>
+                        ))
+                      ) : (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                          No classes created yet.
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -977,7 +1631,7 @@ const Adminpage = () => {
                           className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
                         >
                           {classOptions.length === 0 ? (
-                            <option value="">No classes available</option>
+                            <option value="">{classesLoading ? 'Loading classes...' : 'No classes available'}</option>
                           ) : (
                             classOptions.map((classItem) => (
                               <option key={classItem._id} value={classItem._id}>
@@ -1089,7 +1743,7 @@ const Adminpage = () => {
 
                         {classShareTargets.length === 0 ? (
                           <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-                            No classes available yet.
+                            {classesLoading ? 'Loading classes...' : 'No classes available yet.'}
                           </div>
                         ) : (
                           <div className="mt-4 grid gap-3 lg:grid-cols-2">
@@ -1356,66 +2010,7 @@ const Adminpage = () => {
                     </p>
 
                     <div className="mt-5 grid gap-3">
-                      {reportsLoading || (activeTab === 'reports' && !reports.length) ? (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          Loading reports...
-                        </div>
-                      ) : reports.length ? (
-                        reports.map((report) => (
-                        <article key={report._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                                {report.user?.name || 'Student'} - {report.reason}
-                              </p>
-                              <div className="mt-3 grid gap-3 text-sm leading-7 text-slate-600">
-                                <DetailLine label="Student" value={report.user?.name || 'Student'} />
-                                <DetailLine label="Message" value={report.details || 'No extra details.'} />
-                                <DetailLine label="Chapter" value={formatReportChapter(report)} />
-                                <DetailLine label="Topic" value={report.questionId?.objectiveType?.topic?.name || report.objectiveType?.topic?.name || 'N/A'} />
-                                <DetailLine label="Objective" value={report.questionId?.objectiveType?.type || report.objectiveType?.type || 'N/A'} />
-                                <DetailLine
-                                  label="Question"
-                                  value={report.questionId?.question || 'N/A'}
-                                />
-                                <DetailLine
-                                  label="Options"
-                                  value={Array.isArray(report.questionId?.options) && report.questionId.options.length
-                                    ? report.questionId.options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join(' | ')
-                                    : 'N/A'}
-                                />
-                              </div>
-                              <div className="mt-4 flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => updateReport(report._id, 'resolved')}
-                                  className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-emerald-700"
-                                >
-                                  Mark done
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteReport(report._id)}
-                                  className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
-                                >
-                                  Delete
-                                </button>
-                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${report.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                  {report.status || 'open'}
-                                </span>
-                              </div>
-                            </div>
-                            <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
-                              {new Date(report.createdAt).toLocaleDateString()}
-                            </span>
-                          </div>
-                        </article>
-                        ))
-                      ) : (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          No reports available.
-                        </div>
-                      )}
+                      {renderReportsContent()}
                     </div>
                   </div>
                 )}
@@ -1428,36 +2023,7 @@ const Adminpage = () => {
                     </div>
 
                     <div className="mt-5 grid gap-3">
-                      {contactsLoading || (activeTab === 'contacts' && !contacts.length) ? (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          Loading contacts...
-                        </div>
-                      ) : contacts.length ? (
-                        contacts.map((contact) => (
-                        <article key={contact._id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                                {contact.name} - {contact.subject || 'General enquiry'}
-                              </p>
-                              <p className="mt-2 text-sm leading-7 text-slate-600">
-                                {contact.message}
-                              </p>
-                              <p className="mt-2 text-xs font-bold text-slate-400">
-                                {contact.email}
-                              </p>
-                            </div>
-                            <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
-                              {new Date(contact.createdAt).toLocaleDateString()}
-                            </span>
-                          </div>
-                        </article>
-                        ))
-                      ) : (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          No contact messages available.
-                        </div>
-                      )}
+                      {renderContactsContent()}
                     </div>
                   </div>
                 )}
@@ -1473,75 +2039,85 @@ const Adminpage = () => {
                     </p>
 
                     <div className="mt-5 grid gap-3">
-                      {feedbackLoading || (activeTab === 'feedback' && !feedbacks.length) ? (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          Loading feedback...
-                        </div>
-                      ) : feedbacks.length ? feedbacks.map((feedbackItem) => (
-                        <article key={feedbackItem.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                              <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                                {feedbackItem.name} {feedbackItem.className ? `- ${feedbackItem.className}` : ''}
-                              </p>
-                              <div className="mt-2 flex flex-wrap items-center gap-1">
-                                {Array.from({ length: 5 }).map((_, index) => (
-                                  <Star
-                                    key={`${feedbackItem.id}-star-${index}`}
-                                    className={`h-4 w-4 ${index < feedbackItem.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
-                                  />
-                                ))}
-                                <span className={`ml-2 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${feedbackItem.featured ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-500'}`}>
-                                  {feedbackItem.featured ? 'Featured' : 'Hidden'}
-                                </span>
-                                <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em] ${feedbackItem.status === 'reviewed' ? 'bg-cyan-100 text-cyan-700' : 'bg-amber-100 text-amber-700'}`}>
-                                  {feedbackItem.status || 'new'}
-                                </span>
-                              </div>
-                            </div>
-                            <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
-                              {new Date(feedbackItem.createdAt).toLocaleDateString()}
-                            </span>
-                          </div>
+                      {renderFeedbackContent()}
+                    </div>
+                  </div>
+                )}
 
-                          {feedbackItem.message ? (
-                            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">
-                              {feedbackItem.message}
-                            </p>
-                          ) : (
-                            <p className="mt-3 text-sm leading-7 text-slate-400">
-                              No text message was added.
-                            </p>
-                          )}
+                {activeTab === 'message' && (
+                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <BellRing className="h-5 w-5 text-amber-600" />
+                      <h2 className="font-serif text-3xl text-slate-950">Site notice</h2>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-500">
+                      This notice shows below the navbar for students. Save a message to show it, or remove it to hide it everywhere.
+                    </p>
 
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => toggleFeedbackFeatured(feedbackItem)}
-                              className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-white transition hover:bg-black"
-                            >
-                              {feedbackItem.featured ? 'Unfeature' : 'Feature on home'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => markFeedbackReviewed(feedbackItem)}
-                              className="inline-flex items-center gap-2 rounded-2xl border border-cyan-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-700 transition hover:bg-cyan-50"
-                            >
-                              Mark reviewed
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteFeedback(feedbackItem.id)}
-                              className="inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-red-600 transition hover:bg-red-50"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </article>
-                      )) : (
-                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                          No feedback has been submitted yet.
+                    <form onSubmit={saveSiteNotice} className="mt-5 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                      <label className="grid gap-2 text-sm font-bold text-slate-600">
+                        Message
+                        <textarea
+                          value={siteNoticeMessage}
+                          onChange={(event) => setSiteNoticeMessage(event.target.value)}
+                          rows={4}
+                          placeholder="Type the notice message that should scroll right to left..."
+                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-amber-400"
+                        />
+                      </label>
+
+                      <label className="grid gap-2 text-sm font-bold text-slate-600">
+                        Colour theme
+                        <select
+                          value={siteNoticeColor}
+                          onChange={(event) => setSiteNoticeColor(event.target.value)}
+                          className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-amber-400"
+                        >
+                          {NOTICE_COLOR_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <div className="flex flex-col gap-3 sm:flex-row">
+                        <button
+                          type="submit"
+                          disabled={noticeSaving}
+                          className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {noticeSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                          {noticeSaving ? 'Saving...' : 'Save notice'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={removeSiteNotice}
+                          disabled={noticeSaving || !siteNotice}
+                          className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl border border-red-100 bg-white font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Remove notice
+                        </button>
+                      </div>
+                    </form>
+
+                    <div className="mt-5 rounded-3xl border border-amber-100 bg-amber-50 p-4">
+                      <p className="text-xs font-black uppercase tracking-[0.22em] text-amber-700">Current notice</p>
+                      {noticeLoading ? (
+                        <div className="mt-3 rounded-2xl border border-dashed border-amber-200 bg-white px-4 py-4 text-sm text-amber-700">
+                          Loading current notice...
                         </div>
+                      ) : siteNotice?.message ? (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-sm leading-7 text-slate-700">{siteNotice.message}</p>
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+                            Theme: {siteNotice.color || 'amber'}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-sm leading-7 text-slate-500">
+                          No notice is active right now.
+                        </p>
                       )}
                     </div>
                   </div>
@@ -1563,7 +2139,6 @@ const Adminpage = () => {
                 </div>
               </div>
             </div>
-          )}
         </div>
       </div>
 
@@ -1780,10 +2355,14 @@ const Adminpage = () => {
   )
 }
 
-const Stat = ({ label, value }) => (
+const Stat = ({ label, value, loading = false }) => (
   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
     <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">{label}</p>
-    <p className="mt-2 text-2xl font-black text-slate-950">{value}</p>
+    {loading ? (
+      <div className="mt-3 h-8 w-20 animate-pulse rounded-2xl bg-slate-200" />
+    ) : (
+      <p className="mt-2 text-2xl font-black text-slate-950">{value}</p>
+    )}
   </div>
 )
 
