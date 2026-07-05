@@ -17,25 +17,19 @@ import {
 import { apiRequest } from '../api';
 import { authEvents, getStoredAuth } from '../authStorage';
 import ChapterWeightageGraph from '../components/ChapterWeightageGraph';
-import { readJsonCache, writeJsonCache } from '../lib/cacheStorage';
 
 const chapterWeightagePreviewMs =
   Number(import.meta.env.VITE_CHAPTER_WEIGHTAGE_PREVIEW_MS) || 10000;
-const CHAPTERS_CACHE_KEY = 'innovative_science_2_chapters_cache';
 
 const Chapter_weightage = () => {
-  const cachedChapters = useMemo(() => readJsonCache(CHAPTERS_CACHE_KEY), []);
-  const [chapters, setChapters] = useState(() => Array.isArray(cachedChapters?.chapters) ? cachedChapters.chapters : []);
-  const [isLoading, setIsLoading] = useState(
-    () => !Array.isArray(cachedChapters?.chapters) || !cachedChapters.chapters.length,
-  );
+  const [chapters, setChapters] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [hoveredChapter, setHoveredChapter] = useState(null);
   const [distributionMode, setDistributionMode] = useState('withOption');
   const [isGraphOpen, setIsGraphOpen] = useState(false);
   const [auth, setAuth] = useState(() => getStoredAuth());
   const [isSigninPromptVisible, setIsSigninPromptVisible] = useState(false);
-  const hasCachedChapters = Array.isArray(cachedChapters?.chapters) && cachedChapters.chapters.length > 0;
 
   const getChapterMarks = useCallback((chapter) => {
     return Number(
@@ -46,35 +40,22 @@ const Chapter_weightage = () => {
   }, [distributionMode]);
 
   useEffect(() => {
-    const loadChapters = async ({ silent = false } = {}) => {
-      if (!silent || !hasCachedChapters) {
-        setIsLoading(true);
-      }
-
-      if (!silent) {
-        setError('');
-      }
-
+    const loadChapters = async () => {
+      setIsLoading(true);
+      setError('');
       try {
         const data = await apiRequest('/api/chapters');
         const nextChapters = Array.isArray(data.chapters) ? data.chapters : [];
         setChapters(nextChapters);
-        writeJsonCache(CHAPTERS_CACHE_KEY, {
-          chapters: nextChapters,
-        });
       } catch (err) {
-        if (!hasCachedChapters) {
-          setError(err.message);
-        }
+        setError(err.message);
       } finally {
-        if (!silent || !hasCachedChapters) {
-          setIsLoading(false);
-        }
+        setIsLoading(false);
       }
     };
 
-    loadChapters({ silent: hasCachedChapters });
-  }, [hasCachedChapters]);
+    loadChapters();
+  }, []);
 
   useEffect(() => {
     const syncAuth = () => setAuth(getStoredAuth());

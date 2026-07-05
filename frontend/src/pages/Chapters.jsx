@@ -3,10 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Edit3, Plus, Search, Trash2, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
-import { readJsonCache, writeJsonCache } from '../lib/cacheStorage'
 
 const emptyForm = { number: '', name: '', marks: '', marksWithoutOption: '' }
-const CHAPTERS_CACHE_KEY = 'innovative_science_2_chapters_cache'
 
 const ChapterCard = ({ chapter, index, isAdmin, onEdit, onDelete }) => {
   const navigate = useNavigate()
@@ -98,31 +96,21 @@ const ChapterCard = ({ chapter, index, isAdmin, onEdit, onDelete }) => {
 }
 
 const Chapters = () => {
-  const cachedChapters = useMemo(() => readJsonCache(CHAPTERS_CACHE_KEY), [])
-  const [chapters, setChapters] = useState(() => Array.isArray(cachedChapters?.chapters) ? cachedChapters.chapters : [])
+  const [chapters, setChapters] = useState([])
   const [searchTerm, setSearchTerm] = useState('')
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingChapter, setEditingChapter] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const [error, setError] = useState('')
-  const [isLoading, setIsLoading] = useState(
-    () => !Array.isArray(cachedChapters?.chapters) || !cachedChapters.chapters.length,
-  )
+  const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
-  const hasCachedChapters = Array.isArray(cachedChapters?.chapters) && cachedChapters.chapters.length > 0
 
-  const loadChapters = async ({ silent = false } = {}) => {
-    if (!silent || !hasCachedChapters) {
-      setIsLoading(true)
-    }
-
-    if (!silent) {
-      setError('')
-    }
-
+  const loadChapters = async () => {
+    setIsLoading(true)
+    setError('')
     try {
       const data = await apiRequest('/api/chapters')
       const nextChapters = Array.isArray(data.chapters) ? data.chapters : []
@@ -133,23 +121,16 @@ const Chapters = () => {
       }))
 
       setChapters(normalizedChapters)
-      writeJsonCache(CHAPTERS_CACHE_KEY, {
-        chapters: normalizedChapters,
-      })
     } catch (err) {
-      if (!hasCachedChapters) {
-        setError(err.message)
-      }
+      setError(err.message)
     } finally {
-      if (!silent || !hasCachedChapters) {
-        setIsLoading(false)
-      }
+      setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadChapters({ silent: hasCachedChapters })
-  }, [hasCachedChapters])
+    loadChapters()
+  }, [])
 
   const filteredChapters = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()

@@ -50,35 +50,8 @@ const CLASS_POST_PHOTO_FORMAT = String(process.env.CLASS_POST_PHOTO_FORMAT || 'w
   ? 'avif'
   : 'webp'
 const CLASS_POST_PHOTO_CONTENT_TYPE = CLASS_POST_PHOTO_FORMAT === 'avif' ? 'image/avif' : 'image/webp'
-const RESPONSE_CACHE = new Map()
-const getCachedResponse = (key) => {
-  const entry = RESPONSE_CACHE.get(key)
-
-  if (!entry) {
-    return null
-  }
-
-  if (entry.expiresAt <= Date.now()) {
-    RESPONSE_CACHE.delete(key)
-    return null
-  }
-
-  return entry.value
-}
-
-const setCachedResponse = (key, value, ttlMs = 30000) => {
-  RESPONSE_CACHE.set(key, {
-    value,
-    expiresAt: Date.now() + ttlMs,
-  })
-}
-
 const clearCachedResponses = (prefix) => {
-  for (const key of RESPONSE_CACHE.keys()) {
-    if (key.startsWith(prefix)) {
-      RESPONSE_CACHE.delete(key)
-    }
-  }
+  return undefined
 }
 
 const PORT = process.env.PORT || 5000
@@ -2094,7 +2067,7 @@ app.get('/api/auth/users/:id/avatar', async (req, res) => {
     }
 
     res.set('Content-Type', user.profileImage.contentType || 'image/webp')
-    res.set('Cache-Control', 'public, max-age=604800')
+    res.set('Cache-Control', 'no-store')
     res.send(user.profileImage.data)
   } catch (error) {
     res.status(404).json({ message: 'Profile image not found.' })
@@ -2110,7 +2083,7 @@ app.get('/api/objective-questions/:id/image', async (req, res) => {
     }
 
     res.set('Content-Type', question.questionImage.contentType || 'image/webp')
-    res.set('Cache-Control', 'public, max-age=604800')
+    res.set('Cache-Control', 'no-store')
     res.send(question.questionImage.data)
   } catch (error) {
     res.status(404).json({ message: 'Question image not found.' })
@@ -2126,7 +2099,7 @@ app.get('/api/objective-questions/:id/answer-image', async (req, res) => {
     }
 
     res.set('Content-Type', question.answerImage.contentType || 'image/webp')
-    res.set('Cache-Control', 'public, max-age=604800')
+    res.set('Cache-Control', 'no-store')
     res.send(question.answerImage.data)
   } catch (error) {
     res.status(404).json({ message: 'Answer image not found.' })
@@ -2135,18 +2108,9 @@ app.get('/api/objective-questions/:id/answer-image', async (req, res) => {
 
 app.get('/api/chapters', async (req, res) => {
   try {
-    const cacheKey = 'chapters:list'
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=60')
-      return res.json(cached)
-    }
-
-    const chapters = await Chapter.find().sort({ number: 1 })
+    const chapters = await Chapter.find().select('number name marks marksWithoutOption').sort({ number: 1 }).lean()
     const payload = { chapters }
-    setCachedResponse(cacheKey, payload, 60000)
-    res.set('Cache-Control', 'private, max-age=60')
+    res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load chapters.' })
@@ -2233,6 +2197,8 @@ app.delete('/api/chapters/:id', authRequired, adminRequired, async (req, res) =>
 app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) => {
   try {
     const chapter = await Chapter.findOne({ number: Number(req.params.chapterNumber) })
+      .select('number name marks marksWithoutOption')
+      .lean()
 
     if (!chapter) {
       return res.status(404).json({ message: 'Chapter not found.' })
@@ -2303,6 +2269,8 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
 app.post('/api/chapters/:chapterNumber/topics', authRequired, adminRequired, async (req, res) => {
   try {
     const chapter = await Chapter.findOne({ number: Number(req.params.chapterNumber) })
+      .select('number name')
+      .lean()
 
     if (!chapter) {
       return res.status(404).json({ message: 'Chapter not found.' })
@@ -3121,17 +3089,6 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
     const scope = String(req.query.scope || 'all').toLowerCase()
     const requestedClassId = String(req.query.classId || req.user?.classId || '').trim()
     const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 100)
-    const cacheKey = `leaderboard:${scope}:${requestedClassId || 'all'}`
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=15')
-      return res.json({
-        ...cached,
-        leaderboard: cached.leaderboard.slice(0, limit),
-      })
-    }
-
     const classFilter = scope === 'class' && requestedClassId ? { classId: requestedClassId } : {}
     const users = await User.find({
       isAdmin: false,
@@ -3163,11 +3120,10 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
       })),
       scope,
       classId: requestedClassId,
-      className: requestedClassId ? (await Class.findById(requestedClassId).lean())?.name || '' : '',
+      className: requestedClassId ? (await Class.findById(requestedClassId).select('name').lean())?.name || '' : '',
     }
 
-    setCachedResponse(cacheKey, payload, 5000)
-    res.set('Cache-Control', 'private, max-age=5')
+    res.set('Cache-Control', 'no-store')
     res.json({
       ...payload,
       leaderboard: payload.leaderboard.slice(0, limit),
@@ -3214,14 +3170,6 @@ app.get('/api/leaderboard/me', authRequired, async (req, res) => {
 
 app.get('/api/classes', async (req, res) => {
   try {
-    const cacheKey = 'classes:list'
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=60')
-      return res.json(cached)
-    }
-
     const classes = await Class.find().sort({ name: 1 }).lean()
     const classIds = classes.map((item) => item._id)
     const studentCounts = await User.aggregate([
@@ -3237,8 +3185,7 @@ app.get('/api/classes', async (req, res) => {
       })),
     }
 
-    setCachedResponse(cacheKey, payload, 60000)
-    res.set('Cache-Control', 'private, max-age=60')
+    res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load classes.' })
@@ -3248,14 +3195,6 @@ app.get('/api/classes', async (req, res) => {
 app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => {
   try {
     const search = String(req.query.search || '').trim().toLowerCase()
-    const cacheKey = `admin:students:${search || 'all'}`
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=15')
-      return res.json(cached)
-    }
-
     const users = await User.find({ isAdmin: false })
       .select('name email phoneNumber password passwordHash classId isAdmin')
       .populate('classId')
@@ -3289,8 +3228,7 @@ app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => 
       })),
     }
 
-    setCachedResponse(cacheKey, payload, 15000)
-    res.set('Cache-Control', 'private, max-age=15')
+    res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load student list.' })
@@ -3317,14 +3255,6 @@ app.get('/api/admin/students/:id', authRequired, adminRequired, async (req, res)
 
 app.get('/api/admin/classes', authRequired, adminRequired, async (req, res) => {
   try {
-    const cacheKey = 'admin:classes:list'
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=60')
-      return res.json(cached)
-    }
-
     const classes = await Class.find().sort({ createdAt: -1 }).lean()
     const classIds = classes.map((item) => item._id)
     const studentCounts = await User.aggregate([
@@ -3340,8 +3270,7 @@ app.get('/api/admin/classes', authRequired, adminRequired, async (req, res) => {
       })),
     }
 
-    setCachedResponse(cacheKey, payload, 60000)
-    res.set('Cache-Control', 'private, max-age=60')
+    res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load classes.' })
@@ -3939,22 +3868,13 @@ app.delete('/api/admin/pyqs/:id', authRequired, adminRequired, async (req, res) 
 
 app.get('/api/pyqs', optionalAuth, async (req, res) => {
   try {
-    const cacheKey = 'pyqs:list'
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=60')
-      return res.json(cached)
-    }
-
     const pyqs = await Pyq.find().sort({ createdAt: -1 }).lean()
 
     const payload = {
       pyqs: pyqs.map(publicPyq),
     }
 
-    setCachedResponse(cacheKey, payload, 60000)
-    res.set('Cache-Control', 'private, max-age=60')
+    res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load PYQs.' })
@@ -4019,7 +3939,7 @@ app.get('/api/pyqs/:id/pdf', async (req, res) => {
 
     res.setHeader('Content-Type', pyq.pdf.contentType || 'application/pdf')
     res.setHeader('Content-Disposition', `inline; filename="${safeName || 'pyq'}.pdf"`)
-    res.setHeader('Cache-Control', 'private, max-age=3600')
+    res.setHeader('Cache-Control', 'no-store')
     res.send(Buffer.from(pyq.pdf.data))
   } catch (error) {
     res.status(500).json({ message: 'Could not open PYQ file.' })
@@ -4343,10 +4263,10 @@ app.get('/api/test-builder/options', optionalAuth, async (req, res) => {
       .filter((value) => Number.isFinite(value))
 
     if (!chapterNumbers.length) {
-      return res.json({ chapters: [], objectiveTypes: [], totalQuestions: 0 })
+      return res.json({ objectiveTypes: [], totalQuestions: 0 })
     }
 
-    const chapters = await Chapter.find({ number: { $in: chapterNumbers } }).sort({ number: 1 }).lean()
+    const chapters = await Chapter.find({ number: { $in: chapterNumbers } }).select('number name').sort({ number: 1 }).lean()
     const topics = await Topic.find({ chapter: { $in: chapters.map((chapter) => chapter._id) } }).lean()
     const topicIds = topics.map((topic) => topic._id)
     const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).lean()
@@ -4379,7 +4299,6 @@ app.get('/api/test-builder/options', optionalAuth, async (req, res) => {
     })
 
     res.json({
-      chapters,
       objectiveTypes: [...availableTypes.values()].map((item) => ({
         type: item.type,
         count: item.count,
@@ -4615,13 +4534,6 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
     const queryLimit = loadAll ? null : Math.min((limit || 20) + 1, 51)
     const category = String(req.query.category || '').trim()
     const normalizedCategory = category && category !== 'all' && CLASS_POST_CATEGORIES.includes(category) ? category : ''
-    const cacheKey = `class-feed:${classId}:${loadAll ? 'all' : limit}:${normalizedCategory || 'all'}`
-    const cached = getCachedResponse(cacheKey)
-
-    if (cached) {
-      res.set('Cache-Control', 'private, max-age=20')
-      return res.json(cached)
-    }
 
     const classDoc = await Class.findById(classId).lean()
 
@@ -4683,8 +4595,7 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
       canPost: Boolean(req.user.isAdmin),
     }
 
-    setCachedResponse(cacheKey, payload, 20000)
-    res.set('Cache-Control', 'private, max-age=20')
+    res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load class feed.' })
@@ -4878,7 +4789,7 @@ app.get('/api/classes/:classId/posts/:postId/pdf', async (req, res) => {
 
     res.setHeader('Content-Type', post.pdf.contentType || 'application/pdf')
     const isDownload = String(req.query.download || '') === '1'
-    res.setHeader('Cache-Control', 'private, max-age=3600')
+    res.setHeader('Cache-Control', 'no-store')
     res.setHeader(
       'Content-Disposition',
       `${isDownload ? 'attachment' : 'inline'}; filename="${post.pdf.originalName || 'attachment.pdf'}"`,
@@ -4927,7 +4838,7 @@ app.get('/api/classes/:classId/posts/:postId/photos/:photoId', async (req, res) 
         .toBuffer()
 
       res.setHeader('Content-Type', 'image/webp')
-      res.setHeader('Cache-Control', 'private, max-age=3600')
+      res.setHeader('Cache-Control', 'no-store')
       res.setHeader(
         'Content-Disposition',
         `${isDownload ? 'attachment' : 'inline'}; filename="${photo.originalName || 'photo'}"`,
@@ -4937,7 +4848,7 @@ app.get('/api/classes/:classId/posts/:postId/photos/:photoId', async (req, res) 
     }
 
     res.setHeader('Content-Type', photo.contentType || 'image/jpeg')
-    res.setHeader('Cache-Control', 'private, max-age=3600')
+    res.setHeader('Cache-Control', 'no-store')
     res.setHeader(
       'Content-Disposition',
       `${isDownload ? 'attachment' : 'inline'}; filename="${photo.originalName || 'photo'}"`,

@@ -26,55 +26,6 @@ import { getStoredAuth } from '../authStorage'
 
 const emptyClassForm = { name: '', description: '', grade: '' }
 const emptyClassShareForm = { message: '', category: 'assignment', documentLink: '' }
-const ADMIN_CACHE_KEY = 'innovative_science_2_admin_cache'
-const CLASS_FEED_CACHE_PREFIX = 'innovative_science_2_class_feed'
-
-const getClassFeedCacheKey = (classId) => `${CLASS_FEED_CACHE_PREFIX}:${String(classId || 'unknown')}`
-
-const readAdminCache = () => {
-  try {
-    const cached = JSON.parse(localStorage.getItem(ADMIN_CACHE_KEY) || 'null')
-
-    if (!cached || typeof cached !== 'object') {
-      return null
-    }
-
-    return cached
-  } catch (error) {
-    localStorage.removeItem(ADMIN_CACHE_KEY)
-    return null
-  }
-}
-
-const writeAdminCache = (payload) => {
-  try {
-    localStorage.setItem(
-      ADMIN_CACHE_KEY,
-      JSON.stringify({
-        ...payload,
-        cachedAt: Date.now(),
-      }),
-    )
-  } catch (error) {
-    // Ignore storage limits and keep the live UI working.
-  }
-}
-
-const readClassFeedCache = (classId) => {
-  try {
-    const cached = JSON.parse(localStorage.getItem(getClassFeedCacheKey(classId)) || 'null')
-
-    if (!cached || typeof cached !== 'object') {
-      return null
-    }
-
-    return cached
-  } catch (error) {
-    localStorage.removeItem(getClassFeedCacheKey(classId))
-    return null
-  }
-}
-
 const CLASS_POST_CATEGORIES = [
   { value: 'assignment', label: 'Assignment' },
   { value: 'practice-paper', label: 'Practice Paper' },
@@ -108,17 +59,16 @@ const syncClassShareTargets = (classItems = [], currentTargets = []) => {
 const Adminpage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
-  const adminCache = useMemo(() => readAdminCache(), [])
   const [activeTab, setActiveTab] = useState('students')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [studentClassFilter, setStudentClassFilter] = useState('')
-  const [students, setStudents] = useState(() => adminCache?.students || [])
-  const [classes, setClasses] = useState(() => adminCache?.classes || [])
-  const [reports, setReports] = useState(() => adminCache?.reports || [])
-  const [contacts, setContacts] = useState(() => adminCache?.contacts || [])
-  const [feedbacks, setFeedbacks] = useState(() => adminCache?.feedbacks || [])
-  const [loading, setLoading] = useState(() => !(adminCache?.students?.length || adminCache?.classes?.length))
+  const [students, setStudents] = useState([])
+  const [classes, setClasses] = useState([])
+  const [reports, setReports] = useState([])
+  const [contacts, setContacts] = useState([])
+  const [feedbacks, setFeedbacks] = useState([])
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [studentDetail, setStudentDetail] = useState(null)
@@ -153,14 +103,6 @@ const Adminpage = () => {
 
       setStudents(studentsData.students || [])
       setClasses(classesData.classes || [])
-      writeAdminCache({
-        searchTerm,
-        students: studentsData.students || [],
-        classes: classesData.classes || [],
-        reports,
-        contacts,
-        feedbacks,
-      })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -174,52 +116,19 @@ const Adminpage = () => {
       return
     }
 
-    const cachedFeed = readClassFeedCache(classId)
-    if (cachedFeed?.posts?.length) {
-      setClassPosts(cachedFeed.posts || [])
-      setClassFeedLoading(false)
-    } else {
-      setClassFeedLoading(true)
-    }
+    setClassFeedLoading(true)
     setClassFeedError('')
 
     try {
       const data = await apiRequest(`/api/classes/${classId}/feed`)
       const nextPosts = data.posts || []
       setClassPosts(nextPosts)
-      try {
-        localStorage.setItem(
-          getClassFeedCacheKey(classId),
-          JSON.stringify({
-            posts: nextPosts,
-            activeCategory: 'all',
-            categoryCounts: data?.categoryCounts || {},
-            classItem: data?.classItem || null,
-            cachedAt: Date.now(),
-          }),
-        )
-      } catch (error) {
-        // Ignore cache write issues.
-      }
     } catch (err) {
       setClassFeedError(err.message)
       setClassPosts([])
     } finally {
       setClassFeedLoading(false)
     }
-  }
-
-  const updateAdminCache = (patch) => {
-    writeAdminCache({
-      ...(readAdminCache() || {}),
-      searchTerm: debouncedSearch,
-      students,
-      classes,
-      reports,
-      contacts,
-      feedbacks,
-      ...patch,
-    })
   }
 
   const loadReports = async () => {
@@ -233,7 +142,6 @@ const Adminpage = () => {
       const data = await apiRequest('/api/admin/reports?limit=50')
       const nextReports = data.reports || []
       setReports(nextReports)
-      updateAdminCache({ reports: nextReports })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -252,7 +160,6 @@ const Adminpage = () => {
       const data = await apiRequest('/api/admin/contacts?limit=50')
       const nextContacts = data.contacts || []
       setContacts(nextContacts)
-      updateAdminCache({ contacts: nextContacts })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -271,7 +178,6 @@ const Adminpage = () => {
       const data = await apiRequest('/api/admin/feedback?limit=50')
       const nextFeedback = data.feedback || []
       setFeedbacks(nextFeedback)
-      updateAdminCache({ feedbacks: nextFeedback })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -323,11 +229,6 @@ const Adminpage = () => {
       return
     }
 
-    const cachedFeed = readClassFeedCache(selectedClassFeedId)
-    if (cachedFeed?.posts?.length) {
-      return
-    }
-
     let cancelled = false
 
     const prefetch = async () => {
@@ -335,22 +236,6 @@ const Adminpage = () => {
         const data = await apiRequest(`/api/classes/${selectedClassFeedId}/feed`)
         if (cancelled) {
           return
-        }
-
-        const nextPosts = data.posts || []
-        try {
-          localStorage.setItem(
-            getClassFeedCacheKey(selectedClassFeedId),
-            JSON.stringify({
-              posts: nextPosts,
-              activeCategory: 'all',
-              categoryCounts: data?.categoryCounts || {},
-              classItem: data?.classItem || null,
-              cachedAt: Date.now(),
-            }),
-          )
-        } catch (error) {
-          // Ignore cache write issues.
         }
       } catch (error) {
         // Background warm-up only.

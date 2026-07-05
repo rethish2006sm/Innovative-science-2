@@ -23,41 +23,6 @@ const EMPTY_CATEGORY_COUNTS = CLASS_POST_CATEGORIES.reduce((acc, item) => {
   return acc;
 }, {});
 
-const CLASS_FEED_CACHE_PREFIX = "innovative_science_2_class_feed"
-const getClassFeedCacheKey = (classId) => `${CLASS_FEED_CACHE_PREFIX}:${String(classId || "unknown")}`
-
-function readClassFeedCache(classId) {
-  try {
-    const cached = JSON.parse(localStorage.getItem(getClassFeedCacheKey(classId)) || "null")
-    if (!cached || typeof cached !== "object") return null
-    return cached
-  } catch (error) {
-    return null
-  }
-}
-
-function writeClassFeedCache(classId, payload) {
-  try {
-    localStorage.setItem(
-      getClassFeedCacheKey(classId),
-      JSON.stringify({
-        ...payload,
-        cachedAt: Date.now(),
-      }),
-    )
-  } catch (error) {
-    // Ignore storage limits and keep the live fetch working.
-  }
-}
-
-function clearClassFeedCache(classId) {
-  try {
-    localStorage.removeItem(getClassFeedCacheKey(classId));
-  } catch (error) {
-    // Ignore storage access issues during shutdown cleanup.
-  }
-}
-
 function getStoredToken() {
   return getStoredAuth()?.token || "";
 }
@@ -94,11 +59,10 @@ function formatDate(value) {
 
 export default function Classpage() {
   const { classId } = useParams();
-  const cachedFeed = readClassFeedCache(classId)
-  const [activeCategory, setActiveCategory] = useState(() => cachedFeed?.activeCategory || "all");
-  const [posts, setPosts] = useState(() => cachedFeed?.posts || []);
-  const [loading, setLoading] = useState(() => !cachedFeed);
-  const [categoryCounts, setCategoryCounts] = useState(() => cachedFeed?.categoryCounts || EMPTY_CATEGORY_COUNTS);
+  const [activeCategory, setActiveCategory] = useState("all");
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [categoryCounts, setCategoryCounts] = useState(EMPTY_CATEGORY_COUNTS);
   const [error, setError] = useState("");
   const [viewerPost, setViewerPost] = useState(null);
   const [viewerPhoto, setViewerPhoto] = useState(null);
@@ -132,9 +96,6 @@ export default function Classpage() {
         return;
       }
 
-      if (!cachedFeed) {
-        setLoading(true);
-      }
       setError("");
 
       try {
@@ -144,12 +105,6 @@ export default function Classpage() {
         if (!cancelled) {
           setPosts(nextPosts);
           setCategoryCounts(data?.categoryCounts || EMPTY_CATEGORY_COUNTS);
-          writeClassFeedCache(classId, {
-            posts: nextPosts,
-            activeCategory,
-            categoryCounts: data?.categoryCounts || EMPTY_CATEGORY_COUNTS,
-            classItem: data?.classItem || null,
-          })
         }
       } catch (fetchError) {
         if (!cancelled) {
@@ -174,18 +129,6 @@ export default function Classpage() {
     if (!classId) {
       return undefined;
     }
-
-    const clearCacheOnClose = () => {
-      clearClassFeedCache(classId);
-    };
-
-    window.addEventListener("beforeunload", clearCacheOnClose);
-    window.addEventListener("pagehide", clearCacheOnClose);
-
-    return () => {
-      window.removeEventListener("beforeunload", clearCacheOnClose);
-      window.removeEventListener("pagehide", clearCacheOnClose);
-    };
   }, [classId]);
 
   const closeViewer = () => {

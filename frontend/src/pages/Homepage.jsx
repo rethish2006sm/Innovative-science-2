@@ -6,71 +6,6 @@ import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 import ChapterWeightageGraph from '../components/ChapterWeightageGraph'
 
-const HOMEPAGE_CACHE_KEY = 'innovative_science_2_homepage_cache'
-const LEADERBOARD_CACHE_KEY = 'innovative_science_2_leaderboard_cache'
-
-const readHomepageCache = () => {
-  try {
-    const cached = JSON.parse(localStorage.getItem(HOMEPAGE_CACHE_KEY) || 'null')
-
-    if (!cached || typeof cached !== 'object') {
-      return null
-    }
-
-    return cached
-  } catch (error) {
-    localStorage.removeItem(HOMEPAGE_CACHE_KEY)
-    return null
-  }
-}
-
-const writeHomepageCache = (payload) => {
-  try {
-    localStorage.setItem(
-      HOMEPAGE_CACHE_KEY,
-      JSON.stringify({
-        ...payload,
-        cachedAt: Date.now(),
-      }),
-    )
-  } catch (error) {
-    // Ignore storage quota issues and keep the live UI working.
-  }
-}
-
-const readLeaderboardCache = () => {
-  try {
-    const cached = JSON.parse(localStorage.getItem(LEADERBOARD_CACHE_KEY) || 'null')
-
-    if (!cached || typeof cached !== 'object') {
-      return null
-    }
-
-    return cached
-  } catch (error) {
-    localStorage.removeItem(LEADERBOARD_CACHE_KEY)
-    return null
-  }
-}
-
-const writeLeaderboardCache = (payload) => {
-  try {
-    localStorage.setItem(
-      LEADERBOARD_CACHE_KEY,
-      JSON.stringify({
-        ...payload,
-        cachedAt: Date.now(),
-      }),
-    )
-  } catch (error) {
-    // Ignore storage quota issues and keep the live UI working.
-  }
-}
-
-const clearHomepageCache = () => {
-  localStorage.removeItem(HOMEPAGE_CACHE_KEY)
-}
-
 const normalizeTopFiveRows = (rows = []) => (Array.isArray(rows) ? rows.slice(0, 5) : [])
 
 // --- Animation Variants ---
@@ -89,36 +24,15 @@ const staggerContainer = {
 
 const Homepage = () => {
   const navigate = useNavigate()
-  const homepageCache = useMemo(() => readHomepageCache(), [])
-  const leaderboardCache = useMemo(() => readLeaderboardCache(), [])
-  const initialLeaderboardCache = useMemo(() => {
-    const homepageHasLeaderboard = Array.isArray(homepageCache?.leaderboard) && homepageCache.leaderboard.length > 0
-    const leaderboardHasLeaderboard = Array.isArray(leaderboardCache?.leaderboard) && leaderboardCache.leaderboard.length > 0
-
-    if (!homepageHasLeaderboard && !leaderboardHasLeaderboard) {
-      return null
-    }
-
-    if (homepageHasLeaderboard && leaderboardHasLeaderboard) {
-      return Number(leaderboardCache?.cachedAt || 0) >= Number(homepageCache?.cachedAt || 0)
-        ? leaderboardCache
-        : homepageCache
-    }
-
-    return leaderboardHasLeaderboard ? leaderboardCache : homepageCache
-  }, [homepageCache, leaderboardCache])
-  const hasCachedLeaderboard = Array.isArray(initialLeaderboardCache?.leaderboard) && initialLeaderboardCache.leaderboard.length > 0
-  const hasCachedChapters = Array.isArray(homepageCache?.chapters) && homepageCache.chapters.length > 0
-  const [leaderboard, setLeaderboard] = useState(() => normalizeTopFiveRows(initialLeaderboardCache?.leaderboard))
-  const [classOptions, setClassOptions] = useState(() => homepageCache?.classOptions || leaderboardCache?.classOptions || [])
-  const [leaderboardScope, setLeaderboardScope] = useState(() => initialLeaderboardCache?.leaderboardScope || initialLeaderboardCache?.scope || homepageCache?.leaderboardScope || leaderboardCache?.scope || 'all')
-  const [selectedClassId, setSelectedClassId] = useState(() => initialLeaderboardCache?.selectedClassId || homepageCache?.selectedClassId || leaderboardCache?.selectedClassId || getStoredAuth()?.user?.classId || '')
-  const [chapters, setChapters] = useState(() => homepageCache?.chapters || [])
-  const [progress, setProgress] = useState(() => homepageCache?.progress || null)
-  const [featuredFeedback, setFeaturedFeedback] = useState(() => homepageCache?.featuredFeedback || [])
-  const [leaderboardLoading, setLeaderboardLoading] = useState(() => !hasCachedLeaderboard)
-  const [chaptersLoading, setChaptersLoading] = useState(() => !hasCachedChapters)
-  const [leaderboardRefreshTick, setLeaderboardRefreshTick] = useState(0)
+  const [leaderboard, setLeaderboard] = useState([])
+  const [classOptions, setClassOptions] = useState([])
+  const [leaderboardScope, setLeaderboardScope] = useState('all')
+  const [selectedClassId, setSelectedClassId] = useState(() => getStoredAuth()?.user?.classId || '')
+  const [chapters, setChapters] = useState([])
+  const [progress, setProgress] = useState(null)
+  const [featuredFeedback, setFeaturedFeedback] = useState([])
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true)
+  const [chaptersLoading, setChaptersLoading] = useState(true)
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [isAiTeacherOpen, setIsAiTeacherOpen] = useState(false)
   const [aiTeacherInput, setAiTeacherInput] = useState('')
@@ -147,12 +61,6 @@ const Homepage = () => {
 
         const nextLeaderboard = normalizeTopFiveRows(data.leaderboard)
         setLeaderboard(nextLeaderboard)
-        writeLeaderboardCache({
-          scope: leaderboardScope,
-          selectedClassId,
-          leaderboard: nextLeaderboard,
-          classOptions,
-        })
       } catch (error) {
         if (!cancelled && leaderboard.length === 0) {
           setLeaderboard([])
@@ -173,61 +81,13 @@ const Homepage = () => {
     return () => {
       cancelled = true
     }
-  }, [leaderboardScope, selectedClassId, classOptions.length, leaderboardRefreshTick])
-
-  useEffect(() => {
-    const syncLeaderboardFromCache = () => {
-      const cached = readLeaderboardCache()
-      if (!cached) {
-        setLeaderboardRefreshTick((current) => current + 1)
-        return
-      }
-
-      const sameScope = String(cached.scope || 'all') === String(leaderboardScope || 'all')
-      const sameClass = String(cached.selectedClassId || '') === String(selectedClassId || '')
-
-      if (sameScope && sameClass) {
-        setLeaderboard(normalizeTopFiveRows(cached.leaderboard))
-        setLeaderboardLoading(false)
-      }
-
-      setLeaderboardRefreshTick((current) => current + 1)
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        syncLeaderboardFromCache()
-      }
-    }
-
-    window.addEventListener('innovative-science-leaderboard-updated', syncLeaderboardFromCache)
-    window.addEventListener('storage', syncLeaderboardFromCache)
-    window.addEventListener('focus', syncLeaderboardFromCache)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('innovative-science-progress-updated', syncLeaderboardFromCache)
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        syncLeaderboardFromCache()
-      }
-    }, 5000)
-
-    return () => {
-      window.clearInterval(intervalId)
-      window.removeEventListener('innovative-science-leaderboard-updated', syncLeaderboardFromCache)
-      window.removeEventListener('storage', syncLeaderboardFromCache)
-      window.removeEventListener('focus', syncLeaderboardFromCache)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('innovative-science-progress-updated', syncLeaderboardFromCache)
-    }
-  }, [leaderboardScope, selectedClassId])
+  }, [leaderboardScope, selectedClassId, classOptions.length])
 
   useEffect(() => {
     let cancelled = false
 
     const loadStaticContent = async () => {
-      if (!homepageCache?.chapters) {
-        setChaptersLoading(true)
-      }
+      setChaptersLoading(true)
 
       try {
         const [chaptersData, classesData, feedbackData, progressData] = await Promise.all([
@@ -265,7 +125,7 @@ const Homepage = () => {
     return () => {
       cancelled = true
     }
-  }, [auth?.token, homepageCache?.chapters])
+  }, [auth?.token])
 
   useEffect(() => {
     if (!selectedClassId && auth?.user?.classId) {
@@ -278,33 +138,6 @@ const Homepage = () => {
       setLeaderboardScope('all')
     }
   }, [canViewClassLeaderboard, leaderboardScope])
-
-  useEffect(() => {
-    const handleClose = () => {
-      clearHomepageCache()
-    }
-
-    window.addEventListener('beforeunload', handleClose)
-    window.addEventListener('pagehide', handleClose)
-
-    return () => {
-      window.removeEventListener('beforeunload', handleClose)
-      window.removeEventListener('pagehide', handleClose)
-    }
-  }, [])
-
-  useEffect(() => {
-    writeHomepageCache({
-      chapters,
-      leaderboard: normalizeTopFiveRows(leaderboard),
-      classOptions,
-      featuredFeedback,
-      leaderboardScope,
-      selectedClassId,
-      progress,
-      profile: auth?.user || null,
-    })
-  }, [chapters, leaderboard, classOptions, featuredFeedback, leaderboardScope, selectedClassId, progress, auth?.user])
 
   const stats = useMemo(() => [
     { label: 'Chapters', value: chapters.length || 0, icon: BookOpen },

@@ -4,63 +4,9 @@ import { BarChart3, Crown, Sparkles, Trophy, Users } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 
-const LEADERBOARD_CACHE_KEY = 'innovative_science_2_leaderboard_cache'
-const LEADERBOARD_REFRESH_MS = 5000
-
-const readLeaderboardCache = () => {
-  try {
-    const cached = JSON.parse(localStorage.getItem(LEADERBOARD_CACHE_KEY) || 'null')
-
-    if (!cached || typeof cached !== 'object') {
-      return null
-    }
-
-    return cached
-  } catch (error) {
-    localStorage.removeItem(LEADERBOARD_CACHE_KEY)
-    return null
-  }
-}
-
-const writeLeaderboardCache = (payload) => {
-  try {
-    localStorage.setItem(
-      LEADERBOARD_CACHE_KEY,
-      JSON.stringify({
-        ...payload,
-        cachedAt: Date.now(),
-      }),
-    )
-  } catch (error) {
-    // Ignore storage limits and keep the live UI working.
-  }
-}
-
-const notifyLeaderboardUpdate = () => {
-  window.dispatchEvent(new CustomEvent('innovative-science-leaderboard-updated'))
-}
-
 const normalizeLeaderboardRows = (rows = []) => (
   Array.isArray(rows) ? rows.map((row, index) => normalizeLeaderboardRow(row, index)) : []
 )
-
-const readLeaderboardCacheForView = (scope, selectedClassId) => {
-  const cached = readLeaderboardCache()
-
-  if (!cached || typeof cached !== 'object') {
-    return null
-  }
-
-  if (String(cached.scope || 'all') !== String(scope || 'all')) {
-    return null
-  }
-
-  if (String(cached.selectedClassId || '') !== String(selectedClassId || '')) {
-    return null
-  }
-
-  return cached
-}
 
 const normalizeLeaderboardRow = (row, index) => ({
   id: String(row?.id || row?._id || row?.email || `leaderboard-row-${index}`),
@@ -159,55 +105,26 @@ const LeaderboardRow = memo(({ student, rank, isCurrentUser }) => {
 })
 
 const LeaderboardPage = () => {
-  const initialCache = useMemo(() => readLeaderboardCache(), [])
   const requestIdRef = useRef(0)
-  const [scope, setScope] = useState(() => initialCache?.scope || 'all')
-  const [leaderboard, setLeaderboard] = useState(() => normalizeLeaderboardRows(initialCache?.leaderboard))
-  const [classOptions, setClassOptions] = useState(() => initialCache?.classOptions || [])
+  const [scope, setScope] = useState('all')
+  const [leaderboard, setLeaderboard] = useState([])
+  const [classOptions, setClassOptions] = useState([])
   const [selectedClassId, setSelectedClassId] = useState(
-    () => initialCache?.selectedClassId || getStoredAuth()?.user?.classId || '',
+    () => getStoredAuth()?.user?.classId || '',
   )
-  const [loading, setLoading] = useState(
-    () => !Array.isArray(initialCache?.leaderboard) || !initialCache?.leaderboard.length,
-  )
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [lastSyncedAt, setLastSyncedAt] = useState(() => Number(initialCache?.cachedAt || 0))
   const [auth, setAuth] = useState(() => getStoredAuth())
   const canViewClassLeaderboard = Boolean(auth?.user?.classId)
-
-  const syncLeaderboardFromCache = (nextScope = scope, nextClassId = selectedClassId) => {
-    const cached = readLeaderboardCacheForView(nextScope, nextClassId)
-
-    if (!cached) {
-      return false
-    }
-
-    setLeaderboard(normalizeLeaderboardRows(cached.leaderboard))
-    setClassOptions(Array.isArray(cached.classOptions) ? cached.classOptions : [])
-    setLoading(false)
-    setError('')
-    setLastSyncedAt(Number(cached.cachedAt || Date.now()))
-
-    return true
-  }
 
   const loadLeaderboard = async (nextScope = scope, nextClassId = selectedClassId, { silent = false } = {}) => {
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
-    const cachedView = readLeaderboardCacheForView(nextScope, nextClassId)
-    const hasCachedRows = Array.isArray(cachedView?.leaderboard) && cachedView.leaderboard.length > 0
+    setLoading(true)
 
-    if (!hasCachedRows) {
-      setLoading(true)
-      setLeaderboard([])
-    }
-
-    if (!silent && !hasCachedRows) {
+    if (!silent) {
       setError('')
     }
-
-    setIsRefreshing(hasCachedRows)
 
     try {
       const classQuery = nextScope === 'class' && nextClassId ? `&classId=${nextClassId}` : ''
@@ -220,30 +137,17 @@ const LeaderboardPage = () => {
       const nextLeaderboard = Array.isArray(data.leaderboard)
         ? normalizeLeaderboardRows(data.leaderboard)
         : []
-      const existingCache = readLeaderboardCache()
 
       setLeaderboard(nextLeaderboard)
       setError('')
-      writeLeaderboardCache({
-        scope: nextScope,
-        selectedClassId: nextClassId,
-        leaderboard: nextLeaderboard,
-        classOptions: classOptions.length ? classOptions : existingCache?.classOptions || [],
-      })
-      setLastSyncedAt(Date.now())
-      notifyLeaderboardUpdate()
     } catch (err) {
       if (requestId !== requestIdRef.current) {
         return
       }
-
-      if (!hasCachedRows) {
-        setError(err.message)
-      }
+      setError(err.message)
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false)
-        setIsRefreshing(false)
       }
     }
   }
@@ -258,12 +162,6 @@ const LeaderboardPage = () => {
         const data = await apiRequest('/api/classes')
         const nextClassOptions = data.classes || []
         setClassOptions(nextClassOptions)
-        writeLeaderboardCache({
-          scope,
-          selectedClassId,
-          leaderboard,
-          classOptions: nextClassOptions,
-        })
       } catch (err) {
         setError(err.message)
       }
@@ -295,58 +193,7 @@ const LeaderboardPage = () => {
       return
     }
 
-    const hasCachedView = syncLeaderboardFromCache(scope, selectedClassId)
-    loadLeaderboard(scope, selectedClassId, { silent: hasCachedView })
-  }, [scope, selectedClassId, classOptions.length])
-
-  useEffect(() => {
-    const refreshFromProgress = () => {
-      loadLeaderboard(scope, selectedClassId, { silent: true })
-    }
-
-    window.addEventListener('innovative-science-progress-updated', refreshFromProgress)
-
-    return () => {
-      window.removeEventListener('innovative-science-progress-updated', refreshFromProgress)
-    }
-  }, [scope, selectedClassId, classOptions.length])
-
-  useEffect(() => {
-    if (scope === 'class' && !selectedClassId) {
-      return undefined
-    }
-
-    const refreshLeaderboard = () => {
-      if (document.visibilityState === 'visible') {
-        loadLeaderboard(scope, selectedClassId, { silent: true })
-      }
-    }
-
-    const syncFromCache = () => {
-      syncLeaderboardFromCache(scope, selectedClassId)
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        syncFromCache()
-        refreshLeaderboard()
-      }
-    }
-
-    window.addEventListener('innovative-science-leaderboard-updated', syncFromCache)
-    window.addEventListener('storage', syncFromCache)
-    window.addEventListener('focus', refreshLeaderboard)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    const intervalId = window.setInterval(refreshLeaderboard, LEADERBOARD_REFRESH_MS)
-
-    return () => {
-      window.clearInterval(intervalId)
-      window.removeEventListener('innovative-science-leaderboard-updated', syncFromCache)
-      window.removeEventListener('storage', syncFromCache)
-      window.removeEventListener('focus', refreshLeaderboard)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
+    loadLeaderboard(scope, selectedClassId, { silent: true })
   }, [scope, selectedClassId, classOptions.length])
 
   const sortedLeaderboard = useMemo(() => mergeSortLeaderboard(leaderboard), [leaderboard])
@@ -380,21 +227,6 @@ const LeaderboardPage = () => {
               <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-600 sm:text-base">
                 We sort by brain cells first, then show only the three fields that matter most: name, class, and brain cells.
               </p>
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-[11px] font-black uppercase tracking-widest text-emerald-700">
-                  Auto refresh every 5s
-                </span>
-                {isRefreshing && (
-                  <span className="rounded-full bg-cyan-50 px-3 py-1.5 text-[11px] font-black uppercase tracking-widest text-cyan-700">
-                    Syncing live cache
-                  </span>
-                )}
-                {lastSyncedAt ? (
-                  <span className="rounded-full bg-slate-100 px-3 py-1.5 text-[11px] font-black uppercase tracking-widest text-slate-500">
-                    Cached locally
-                  </span>
-                ) : null}
-              </div>
             </div>
 
             <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-3 lg:w-auto lg:min-w-[380px]">

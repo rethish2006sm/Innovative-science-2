@@ -7,7 +7,6 @@ import { authEvents, getStoredAuth } from '../authStorage'
 
 const FIXED_TITLE = 'Class 10 Science 2'
 const FIXED_SUBJECT = 'Science 2'
-const PYQS_CACHE_KEY = 'innovative_science_2_pyqs_cache'
 
 const MONTH_OPTIONS = [
   'January',
@@ -30,42 +29,12 @@ const initialUploadForm = {
   pdf: null,
 }
 
-const readPyqsCache = () => {
-  try {
-    const cached = JSON.parse(localStorage.getItem(PYQS_CACHE_KEY) || 'null')
-
-    if (!cached || typeof cached !== 'object') {
-      return null
-    }
-
-    return cached
-  } catch (error) {
-    localStorage.removeItem(PYQS_CACHE_KEY)
-    return null
-  }
-}
-
-const writePyqsCache = (payload) => {
-  try {
-    localStorage.setItem(
-      PYQS_CACHE_KEY,
-      JSON.stringify({
-        ...payload,
-        cachedAt: Date.now(),
-      }),
-    )
-  } catch (error) {
-    // Ignore storage quota issues and keep the live UI working.
-  }
-}
-
 const PyqsPage = () => {
-  const cachedPyqs = readPyqsCache()
   const [auth, setAuth] = useState(() => getStoredAuth())
-  const [pyqs, setPyqs] = useState(() => cachedPyqs?.pyqs || [])
-  const [selectedPyqId, setSelectedPyqId] = useState(() => cachedPyqs?.selectedPyqId || '')
+  const [pyqs, setPyqs] = useState([])
+  const [selectedPyqId, setSelectedPyqId] = useState('')
   const [uploadForm, setUploadForm] = useState(initialUploadForm)
-  const [isLoading, setIsLoading] = useState(() => !Array.isArray(cachedPyqs?.pyqs) || !cachedPyqs?.pyqs.length)
+  const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -108,9 +77,7 @@ const PyqsPage = () => {
 
   useEffect(() => {
     const loadPyqs = async () => {
-      if (!cachedPyqs?.pyqs) {
-        setIsLoading(true)
-      }
+      setIsLoading(true)
       setError('')
 
       try {
@@ -119,10 +86,6 @@ const PyqsPage = () => {
         const nextSelectedPyqId = selectedPyqId || nextPyqs[0]?.id || ''
         setPyqs(nextPyqs)
         setSelectedPyqId(nextSelectedPyqId)
-        writePyqsCache({
-          pyqs: nextPyqs,
-          selectedPyqId: nextSelectedPyqId,
-        })
       } catch (err) {
         setError(err.message)
       } finally {
@@ -202,10 +165,6 @@ const PyqsPage = () => {
       setPyqs(nextPyqs)
       const nextSelectedPyqId = data.pyq?.id || nextPyqs[0]?.id || ''
       setSelectedPyqId(nextSelectedPyqId)
-      writePyqsCache({
-        pyqs: nextPyqs,
-        selectedPyqId: nextSelectedPyqId,
-      })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -234,10 +193,6 @@ const PyqsPage = () => {
         }
 
         return current || nextPyqs[0]?.id || ''
-      })
-      writePyqsCache({
-        pyqs: nextPyqs,
-        selectedPyqId: nextPyqs[0]?.id || '',
       })
       setIsMobileViewerOpen(false)
       setIsMobilePdfLoading(false)
