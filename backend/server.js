@@ -655,6 +655,20 @@ const messageSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    acknowledgements: {
+      type: [{
+        user: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        acknowledgedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      }],
+      default: [],
+    },
   },
   { timestamps: true },
 )
@@ -999,6 +1013,33 @@ const publicSiteNotice = (notice) => {
     message: String(notice.message || ''),
     color: String(notice.color || 'amber'),
     updatedAt: notice.updatedAt,
+  }
+}
+
+const publicMessage = (message) => {
+  if (!message) {
+    return null
+  }
+
+  return {
+    id: String(message._id),
+    createdBy: {
+      id: String(message.createdBy?._id || message.createdBy || ''),
+      name: String(message.createdBy?.name || 'Admin'),
+    },
+    targetType: String(message.targetType || 'all'),
+    targetUserIds: Array.isArray(message.targetUserIds)
+      ? message.targetUserIds.map((item) => String(item?._id || item || '')).filter(Boolean)
+      : [],
+    targetClassId: String(message.targetClassId?._id || message.targetClassId || ''),
+    targetClassName: String(message.targetClassId?.name || ''),
+    subject: String(message.subject || ''),
+    body: String(message.body || ''),
+    audienceCount: Number(message.audienceCount || 0),
+    sentUserEmails: Array.isArray(message.sentUserEmails) ? message.sentUserEmails.map((item) => String(item || '')) : [],
+    acknowledgedCount: Array.isArray(message.acknowledgements) ? message.acknowledgements.length : 0,
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
   }
 }
 
@@ -4052,7 +4093,7 @@ app.get('/api/feedback/featured', async (req, res) => {
 app.get('/api/admin/feedback', authRequired, adminRequired, async (req, res) => {
   try {
     const feedback = await Feedback.find()
-      .select('user classId clientKey name className rating message featured status createdAt')
+      .select('user classId clientKey name className rating message featured status sourceType sourceKey sourceLabel createdAt')
       .sort({ createdAt: -1 })
       .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
       .populate([
@@ -4132,9 +4173,42 @@ app.delete('/api/feedback/:id', authRequired, async (req, res) => {
   }
 })
 
+const doesMessageTargetUser = (message, user) => {
+  if (!message || !user) {
+    return false
+  }
+
+  const userId = String(user._id || user.id || '')
+  const classId = String(user.classId?._id || user.classId || '')
+  const targetUserIds = Array.isArray(message.targetUserIds)
+    ? message.targetUserIds.map((item) => String(item?._id || item || '')).filter(Boolean)
+    : []
+  const targetClassId = String(message.targetClassId?._id || message.targetClassId || '')
+
+  if (String(message.targetType || 'all') === 'all') {
+    return true
+  }
+
+  if (String(message.targetType || '') === 'user') {
+    return targetUserIds.includes(userId)
+  }
+
+  if (String(message.targetType || '') === 'class') {
+    return Boolean(classId && targetClassId && classId === targetClassId)
+  }
+
+  return false
+}
+
 app.get('/api/messages/me', authRequired, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).populate('classId', 'name')
+    if (user?.isAdmin) {
+      return res.json({
+        messages: [],
+        user: publicUser(user),
+      })
+    }
     const classId = user.classId?._id || user.classId
     const messages = await Message.find({
       $or: [
@@ -4148,11 +4222,97 @@ app.get('/api/messages/me', authRequired, async (req, res) => {
       .lean()
 
     res.json({
-      messages,
+      messages: messages
+        .map((message) => ({
+          ...publicMessage(message),
+          acknowledgedByMe: Array.isArray(message.acknowledgements)
+            ? message.acknowledgements.some((entry) => String(entry?.user?._id || entry?.user || '') === String(user._id))
+            : false,
+        }))
+        .filter((message) => message.acknowledgedByMe || doesMessageTargetUser(message, user)),
       user: publicUser(user),
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load messages.' })
+  }
+})
+
+app.post('/api/messages/:id/acknowledge', authRequired, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate('classId', 'name')
+    const message = await Message.findById(req.params.id).populate('targetClassId')
+
+    if (!user || user.isAdmin) {
+      return res.status(403).json({ message: 'Student access required.' })
+    }
+
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found.' })
+    }
+
+    if (!doesMessageTargetUser(message, user)) {
+      return res.status(403).json({ message: 'You cannot acknowledge this message.' })
+    }
+
+    const userId = String(user._id)
+    const existingAcknowledgement = Array.isArray(message.acknowledgements)
+      ? message.acknowledgements.find((entry) => String(entry.user?._id || entry.user || '') === userId)
+      : null
+
+    if (existingAcknowledgement) {
+      existingAcknowledgement.acknowledgedAt = new Date()
+    } else {
+      message.acknowledgements = Array.isArray(message.acknowledgements) ? message.acknowledgements : []
+      message.acknowledgements.push({
+        user: user._id,
+        acknowledgedAt: new Date(),
+      })
+    }
+
+    await message.save()
+
+    const refreshedMessage = await Message.findById(message._id).populate('createdBy targetClassId acknowledgements.user', 'name email')
+
+    res.json({
+      message: 'Message acknowledged successfully.',
+      messageItem: {
+        ...publicMessage(refreshedMessage),
+        acknowledgedByMe: true,
+      },
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not acknowledge message.' })
+  }
+})
+
+app.get('/api/admin/messages', authRequired, adminRequired, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)
+    const messages = await Message.find()
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('createdBy targetClassId acknowledgements.user', 'name email')
+      .lean()
+
+    res.json({
+      messages: messages.map(publicMessage),
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load admin messages.' })
+  }
+})
+
+app.delete('/api/admin/messages/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const message = await Message.findByIdAndDelete(req.params.id)
+
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found.' })
+    }
+
+    res.json({ message: 'Message deleted successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete message.' })
   }
 })
 
@@ -4169,18 +4329,27 @@ app.get('/api/announcement', async (req, res) => {
 
 app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) => {
   try {
-    const { targetType, targetUserIds = [], targetClassId = '', subject = '', body = '' } = req.body
+    const {
+      targetType,
+      targetUserIds = [],
+      targetClassId = '',
+      subject = '',
+      body = '',
+    } = req.body
+    const normalizedTargetType = String(targetType || 'all')
+    const normalizedSubject = String(subject || '').trim()
+    const normalizedBody = String(body || '').trim()
 
-    if (!body?.trim()) {
+    if (!normalizedBody) {
       return res.status(400).json({ message: 'Message text is required.' })
     }
 
     let recipients = []
     let classDoc = null
 
-    if (targetType === 'all') {
+    if (normalizedTargetType === 'all') {
       recipients = await User.find({ isAdmin: false }).lean()
-    } else if (targetType === 'class') {
+    } else if (normalizedTargetType === 'class') {
       if (!targetClassId) {
         return res.status(400).json({ message: 'Please select a class.' })
       }
@@ -4191,28 +4360,38 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
       }
 
       recipients = await User.find({ isAdmin: false, classId: classDoc._id }).lean()
-    } else if (targetType === 'user') {
-      if (!Array.isArray(targetUserIds) || !targetUserIds.length) {
+    } else if (normalizedTargetType === 'user') {
+      const selectedTargetUserIds = [...new Set(
+        (Array.isArray(targetUserIds) ? targetUserIds : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      )]
+
+      if (!selectedTargetUserIds.length) {
         return res.status(400).json({ message: 'Please select at least one student.' })
       }
 
-      recipients = await User.find({ _id: { $in: targetUserIds }, isAdmin: false }).lean()
+      recipients = await User.find({ _id: { $in: selectedTargetUserIds }, isAdmin: false }).lean()
     } else {
       return res.status(400).json({ message: 'Invalid message target.' })
     }
 
+    if (!recipients.length) {
+      return res.status(404).json({ message: 'No students matched the selected audience.' })
+    }
+
     const messageDoc = await Message.create({
       createdBy: req.user._id,
-      targetType,
+      targetType: normalizedTargetType,
       targetUserIds: recipients.map((item) => item._id),
       targetClassId: classDoc?._id || null,
-      subject,
-      body: body.trim(),
+      subject: normalizedSubject,
+      body: normalizedBody,
       audienceCount: recipients.length,
       sentUserEmails: recipients.map((item) => item.email),
     })
 
-    res.status(201).json({ message: messageDoc, audienceCount: recipients.length })
+    res.status(201).json({ message: publicMessage(messageDoc), audienceCount: recipients.length })
   } catch (error) {
     res.status(500).json({ message: 'Could not send message.' })
   }

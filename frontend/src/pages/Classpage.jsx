@@ -99,7 +99,7 @@ export default function Classpage() {
       setError("");
 
       try {
-        const data = await apiRequest(`/api/classes/${classId}/feed?limit=20&category=all`);
+        const data = await apiRequest(`/api/classes/${classId}/feed?limit=all&category=all`);
         const nextPosts = Array.isArray(data?.posts) ? data.posts : [];
 
         if (!cancelled) {

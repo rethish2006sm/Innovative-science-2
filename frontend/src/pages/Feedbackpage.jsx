@@ -11,6 +11,26 @@ const emptyForm = {
   message: '',
 }
 
+const formatFeedbackSourceLabel = (item = {}) => {
+  if (item.sourceType === 'topic') {
+    return item.sourceLabel ? `Chapter: ${item.sourceLabel}` : 'Chapter feedback'
+  }
+
+  if (item.sourceLabel) {
+    return item.sourceLabel
+  }
+
+  if (item.sourceType === 'test') {
+    return 'Test feedback'
+  }
+
+  if (item.sourceType === 'objective') {
+    return 'Practice feedback'
+  }
+
+  return 'General feedback'
+}
+
 const Feedbackpage = () => {
   const auth = getStoredAuth()
   const [form, setForm] = useState(emptyForm)
@@ -318,7 +338,7 @@ const Feedbackpage = () => {
                         <div className="flex items-start justify-between gap-4">
                           <div>
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
-                              {item.sourceLabel || item.sourceType || 'Feedback'}
+                              {formatFeedbackSourceLabel(item)}
                             </p>
                             <div className="mt-2 flex items-center gap-1">
                               {Array.from({ length: 5 }).map((_, index) => (
@@ -384,6 +404,9 @@ const Feedbackpage = () => {
                         <div>
                           <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
                             {item.name} {item.className ? `• ${item.className}` : ''}
+                          </p>
+                          <p className="mt-1 text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
+                            {formatFeedbackSourceLabel(item)}
                           </p>
                           <div className="mt-2 flex items-center gap-1 text-amber-400">
                             {Array.from({ length: 5 }).map((_, index) => (

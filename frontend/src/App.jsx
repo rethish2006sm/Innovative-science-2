@@ -3,6 +3,7 @@ import { HashRouter, Link, Navigate, Route, Routes, useLocation } from 'react-ro
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
+import StudentMessagePopup from './components/StudentMessagePopup'
 import SiteNoticeBanner from './components/SiteNoticeBanner'
 import Aboutpage from './pages/Aboutpage'
 import ChapterWeightage from './pages/Chapter_weightage'
@@ -360,6 +361,7 @@ const AppLayout = () => {
         canonicalPath={pathname}
       />
       <RankNotifier />
+      <StudentMessagePopup />
       {!isObjectivePracticeRoute && <Navbar />}
       <div className={isObjectivePracticeRoute ? '' : 'pt-24'}>
         {showSiteNotice && (

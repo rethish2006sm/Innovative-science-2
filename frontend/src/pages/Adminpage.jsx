@@ -24,6 +24,27 @@ import { getStoredAuth } from '../authStorage'
 
 const emptyClassForm = { name: '', description: '', grade: '' }
 const emptyClassShareForm = { message: '', category: 'assignment', documentLink: '' }
+
+const formatFeedbackSourceLabel = (item = {}) => {
+  if (item.sourceType === 'topic') {
+    return item.sourceLabel ? `Chapter: ${item.sourceLabel}` : 'Chapter feedback'
+  }
+
+  if (item.sourceLabel) {
+    return item.sourceLabel
+  }
+
+  if (item.sourceType === 'test') {
+    return 'Test feedback'
+  }
+
+  if (item.sourceType === 'objective') {
+    return 'Practice feedback'
+  }
+
+  return 'General feedback'
+}
+
 const NOTICE_COLOR_OPTIONS = [
   { value: 'amber', label: 'Amber' },
   { value: 'teal', label: 'Teal' },
@@ -63,6 +84,24 @@ const syncClassShareTargets = (classItems = [], currentTargets = []) => {
 
 const getStudentRowId = (student) => String(student?.id || student?._id || '')
 
+const formatPopupAudienceLabel = (message = {}) => {
+  if (message.targetType === 'all') {
+    return 'All students'
+  }
+
+  if (message.targetType === 'class') {
+    return message.targetClassName ? `Class: ${message.targetClassName}` : 'Class message'
+  }
+
+  if (message.targetType === 'user') {
+    return message.audienceCount > 1
+      ? `Specific students (${message.audienceCount})`
+      : 'Personal message'
+  }
+
+  return 'Student message'
+}
+
 const Adminpage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
@@ -95,6 +134,21 @@ const Adminpage = () => {
   const [siteNotice, setSiteNotice] = useState(null)
   const [siteNoticeMessage, setSiteNoticeMessage] = useState('')
   const [siteNoticeColor, setSiteNoticeColor] = useState('amber')
+  const [messageTargetType, setMessageTargetType] = useState('all')
+  const [messageSubject, setMessageSubject] = useState('')
+  const [messageBody, setMessageBody] = useState('')
+  const [messageRecipients, setMessageRecipients] = useState([])
+  const [messageRecipientsLoading, setMessageRecipientsLoading] = useState(false)
+  const [messageRecipientsLoaded, setMessageRecipientsLoaded] = useState(false)
+  const [messageRecipientSearch, setMessageRecipientSearch] = useState('')
+  const [messageSelectedUserIds, setMessageSelectedUserIds] = useState([])
+  const [messageSending, setMessageSending] = useState(false)
+  const [messageError, setMessageError] = useState('')
+  const [messageSuccess, setMessageSuccess] = useState('')
+  const [adminMessages, setAdminMessages] = useState([])
+  const [adminMessagesLoading, setAdminMessagesLoading] = useState(false)
+  const [adminMessagesLoaded, setAdminMessagesLoaded] = useState(false)
+  const [adminMessagesError, setAdminMessagesError] = useState('')
   const [reportsLoaded, setReportsLoaded] = useState(false)
   const [contactsLoaded, setContactsLoaded] = useState(false)
   const [noticeLoading, setNoticeLoading] = useState(false)
@@ -110,6 +164,7 @@ const Adminpage = () => {
   const [classPosts, setClassPosts] = useState([])
   const [classFeedLoading, setClassFeedLoading] = useState(false)
   const [classFeedError, setClassFeedError] = useState('')
+  const [classBoardCategoryFilter, setClassBoardCategoryFilter] = useState('all')
   const [classShareForm, setClassShareForm] = useState(emptyClassShareForm)
   const [classSharePhotos, setClassSharePhotos] = useState([])
   const [classSharePdf, setClassSharePdf] = useState(null)
@@ -125,7 +180,39 @@ const Adminpage = () => {
   const dashboardRequestRef = useRef(0)
   const studentsRequestRef = useRef(0)
   const classesRequestRef = useRef(0)
+  const adminMessagesRequestRef = useRef(0)
   const studentQueryRef = useRef(null)
+
+  const filteredMessageRecipients = useMemo(() => {
+    const query = messageRecipientSearch.trim().toLowerCase()
+
+    if (!query) {
+      return messageRecipients
+    }
+
+    return messageRecipients.filter((student) => {
+      const haystack = [
+        student.name,
+        student.email,
+        student.phoneNumber,
+        student.className,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(query)
+    })
+  }, [messageRecipientSearch, messageRecipients])
+
+  const selectedMessageRecipients = useMemo(() => {
+    if (!messageSelectedUserIds.length) {
+      return []
+    }
+
+    const selectedIdSet = new Set(messageSelectedUserIds.map((value) => String(value || '')))
+    return messageRecipients.filter((student) => selectedIdSet.has(getStudentRowId(student)))
+  }, [messageRecipients, messageSelectedUserIds])
 
   const updateDashboardCount = (key, delta) => {
     setDashboardCounts((current) => {
@@ -369,7 +456,7 @@ const Adminpage = () => {
     setClassFeedError('')
 
     try {
-      const data = await apiRequest(`/api/classes/${classId}/feed`)
+      const data = await apiRequest(`/api/classes/${classId}/feed?limit=all&category=all`)
       const nextPosts = data.posts || []
       setClassPosts(nextPosts)
     } catch (err) {
@@ -502,6 +589,164 @@ const Adminpage = () => {
     }
   }
 
+  const loadMessageRecipients = async () => {
+    if (messageRecipientsLoading || messageRecipientsLoaded) {
+      return
+    }
+
+    setMessageRecipientsLoading(true)
+    setMessageError('')
+
+    try {
+      const firstPage = await apiRequest('/api/admin/students?limit=100&page=1')
+      const totalPages = Math.max(Number(firstPage.totalPages || 0), 0)
+      const allRecipients = Array.isArray(firstPage.students) ? [...firstPage.students] : []
+
+      if (totalPages > 1) {
+        const requests = []
+
+        for (let page = 2; page <= totalPages; page += 1) {
+          requests.push(apiRequest(`/api/admin/students?limit=100&page=${page}`))
+        }
+
+        const remainingPages = await Promise.all(requests)
+        remainingPages.forEach((pageData) => {
+          if (Array.isArray(pageData.students)) {
+            allRecipients.push(...pageData.students)
+          }
+        })
+      }
+
+      setMessageRecipients(allRecipients)
+    } catch (err) {
+      setMessageRecipients([])
+      setMessageError(err.message)
+    } finally {
+      setMessageRecipientsLoading(false)
+      setMessageRecipientsLoaded(true)
+    }
+  }
+
+  const loadAdminMessages = async ({ silent = false } = {}) => {
+    const requestId = adminMessagesRequestRef.current + 1
+    adminMessagesRequestRef.current = requestId
+    setAdminMessagesLoading(true)
+
+    if (!silent) {
+      setAdminMessagesError('')
+    }
+
+    try {
+      const data = await apiRequest('/api/admin/messages?limit=100')
+      if (requestId !== adminMessagesRequestRef.current) {
+        return
+      }
+
+      setAdminMessages(Array.isArray(data.messages) ? data.messages : [])
+    } catch (err) {
+      if (requestId !== adminMessagesRequestRef.current) {
+        return
+      }
+
+      setAdminMessages([])
+      setAdminMessagesError(err.message)
+    } finally {
+      if (requestId === adminMessagesRequestRef.current) {
+        setAdminMessagesLoaded(true)
+        setAdminMessagesLoading(false)
+      }
+    }
+  }
+
+  const deleteAdminMessage = async (messageId) => {
+    if (!messageId || !window.confirm('Delete this popup message?')) {
+      return
+    }
+
+    try {
+      await apiRequest(`/api/admin/messages/${messageId}`, {
+        method: 'DELETE',
+      })
+
+      setAdminMessages((current) => current.filter((message) => message.id !== messageId))
+      setMessageSuccess('Popup message deleted successfully.')
+    } catch (err) {
+      setAdminMessagesError(err.message)
+    }
+  }
+
+  const toggleMessageRecipient = (studentId) => {
+    const normalizedId = String(studentId || '')
+    if (!normalizedId) {
+      return
+    }
+
+    setMessageSelectedUserIds((current) => (
+      current.includes(normalizedId)
+        ? current.filter((item) => item !== normalizedId)
+        : [...current, normalizedId]
+    ))
+  }
+
+  const selectVisibleMessageRecipients = () => {
+    setMessageSelectedUserIds((current) => {
+      const next = new Set(current.map((value) => String(value || '')))
+      filteredMessageRecipients.forEach((student) => {
+        const studentId = getStudentRowId(student)
+        if (studentId) {
+          next.add(studentId)
+        }
+      })
+
+      return [...next]
+    })
+  }
+
+  const clearMessageRecipientsSelection = () => {
+    setMessageSelectedUserIds([])
+  }
+
+  const sendStudentPopupMessage = async (event) => {
+    event.preventDefault()
+    setMessageSending(true)
+    setMessageError('')
+    setMessageSuccess('')
+
+    try {
+      const normalizedBody = messageBody.trim()
+      const normalizedSubject = messageSubject.trim()
+
+      if (!normalizedBody) {
+        throw new Error('Please write the popup message first.')
+      }
+
+      if (messageTargetType === 'user' && !messageSelectedUserIds.length) {
+        throw new Error('Please select at least one student.')
+      }
+
+      const data = await apiRequest('/api/admin/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetType: messageTargetType,
+          targetUserIds: messageTargetType === 'user' ? messageSelectedUserIds : [],
+          subject: normalizedSubject,
+          body: normalizedBody,
+        }),
+      })
+
+      setMessageSuccess(`Popup message sent to ${data.audienceCount || 0} student${Number(data.audienceCount || 0) === 1 ? '' : 's'}.`)
+      setMessageBody('')
+      setMessageSubject('')
+      setMessageSelectedUserIds([])
+      setMessageTargetType('all')
+      loadAdminMessages({ silent: true })
+    } catch (err) {
+      setMessageError(err.message)
+    } finally {
+      setMessageSending(false)
+    }
+  }
+
   useEffect(() => {
     if (!isAdmin) {
       return undefined
@@ -614,7 +859,7 @@ const Adminpage = () => {
 
     const prefetch = async () => {
       try {
-        await apiRequest(`/api/classes/${selectedClassFeedId}/feed`)
+        await apiRequest(`/api/classes/${selectedClassFeedId}/feed?limit=all&category=all`)
       } catch {
         // Background warm-up only.
       }
@@ -638,6 +883,14 @@ const Adminpage = () => {
 
     if (activeTab === 'message') {
       loadSiteNotice()
+      loadMessageRecipients()
+      loadAdminMessages()
+
+      const timer = window.setInterval(() => {
+        loadAdminMessages({ silent: true })
+      }, 30000)
+
+      return () => window.clearInterval(timer)
     }
   }, [activeTab])
 
@@ -1132,12 +1385,21 @@ const Adminpage = () => {
   const classOptions = useMemo(() => classes, [classes])
   const selectedClassTargetCount = classShareTargets.filter((target) => target.enabled).length
   const groupedClassPosts = useMemo(
-    () =>
-      CLASS_POST_CATEGORIES.map((category) => ({
+    () => {
+      const visibleCategories = classBoardCategoryFilter === 'all'
+        ? CLASS_POST_CATEGORIES
+        : CLASS_POST_CATEGORIES.filter((category) => category.value === classBoardCategoryFilter)
+
+      return visibleCategories.map((category) => ({
         ...category,
         posts: classPosts.filter((post) => (post.category || 'assignment') === category.value),
-      })),
-    [classPosts],
+      }))
+    },
+    [classBoardCategoryFilter, classPosts],
+  )
+  const visibleClassPostCount = useMemo(
+    () => groupedClassPosts.reduce((sum, group) => sum + group.posts.length, 0),
+    [groupedClassPosts],
   )
   const openReports = useMemo(() => reports.filter((report) => report.status === 'open'), [reports])
 
@@ -1272,6 +1534,9 @@ const Adminpage = () => {
           <div className="min-w-0">
             <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">
               {feedbackItem.name} {feedbackItem.className ? `- ${feedbackItem.className}` : ''}
+            </p>
+            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
+              {formatFeedbackSourceLabel(feedbackItem)}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-1">
               {Array.from({ length: 5 }).map((_, index) => (
@@ -1881,6 +2146,27 @@ const Adminpage = () => {
                       <h3 className="font-serif text-2xl text-slate-950">Latest uploads</h3>
                     </div>
 
+                    <div className="mt-4 flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-end sm:justify-between">
+                      <label className="grid gap-2 text-sm font-bold text-slate-600 sm:min-w-[260px]">
+                        Filter uploads
+                        <select
+                          value={classBoardCategoryFilter}
+                          onChange={(event) => setClassBoardCategoryFilter(event.target.value)}
+                          className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-cyan-400"
+                        >
+                          <option value="all">All categories</option>
+                          {CLASS_POST_CATEGORIES.map((category) => (
+                            <option key={category.value} value={category.value}>
+                              {category.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-600">
+                        Showing {visibleClassPostCount} upload{visibleClassPostCount === 1 ? '' : 's'}
+                      </div>
+                    </div>
+
                     {classFeedLoading ? (
                       <div className="mt-4 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
                         Loading class feed...
@@ -2045,80 +2331,372 @@ const Adminpage = () => {
                 )}
 
                 {activeTab === 'message' && (
-                  <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex items-center gap-2">
-                      <BellRing className="h-5 w-5 text-amber-600" />
-                      <h2 className="font-serif text-3xl text-slate-950">Site notice</h2>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-500">
-                      This notice shows below the navbar for students. Save a message to show it, or remove it to hide it everywhere.
-                    </p>
-
-                    <form onSubmit={saveSiteNotice} className="mt-5 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                      <label className="grid gap-2 text-sm font-bold text-slate-600">
-                        Message
-                        <textarea
-                          value={siteNoticeMessage}
-                          onChange={(event) => setSiteNoticeMessage(event.target.value)}
-                          rows={4}
-                          placeholder="Type the notice message that should scroll right to left..."
-                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-amber-400"
-                        />
-                      </label>
-
-                      <label className="grid gap-2 text-sm font-bold text-slate-600">
-                        Colour theme
-                        <select
-                          value={siteNoticeColor}
-                          onChange={(event) => setSiteNoticeColor(event.target.value)}
-                          className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-amber-400"
-                        >
-                          {NOTICE_COLOR_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <div className="flex flex-col gap-3 sm:flex-row">
-                        <button
-                          type="submit"
-                          disabled={noticeSaving}
-                          className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {noticeSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                          {noticeSaving ? 'Saving...' : 'Save notice'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={removeSiteNotice}
-                          disabled={noticeSaving || !siteNotice}
-                          className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl border border-red-100 bg-white font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Remove notice
-                        </button>
-                      </div>
-                    </form>
-
-                    <div className="mt-5 rounded-3xl border border-amber-100 bg-amber-50 p-4">
-                      <p className="text-xs font-black uppercase tracking-[0.22em] text-amber-700">Current notice</p>
-                      {noticeLoading ? (
-                        <div className="mt-3 rounded-2xl border border-dashed border-amber-200 bg-white px-4 py-4 text-sm text-amber-700">
-                          Loading current notice...
+                  <div className="grid gap-6">
+                    <div className="rounded-[1.75rem] border border-cyan-100 bg-white p-5 shadow-sm">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex items-center gap-2">
+                          <MessageCircleMore className="h-5 w-5 text-cyan-600" />
+                          <h2 className="font-serif text-3xl text-slate-950">Student popup message</h2>
                         </div>
-                      ) : siteNotice?.message ? (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-sm leading-7 text-slate-700">{siteNotice.message}</p>
-                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
-                            Theme: {siteNotice.color || 'amber'}
+                        <div className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-cyan-700">
+                          Popup overlay
+                        </div>
+                      </div>
+                      <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                        Send an attention-grabbing popup to all students or to selected students only. On the student side,
+                        the close and dislike actions are temporary, while thumbs up hides the message after reload.
+                      </p>
+
+                      {messageError && (
+                        <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                          {messageError}
+                        </div>
+                      )}
+
+                      {messageSuccess && (
+                        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                          {messageSuccess}
+                        </div>
+                      )}
+
+                      <form onSubmit={sendStudentPopupMessage} className="mt-5 grid gap-4 rounded-3xl border border-cyan-100 bg-cyan-50/70 p-4">
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          <label className="grid gap-2 text-sm font-bold text-slate-600">
+                            Message title
+                            <input
+                              value={messageSubject}
+                              onChange={(event) => setMessageSubject(event.target.value)}
+                              placeholder="Optional title for the popup"
+                              className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-cyan-400"
+                            />
+                          </label>
+
+                          <div className="grid gap-2 text-sm font-bold text-slate-600">
+                            Audience
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <label className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition ${messageTargetType === 'all' ? 'border-cyan-300 bg-cyan-50 text-cyan-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}>
+                                <input
+                                  type="radio"
+                                  name="messageTargetType"
+                                  checked={messageTargetType === 'all'}
+                                  onChange={() => setMessageTargetType('all')}
+                                  className="h-4 w-4 accent-cyan-600"
+                                />
+                                <span>
+                                  <span className="block text-sm font-black">All students</span>
+                                  <span className="block text-xs font-semibold text-slate-500">Send to every non-admin account.</span>
+                                </span>
+                              </label>
+
+                              <label className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition ${messageTargetType === 'user' ? 'border-cyan-300 bg-cyan-50 text-cyan-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}>
+                                <input
+                                  type="radio"
+                                  name="messageTargetType"
+                                  checked={messageTargetType === 'user'}
+                                  onChange={() => setMessageTargetType('user')}
+                                  className="h-4 w-4 accent-cyan-600"
+                                />
+                                <span>
+                                  <span className="block text-sm font-black">Specific students</span>
+                                  <span className="block text-xs font-semibold text-slate-500">Pick one or more students.</span>
+                                </span>
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+
+                        <label className="grid gap-2 text-sm font-bold text-slate-600">
+                          Popup text
+                          <textarea
+                            value={messageBody}
+                            onChange={(event) => setMessageBody(event.target.value)}
+                            rows={6}
+                            placeholder="Write the message that should appear as a popup on student screens..."
+                            className="rounded-[1.5rem] border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-cyan-400"
+                          />
+                        </label>
+
+                        {messageTargetType === 'user' && (
+                          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="text-sm font-black text-slate-950">Choose students</p>
+                                <p className="mt-1 text-sm leading-6 text-slate-500">
+                                  Search and tick one or more students. The popup will be sent to everyone selected here.
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={selectVisibleMessageRecipients}
+                                  disabled={!filteredMessageRecipients.length}
+                                  className="rounded-full border border-cyan-100 bg-cyan-50 px-3 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-700 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Select visible
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={clearMessageRecipientsSelection}
+                                  disabled={!messageSelectedUserIds.length}
+                                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.22em] text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Clear selected
+                                </button>
+                              </div>
+                            </div>
+
+                            <label className="relative mt-4 block">
+                              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                              <input
+                                value={messageRecipientSearch}
+                                onChange={(event) => setMessageRecipientSearch(event.target.value)}
+                                placeholder="Search by name, email, phone, or class..."
+                                className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white"
+                              />
+                            </label>
+
+                            {selectedMessageRecipients.length > 0 && (
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                {selectedMessageRecipients.slice(0, 8).map((student) => (
+                                  <span
+                                    key={getStudentRowId(student)}
+                                    className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-bold text-cyan-800"
+                                  >
+                                    {student.name}
+                                  </span>
+                                ))}
+                                {selectedMessageRecipients.length > 8 && (
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                                    +{selectedMessageRecipients.length - 8} more
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="mt-4 max-h-[340px] overflow-auto rounded-3xl border border-slate-200 bg-slate-50">
+                              {messageRecipientsLoading ? (
+                                <div className="px-4 py-6 text-sm font-semibold text-slate-500">
+                                  Loading students...
+                                </div>
+                              ) : filteredMessageRecipients.length ? (
+                                <div className="grid divide-y divide-slate-200">
+                                  {filteredMessageRecipients.map((student) => {
+                                    const studentId = getStudentRowId(student)
+                                    const checked = messageSelectedUserIds.includes(studentId)
+
+                                    return (
+                                      <label
+                                        key={studentId}
+                                        className={`flex cursor-pointer items-center gap-3 px-4 py-3 transition ${checked ? 'bg-cyan-50/80' : 'hover:bg-white'}`}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={() => toggleMessageRecipient(studentId)}
+                                          className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                          <p className="truncate text-sm font-black text-slate-900">{student.name}</p>
+                                          <p className="truncate text-xs font-semibold text-slate-500">
+                                            {student.email}
+                                            {student.phoneNumber ? ` | ${student.phoneNumber}` : ''}
+                                          </p>
+                                        </div>
+                                        <div className="text-right text-xs font-bold text-slate-500">
+                                          <p>{student.className || 'No class'}</p>
+                                          {checked && (
+                                            <p className="mt-1 text-cyan-700">Selected</p>
+                                          )}
+                                        </div>
+                                      </label>
+                                    )
+                                  })}
+                                </div>
+                              ) : messageRecipientsLoaded ? (
+                                <div className="px-4 py-6 text-sm font-semibold text-slate-500">
+                                  No students match your search.
+                                </div>
+                              ) : (
+                                <div className="px-4 py-6 text-sm font-semibold text-slate-500">
+                                  Load student list first.
+                                </div>
+                              )}
+                            </div>
+
+                            <p className="mt-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+                              {messageSelectedUserIds.length
+                                ? `${messageSelectedUserIds.length} student${messageSelectedUserIds.length === 1 ? '' : 's'} selected`
+                                : 'Select at least one student to send a private popup.'}
+                            </p>
+                          </div>
+                        )}
+
+                        <div className="rounded-2xl border border-cyan-100 bg-white px-4 py-3 text-sm leading-6 text-cyan-950">
+                          This popup appears on top of the student screen, so it is much harder to miss than the scrolling notice.
+                        </div>
+
+                        <div className="flex flex-col gap-3 sm:flex-row">
+                          <button
+                            type="submit"
+                            disabled={messageSending}
+                            className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {messageSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                            {messageSending ? 'Sending...' : 'Send popup message'}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                    <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <h2 className="font-serif text-3xl text-slate-950">Sent popup messages</h2>
+                          <p className="mt-2 text-sm text-slate-500">
+                            Track who has seen each popup and delete any message when you no longer need it.
                           </p>
                         </div>
-                      ) : (
-                        <p className="mt-3 text-sm leading-7 text-slate-500">
-                          No notice is active right now.
-                        </p>
+                        <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-black uppercase tracking-[0.22em] text-slate-500">
+                          {adminMessages.length}
+                        </span>
+                      </div>
+
+                      {adminMessagesError && (
+                        <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                          {adminMessagesError}
+                        </div>
                       )}
+
+                      <div className="mt-5 grid gap-3">
+                        {adminMessagesLoading && !adminMessages.length ? (
+                          <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                            Loading sent messages...
+                          </div>
+                        ) : adminMessages.length ? (
+                          adminMessages.map((message) => (
+                            <article key={message.id} className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                  <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-700">
+                                    {formatPopupAudienceLabel(message)}
+                                  </p>
+                                  <h3 className="mt-2 truncate text-xl font-black tracking-tight text-slate-950">
+                                    {message.subject || 'Important message'}
+                                  </h3>
+                                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+                                    {message.createdBy?.name || 'Admin'}
+                                  </p>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
+                                    Seen {message.acknowledgedCount || 0}/{message.audienceCount || 0}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteAdminMessage(message.id)}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-red-100 bg-white text-red-600 transition hover:bg-red-50"
+                                    aria-label="Delete popup message"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {message.body ? (
+                                <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">
+                                  {message.body}
+                                </p>
+                              ) : null}
+                            </article>
+                          ))
+                        ) : adminMessagesLoaded ? (
+                          <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                            No popup messages sent yet.
+                          </div>
+                        ) : (
+                          <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+                            Open this tab to load sent messages.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <BellRing className="h-5 w-5 text-amber-600" />
+                        <h2 className="font-serif text-3xl text-slate-950">Site notice</h2>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-500">
+                        This is the scrolling banner below the navbar. Use it for short announcements; use the popup above for messages that need special attention.
+                      </p>
+
+                      <form onSubmit={saveSiteNotice} className="mt-5 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                        <label className="grid gap-2 text-sm font-bold text-slate-600">
+                          Message
+                          <textarea
+                            value={siteNoticeMessage}
+                            onChange={(event) => setSiteNoticeMessage(event.target.value)}
+                            rows={4}
+                            placeholder="Type the notice message that should scroll right to left..."
+                            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-amber-400"
+                          />
+                        </label>
+
+                        <label className="grid gap-2 text-sm font-bold text-slate-600">
+                          Colour theme
+                          <select
+                            value={siteNoticeColor}
+                            onChange={(event) => setSiteNoticeColor(event.target.value)}
+                            className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-amber-400"
+                          >
+                            {NOTICE_COLOR_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <div className="flex flex-col gap-3 sm:flex-row">
+                          <button
+                            type="submit"
+                            disabled={noticeSaving}
+                            className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {noticeSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                            {noticeSaving ? 'Saving...' : 'Save notice'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={removeSiteNotice}
+                            disabled={noticeSaving || !siteNotice}
+                            className="inline-flex h-12 flex-1 items-center justify-center rounded-2xl border border-red-100 bg-white font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Remove notice
+                          </button>
+                        </div>
+                      </form>
+
+                      <div className="mt-5 rounded-3xl border border-amber-100 bg-amber-50 p-4">
+                        <p className="text-xs font-black uppercase tracking-[0.22em] text-amber-700">Current notice</p>
+                        {noticeLoading ? (
+                          <div className="mt-3 rounded-2xl border border-dashed border-amber-200 bg-white px-4 py-4 text-sm text-amber-700">
+                            Loading current notice...
+                          </div>
+                        ) : siteNotice?.message ? (
+                          <div className="mt-3 space-y-2">
+                            <p className="text-sm leading-7 text-slate-700">{siteNotice.message}</p>
+                            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+                              Theme: {siteNotice.color || 'amber'}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm leading-7 text-slate-500">
+                            No notice is active right now.
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}

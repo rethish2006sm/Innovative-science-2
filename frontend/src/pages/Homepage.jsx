@@ -8,6 +8,26 @@ import ChapterWeightageGraph from '../components/ChapterWeightageGraph'
 
 const normalizeTopFiveRows = (rows = []) => (Array.isArray(rows) ? rows.slice(0, 5) : [])
 
+const formatFeedbackSourceLabel = (item = {}) => {
+  if (item.sourceType === 'topic') {
+    return item.sourceLabel ? `Chapter: ${item.sourceLabel}` : 'Chapter feedback'
+  }
+
+  if (item.sourceLabel) {
+    return item.sourceLabel
+  }
+
+  if (item.sourceType === 'test') {
+    return 'Test feedback'
+  }
+
+  if (item.sourceType === 'objective') {
+    return 'Practice feedback'
+  }
+
+  return 'General feedback'
+}
+
 // --- Animation Variants ---
 const fadeUp = {
   hidden: { opacity: 0, y: 30 },
@@ -529,6 +549,9 @@ const Homepage = () => {
                     <div>
                       <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
                         {item.name} {item.className ? `• ${item.className}` : ''}
+                      </p>
+                      <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
+                        {formatFeedbackSourceLabel(item)}
                       </p>
                       <div className="mt-2 flex items-center gap-1">
                         {Array.from({ length: 5 }).map((_, index) => (
