@@ -172,7 +172,6 @@ const Testbuilderpage = () => {
     setIsSubmitting(false)
     setIsDashboardOpen(false)
     setError('')
-    setMobileWizard(false)
   }
 
   const toggleChapter = (chapterNumber) => {
@@ -471,7 +470,10 @@ const Testbuilderpage = () => {
 
               <button
                 type="button"
-                onClick={() => setMobileWizard(true)}
+                onClick={() => {
+                  setStep(1)
+                  setMobileWizard(true)
+                }}
                 className="mt-4 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-stone-950 text-base font-bold text-white shadow-lg transition hover:bg-black"
               >
                 Create Test
