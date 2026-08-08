@@ -697,7 +697,7 @@ const finalizeQuestion = async ({ room, io, models, reason = 'timer' }) => {
 }
 
 const finishBattle = async ({ room, io, models }) => {
-  const { User } = models
+  const { User, BattleReward } = models
   if (room.status === 'finished') {
     return room
   }
@@ -744,6 +744,34 @@ const finishBattle = async ({ room, io, models }) => {
       studentId: String(reward.userId),
       reason: 'battle-finished',
     })
+  }
+
+  if (BattleReward) {
+    const rewardWrites = rewards.map((reward) => ({
+      updateOne: {
+        filter: {
+          roomId: room._id,
+          userId: reward.userId,
+        },
+        update: {
+          $set: {
+            roomCode: room.code,
+            userId: reward.userId,
+            rank: reward.rank,
+            score: reward.score,
+            brainCells: reward.brainCells,
+            totalQuestions: room.questions.length,
+            totalPlayers: room.players.length,
+            finishedAt: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    }))
+
+    if (rewardWrites.length) {
+      await BattleReward.bulkWrite(rewardWrites, { ordered: false })
+    }
   }
 
   room.battleSummary = {

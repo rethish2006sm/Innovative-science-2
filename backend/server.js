@@ -782,6 +782,64 @@ classPostSchema.index({ classId: 1, createdAt: -1 })
 
 const ClassPost = mongoose.model('ClassPost', classPostSchema)
 
+const battleRewardSchema = new mongoose.Schema(
+  {
+    roomId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      index: true,
+    },
+    roomCode: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+      maxlength: 6,
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
+    rank: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+    score: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    brainCells: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalQuestions: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalPlayers: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    finishedAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { timestamps: true },
+)
+
+battleRewardSchema.index({ roomId: 1, userId: 1 }, { unique: true })
+
+const BattleReward = mongoose.models.BattleReward || mongoose.model('BattleReward', battleRewardSchema)
+let BattleRoomModel = null
+
 const pyqSchema = new mongoose.Schema(
   {
     title: {
@@ -1747,6 +1805,20 @@ const syncLeaderboardTotalsFromAttempts = async () => {
   const attempts = await PracticeAttempt.find({ user: { $in: [...userIdSet] } })
     .sort({ createdAt: 1 })
     .lean()
+  const battleRewards = await BattleReward.find({ userId: { $in: [...userIdSet] } })
+    .sort({ createdAt: 1 })
+    .lean()
+  const battleRewardRoomIds = new Set(battleRewards.map((reward) => String(reward.roomId || '')))
+  const battleRooms = BattleRoomModel
+    ? await BattleRoomModel.find({
+        status: 'finished',
+        battleSummary: { $exists: true, $ne: null },
+        _id: { $nin: [...battleRewardRoomIds] },
+      })
+        .select('questions battleSummary')
+        .sort({ finishedAt: 1, createdAt: 1 })
+        .lean()
+    : []
 
   const totals = new Map([...userIdSet].map((userId) => ([
     userId,
@@ -1779,6 +1851,37 @@ const syncLeaderboardTotalsFromAttempts = async () => {
     currentTotals.totalBrainCells += leaderboardCells
     currentTotals.totalAttempts += 1
     currentTotals.leaderboardQuestionIds = [...nextRewardedQuestionIds]
+  })
+
+  battleRewards.forEach((reward) => {
+    const userId = String(reward.userId || '')
+    const currentTotals = totals.get(userId)
+    if (!currentTotals) {
+      return
+    }
+
+    currentTotals.totalScore += safeNumber(reward.score)
+    currentTotals.totalMarks += safeNumber(reward.totalQuestions)
+    currentTotals.totalBrainCells += safeNumber(reward.brainCells)
+    currentTotals.totalAttempts += 1
+  })
+
+  battleRooms.forEach((room) => {
+    const rewards = Array.isArray(room.battleSummary?.rewards) ? room.battleSummary.rewards : []
+    const totalQuestions = safeNumber(room.battleSummary?.totalQuestions || room.questions?.length || 0)
+
+    rewards.forEach((reward) => {
+      const userId = String(reward.userId || '')
+      const currentTotals = totals.get(userId)
+      if (!currentTotals) {
+        return
+      }
+
+      currentTotals.totalScore += safeNumber(reward.score)
+      currentTotals.totalMarks += totalQuestions
+      currentTotals.totalBrainCells += safeNumber(reward.brainCells)
+      currentTotals.totalAttempts += 1
+    })
   })
 
   await User.updateMany(
@@ -1904,7 +2007,7 @@ const optionalAuth = async (req, res, next) => {
   next()
 }
 
-initBattleMode({
+BattleRoomModel = initBattleMode({
   app,
   server,
   io,
@@ -1915,10 +2018,11 @@ initBattleMode({
     Topic,
     ObjectiveType,
     ObjectiveQuestion,
+    BattleReward,
   },
   authRequired,
   optionalAuth,
-})
+}).BattleRoom
 
 const extractJsonFromText = (text = '') => {
   const trimmed = text.trim()
