@@ -11,6 +11,8 @@ const sharp = require('sharp')
 const path = require('path')
 const compression = require('compression')
 const { Server } = require('socket.io')
+const { getApps, initializeApp, cert, applicationDefault } = require('firebase-admin/app')
+const { getAuth } = require('firebase-admin/auth')
 const { initBattleMode } = require('./battleMode')
 
 dotenv.config()
@@ -77,6 +79,24 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ]
+
+let firebaseAdminAuth = null
+try {
+  if (!getApps().length) {
+    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+      : undefined
+    const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'innovativescience2-f988a'
+    initializeApp(serviceAccount
+      ? { credential: cert(serviceAccount), projectId: firebaseProjectId }
+      : process.env.GOOGLE_APPLICATION_CREDENTIALS
+        ? { credential: applicationDefault(), projectId: firebaseProjectId }
+        : { projectId: firebaseProjectId })
+  }
+  firebaseAdminAuth = getAuth()
+} catch (error) {
+  console.warn(`Firebase Admin could not initialize: ${error.message}`)
+}
 
 const isAllowedOrigin = (origin) => {
   if (!origin) {
@@ -176,6 +196,12 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
+    },
+    firebaseUid: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
     },
     phoneNumber: {
       type: String,
@@ -1047,6 +1073,7 @@ const Feedback = mongoose.model('Feedback', feedbackSchema)
 
 const publicUser = (user, { includePassword = false } = {}) => ({
   id: user._id.toString(),
+  firebaseUid: user.firebaseUid || '',
   name: user.name,
   email: user.email,
   phoneNumber: user.phoneNumber || '',
@@ -1946,6 +1973,29 @@ const createToken = (user) => {
   })
 }
 
+const verifyFirebaseIdToken = async (token) => {
+  if (!firebaseAdminAuth || !token) {
+    return null
+  }
+  try {
+    return await firebaseAdminAuth.verifyIdToken(token)
+  } catch (error) {
+    return null
+  }
+}
+
+const getUserFromAuthToken = async (token) => {
+  if (!token) return null
+  try {
+    const payload = jwt.verify(token, JWT_SECRET)
+    return User.findById(payload.userId).populate('classId', 'name')
+  } catch (error) {
+    const firebaseUser = await verifyFirebaseIdToken(token)
+    if (!firebaseUser?.uid) return null
+    return User.findOne({ firebaseUid: firebaseUser.uid }).populate('classId', 'name')
+  }
+}
+
 const authRequired = async (req, res, next) => {
   try {
     const header = req.headers.authorization || ''
@@ -1955,8 +2005,7 @@ const authRequired = async (req, res, next) => {
       return res.status(401).json({ message: 'Please sign in first.' })
     }
 
-    const payload = jwt.verify(token, JWT_SECRET)
-    const user = await User.findById(payload.userId).populate('classId', 'name')
+    const user = await getUserFromAuthToken(token)
 
     if (!user) {
       return res.status(401).json({ message: 'User not found.' })
@@ -1996,10 +2045,7 @@ const optionalAuth = async (req, res, next) => {
     const header = req.headers.authorization || ''
     const token = header.startsWith('Bearer ') ? header.slice(7) : ''
 
-    if (token) {
-      const payload = jwt.verify(token, JWT_SECRET)
-      req.user = await User.findById(payload.userId)
-    }
+    if (token) req.user = await getUserFromAuthToken(token)
   } catch (error) {
     req.user = null
   }
@@ -2424,6 +2470,99 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' })
 })
 
+// Firebase owns credentials. MongoDB stores only the Firebase UID and app profile data.
+app.post('/api/auth/firebase', async (req, res) => {
+  try {
+    const { idToken, name = '', email = '', phoneNumber = '' } = req.body || {}
+    const firebaseUser = await verifyFirebaseIdToken(String(idToken || ''))
+
+    if (!firebaseUser?.uid) {
+      return res.status(401).json({ message: 'Invalid Firebase session.' })
+    }
+
+    const normalizedEmail = normalizeEmail(firebaseUser.email || email)
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'A verified email address is required.' })
+    }
+
+    let user = await User.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
+    if (!user) {
+      user = await User.create({
+        firebaseUid: firebaseUser.uid,
+        name: String(firebaseUser.name || name || normalizedEmail.split('@')[0]).trim() || 'Student',
+        email: normalizedEmail,
+        phoneNumber: String(phoneNumber || '').trim(),
+      })
+    } else {
+      let changed = false
+      if (!user.firebaseUid) {
+        user.firebaseUid = firebaseUser.uid
+        changed = true
+      }
+      if (!user.name && (firebaseUser.name || name)) {
+        user.name = firebaseUser.name || name
+        changed = true
+      }
+      if (!user.phoneNumber && phoneNumber) {
+        user.phoneNumber = String(phoneNumber).trim()
+        changed = true
+      }
+      if (changed) {
+        await user.save()
+      }
+    }
+
+    await user.populate('classId', 'name')
+    return res.json({ token: createToken(user), user: publicUser(user) })
+  } catch (error) {
+    return res.status(500).json({ message: 'Could not connect the Firebase account.' })
+  }
+})
+
+// One-time bridge for accounts created before Firebase Authentication was added.
+// The password is only checked here and is never written to MongoDB by this flow.
+app.post('/api/auth/firebase/migrate-legacy', async (req, res) => {
+  try {
+    if (!firebaseAdminAuth) {
+      return res.status(503).json({ message: 'Firebase Admin is not configured on the server.' })
+    }
+
+    const normalizedEmail = normalizeEmail(req.body?.email)
+    const password = String(req.body?.password || '')
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({ message: 'Email and password are required.' })
+    }
+
+    const user = await User.findOne({ email: normalizedEmail })
+    if (!user || !(await passwordMatches(password, user))) {
+      return res.status(401).json({ message: 'Email or password is incorrect.' })
+    }
+
+    let firebaseRecord
+    try {
+      firebaseRecord = await firebaseAdminAuth.getUserByEmail(normalizedEmail)
+      firebaseRecord = await firebaseAdminAuth.updateUser(firebaseRecord.uid, {
+        password,
+        displayName: user.name || normalizedEmail.split('@')[0],
+        disabled: false,
+      })
+    } catch (error) {
+      if (error.code !== 'auth/user-not-found') throw error
+      firebaseRecord = await firebaseAdminAuth.createUser({
+        email: normalizedEmail,
+        password,
+        displayName: user.name || normalizedEmail.split('@')[0],
+      })
+    }
+
+    user.firebaseUid = firebaseRecord.uid
+    await user.save()
+    return res.json({ customToken: await firebaseAdminAuth.createCustomToken(firebaseRecord.uid) })
+  } catch (error) {
+    return res.status(500).json({ message: 'Could not migrate this account to Firebase.' })
+  }
+})
+
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { name, email, phoneNumber = '', password } = req.body
@@ -2533,6 +2672,56 @@ app.post('/api/auth/forgot-password/reset', async (req, res) => {
 app.get('/api/auth/me', authRequired, async (req, res) => {
   await req.user.populate('classId', 'name')
   res.json({ user: publicUser(req.user) })
+})
+
+app.delete('/api/auth/account', authRequired, async (req, res) => {
+  try {
+    if (req.user.isAdmin) {
+      return res.status(403).json({ message: 'Admin accounts cannot be deleted here.' })
+    }
+
+    const userId = req.user._id
+    const userIdString = String(userId)
+
+    await Promise.all([
+      PracticeScore.deleteMany({ user: userId }),
+      PracticeAttempt.deleteMany({ user: userId }),
+      Report.deleteMany({ user: userId }),
+      Feedback.deleteMany({ user: userId }),
+      BattleReward.deleteMany({ userId }),
+      ClassPost.deleteMany({ createdBy: userId }),
+      Pyq.deleteMany({ uploadedBy: userId }),
+      Message.deleteMany({ createdBy: userId }),
+      Message.updateMany(
+        { $or: [{ targetUserIds: userId }, { 'acknowledgements.user': userId }] },
+        { $pull: { targetUserIds: userId, acknowledgements: { user: userId } } },
+      ),
+      SiteNotice.updateMany({ updatedBy: userId }, { $set: { updatedBy: null } }),
+      ...(BattleRoomModel
+        ? [
+            BattleRoomModel.deleteMany({ createdBy: userId }),
+            BattleRoomModel.updateMany({ 'players.userId': userId }, { $pull: { players: { userId } } }),
+          ]
+        : []),
+    ])
+
+    await User.deleteOne({ _id: userId })
+
+    if (firebaseAdminAuth && req.user.firebaseUid) {
+      try {
+        await firebaseAdminAuth.deleteUser(req.user.firebaseUid)
+      } catch (error) {
+        if (error.code !== 'auth/user-not-found') {
+          console.warn(`Firebase account cleanup failed for ${req.user.firebaseUid}: ${error.message}`)
+        }
+      }
+    }
+
+    clearCachedResponses(`user:${userIdString}`)
+    return res.json({ message: 'Your account and associated data were deleted.' })
+  } catch (error) {
+    return res.status(500).json({ message: 'Could not delete your account.' })
+  }
 })
 
 app.patch('/api/auth/profile', authRequired, async (req, res) => {

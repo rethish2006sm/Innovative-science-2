@@ -29,6 +29,7 @@ import Objectivepage from './pages/Objectivepage'
 import Profilepage from './pages/Profilepage'
 import Signinpage from './pages/Signinpage'
 import Signuppage from './pages/Signuppage'
+import CompleteProfilePage from './pages/CompleteProfilePage'
 import PyqsPage from './pages/PyqsPage'
 import Testbuilderpage from './pages/Testbuilderpage'
 import Topicspage from './pages/Topicspage'
@@ -38,6 +39,7 @@ import { io } from 'socket.io-client'
 import { API_BASE_URL, apiRequest } from './api'
 import { authEvents, getStoredAuth, updateStoredUser } from './authStorage'
 import { clearBattleSession, getBattleSession, getBattleSessionRoute, saveBattleSession } from './lib/battleSession'
+import { AuthProvider, useAuth } from './context/AuthContext'
 
 const SITE_DESCRIPTION =
   'Innovative Science 2 helps students practice science chapters, solve objective questions, take tests, and track brain cell progress.'
@@ -289,7 +291,15 @@ const ScrollToTop = () => {
 }
 
 const AuthRedirect = ({ children }) => {
-  if (getStoredAuth()) {
+  const { user, loading, authLoading } = useAuth()
+
+  if (loading) {
+    return <div className="grid min-h-screen place-items-center bg-slate-50 px-4 text-center text-sm font-bold text-slate-500">Checking your session…</div>
+  }
+
+  if (authLoading) return children
+
+  if (user || getStoredAuth()) {
     return <Navigate to="/" replace />
   }
 
@@ -324,6 +334,16 @@ const AuthRequiredScreen = () => (
     </div>
   </section>
 )
+
+const ProtectedRoute = ({ children }) => {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">Checking your session…</div>
+  }
+
+  return user || getStoredAuth() ? children : <AuthRequiredScreen />
+}
 
 const AppLayout = () => {
   const { pathname } = useLocation()
@@ -545,20 +565,16 @@ const AppLayout = () => {
           <Route path="/feedback" element={<Feedbackpage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/battle-mode" element={<BattleModeHome />} />
-          <Route path="/battle-mode/create" element={<BattleCreatePage />} />
-          <Route path="/battle-mode/join" element={<BattleJoinPage />} />
+          <Route path="/battle-mode/create" element={<ProtectedRoute><BattleCreatePage /></ProtectedRoute>} />
+          <Route path="/battle-mode/join" element={<ProtectedRoute><BattleJoinPage /></ProtectedRoute>} />
           <Route path="/battle-mode/room/:roomCode/lobby" element={<BattleRoomPage />} />
           <Route path="/battle-mode/room/:roomCode/arena" element={<BattleRoomPage />} />
           <Route path="/battle-mode/room/:roomCode/results" element={<BattleRoomPage />} />
-          <Route path="/improvement" element={<Improvementpage />} />
+          <Route path="/improvement" element={<ProtectedRoute><Improvementpage /></ProtectedRoute>} />
           <Route
             path="/test-builder"
             element={
-              auth?.token ? (
-                <Testbuilderpage />
-              ) : (
-                <AuthRequiredScreen />
-              )
+              <ProtectedRoute><Testbuilderpage /></ProtectedRoute>
             }
           />
           <Route path="/admin" element={<Adminpage />} />
@@ -575,7 +591,8 @@ const AppLayout = () => {
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/complete-the-tables" element={<Completethetables />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/diagram-based-question" element={<Diagrams />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/identify-symbol" element={<Identifysymbol />} />
-          <Route path="/profile" element={<Profilepage />} />
+          <Route path="/profile" element={<ProtectedRoute><Profilepage /></ProtectedRoute>} />
+          <Route path="/complete-profile" element={<ProtectedRoute><CompleteProfilePage /></ProtectedRoute>} />
           <Route path="/pyqs" element={<PyqsPage />} />
           <Route
             path="/signin"
@@ -646,10 +663,12 @@ const App = () => {
   }
 
   return (
-    <HashRouter>
-      <ScrollToTop />
-      <AppLayout />
-    </HashRouter>
+    <AuthProvider>
+      <HashRouter>
+        <ScrollToTop />
+        <AppLayout />
+      </HashRouter>
+    </AuthProvider>
   )
 }
 

@@ -15,16 +15,17 @@ export const getStoredAuth = () => {
     }
 
     return savedAuth
-  } catch (error) {
+  } catch {
     localStorage.removeItem(AUTH_KEY)
     return null
   }
 }
 
-export const saveAuth = ({ token, user }) => {
+export const saveAuth = ({ token, user, provider = 'firebase' }) => {
   const auth = {
     token,
     user,
+    provider,
     expiresAt: Date.now() + SEVEN_DAYS_MS,
   }
 
@@ -40,7 +41,7 @@ export const updateStoredUser = (user) => {
     return null
   }
 
-  return saveAuth({ token: auth.token, user })
+  return saveAuth({ token: auth.token, user, provider: auth.provider || 'firebase' })
 }
 
 export const clearAuth = () => {

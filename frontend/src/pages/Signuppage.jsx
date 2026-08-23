@@ -1,241 +1,52 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react'
-import { apiRequest } from '../api'
-import { getStoredAuth, saveAuth } from '../authStorage'
+import { Loader2, UserPlus } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
 
-// Updated field styles to match the clean, light aesthetic of your screenshot
-const fieldClass =
-  'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-50'
-
-const initialForm = {
-  name: '',
-  email: '',
-  phoneNumber: '',
-  password: '',
-  confirmPassword: '',
-}
+const GoogleIcon = () => (
+  <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24">
+    <path fill="#4285F4" d="M21.35 12.27c0-.71-.06-1.39-.18-2.05H12v3.88h5.24a4.48 4.48 0 0 1-1.94 2.94v2.45h3.15c1.85-1.7 2.9-4.2 2.9-7.22Z" />
+    <path fill="#34A853" d="M12 21.7c2.65 0 4.87-.88 6.45-2.39l-3.15-2.45c-.87.58-1.98.93-3.3.93-2.54 0-4.69-1.72-5.46-4.03H3.28v2.53A9.74 9.74 0 0 0 12 21.7Z" />
+    <path fill="#FBBC05" d="M6.54 13.76A5.86 5.86 0 0 1 6.23 12c0-.61.1-1.2.31-1.76V7.71H3.28A9.73 9.73 0 0 0 2.25 12c0 1.57.38 3.05 1.03 4.29l3.26-2.53Z" />
+    <path fill="#EA4335" d="M12 6.21c1.45 0 2.75.5 3.77 1.48l2.83-2.83C16.87 3.29 14.65 2.3 12 2.3a9.74 9.74 0 0 0-8.72 5.41l3.26 2.53C7.31 7.93 9.46 6.21 12 6.21Z" />
+  </svg>
+)
 
 const Signuppage = () => {
   const navigate = useNavigate()
-  const [form, setForm] = useState(initialForm)
-  const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState('')
+  const { signInWithGoogle, authLoading, error: authError } = useAuth()
   const [error, setError] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
-  useEffect(() => {
-    if (getStoredAuth()) {
-      navigate('/', { replace: true })
-    }
-  }, [navigate])
-
-  const updateField = (key, value) => {
-    setForm((current) => ({ ...current, [key]: value }))
-  }
-
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  const handleGoogleSignup = async () => {
     setError('')
-    setMessage('')
-
-    if (form.password.length < 6) {
-      setError('Password must be at least 6 characters.')
-      return
-    }
-
-    if (form.password !== form.confirmPassword) {
-      setError('Passwords do not match.')
-      return
-    }
-
-    if (!form.phoneNumber.trim()) {
-      setError('Phone number is required.')
-      return
-    }
-
-    if (!form.email.trim()) {
-      setError('Email address is required.')
-      return
-    }
-
-    setLoading(true)
-
     try {
-      const response = await apiRequest('/api/auth/signup', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          email: form.email,
-          phoneNumber: form.phoneNumber,
-          password: form.password,
-        }),
-      })
-
-      saveAuth({ token: response.token, user: response.user })
-      navigate('/', { replace: true })
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
+      await signInWithGoogle()
+      navigate('/complete-profile', { replace: true })
+    } catch (authActionError) {
+      setError(authError || authActionError.message)
     }
   }
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-[#ebfaf6] via-[#f4fbf9] to-[#e3f7f2] px-4 py-12 text-slate-800">
-      
-      {/* Decorative Science Watermarks Matching Your Image Background */}
-      <div className="absolute inset-0 pointer-events-none select-none opacity-[0.06] text-emerald-800">
-        {/* DNA Strands Top Left */}
-        <svg className="absolute left-8 top-16 w-32 h-32" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12a7.5 7.5 0 0015 0m-15 0a7.5 7.5 0 1115 0m-15 0H3m16.5 0H21m-1.5 0H12m-8.25 0h8.25" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m0-15a3 3 0 013 3v9a3 3 0 01-3 3m0-15a3 3 0 00-3 3v9a3 3 0 003 3" />
-        </svg>
-        {/* Microscope Top Right */}
-        <svg className="absolute right-12 top-24 w-36 h-36" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L12 12m4.773-4.773L12 12m0 0l-4.773 4.773M12 12l4.773 4.773" />
-        </svg>
-        {/* Leaf Bottom Left */}
-        <svg className="absolute left-16 bottom-12 w-40 h-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18M3 12h18M5.22 5.22l13.56 13.56M18.78 5.22L5.22 13.56" />
-        </svg>
-      </div>
-
-      {/* Main Centered Authentication Panel */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: 'easeOut' }}
-        className="relative z-10 w-full max-w-[520px] rounded-[2.5rem] bg-white p-8 sm:p-11 shadow-[0_20px_60px_-15px_rgba(15,118,110,0.08)] border border-white"
-      >
-        {/* Glowing Dynamic Branding Icon */}
-        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#00c49f] to-[#05dcb3] text-white shadow-lg shadow-emerald-400/20">
-          <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
-            <path d="M12 6v12M6 12h12" />
-          </svg>
-        </div>
-
-        {/* Dynamic Headers */}
-        <div className="text-center mb-8">
-          <h1 className="text-[28px] font-black tracking-tight text-slate-900">
-            Create Account
-          </h1>
-          <p className="mt-1.5 text-sm font-medium text-slate-400">
-            Continue your journey with Innovative Science 2.
-          </p>
-        </div>
-
-        {/* Dynamic Alerts */}
-        <AnimatePresence mode="wait">
-          {message && (
-            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-3.5 text-xs font-semibold text-emerald-700">
-              {message}
-            </motion.div>
-          )}
-          {error && (
-            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3.5 text-xs font-semibold text-red-600">
-              {error}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Form Controls */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Full Name</label>
-            <input
-              type="text"
-              required
-              value={form.name}
-              onChange={(e) => updateField('name', e.target.value)}
-              className={fieldClass}
-              placeholder="Your name"
-            />
+    <section className="relative flex min-h-[calc(100vh-6rem)] items-center justify-center overflow-hidden bg-gradient-to-br from-emerald-50 via-white to-teal-100 px-4 py-10">
+      <div className="w-full max-w-[520px] overflow-hidden rounded-[2.5rem] border border-white bg-white p-7 shadow-2xl shadow-emerald-900/10 sm:p-12">
+        <div className="flex flex-col justify-center">
+          <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-emerald-50 text-emerald-600">
+            <UserPlus size={30} />
           </div>
+          <h2 className="mt-6 text-center text-3xl font-black tracking-tight text-slate-900">Create Account</h2>
+          <p className="mt-2 text-center text-sm font-medium leading-6 text-slate-500">Continue with Google to get started.</p>
 
-          <div>
-            <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Email Address</label>
-            <input
-              type="email"
-              required
-              value={form.email}
-              onChange={(e) => updateField('email', e.target.value)}
-              className={fieldClass}
-              placeholder="student@science.edu"
-            />
-          </div>
+          {error && <p className="mt-6 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-center text-sm font-bold text-rose-600">{error}</p>}
 
-          <div>
-            <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Phone Number</label>
-            <input
-              type="tel"
-              required
-              value={form.phoneNumber}
-              onChange={(e) => updateField('phoneNumber', e.target.value)}
-              className={fieldClass}
-              placeholder="Enter phone number"
-            />
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Password</label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  minLength={6}
-                  value={form.password}
-                  onChange={(e) => updateField('password', e.target.value)}
-                  className={fieldClass}
-                  placeholder="Password"
-                />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label className="block mb-1.5 text-xs font-bold tracking-wide text-slate-700">Confirm Password</label>
-              <div className="relative">
-                <input
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  required
-                  minLength={6}
-                  value={form.confirmPassword}
-                  onChange={(e) => updateField('confirmPassword', e.target.value)}
-                  className={fieldClass}
-                  placeholder="Password"
-                />
-                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                  {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#00c49f] hover:bg-[#00b08f] active:bg-[#009c7f] px-5 py-4 text-sm font-bold text-white transition-all shadow-md shadow-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign up to Dashboard'}
-            {!loading && <ArrowRight className="h-4 w-4" />}
+          <button type="button" onClick={handleGoogleSignup} disabled={authLoading} className="mt-8 flex h-14 w-full items-center justify-center gap-3 rounded-2xl border-2 border-slate-100 bg-white font-bold text-slate-700 shadow-sm transition hover:border-emerald-200 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60">
+            {authLoading ? <Loader2 className="animate-spin" size={19} /> : <GoogleIcon />}
+            {authLoading ? 'Connecting to Google…' : 'Continue with Google'}
           </button>
-        </form>
 
-        {/* Global Footer Navigation */}
-        <div className="mt-8 text-center text-sm font-medium text-slate-400">
-          Already have an account?{' '}
-          <Link to="/signin" className="font-bold text-[#00c49f] hover:text-[#00b08f] transition-colors ml-1">
-            Sign in
-          </Link>
+          <p className="mt-8 text-center text-sm font-medium text-slate-500">Already have an account?{' '}<Link to="/signin" className="font-bold text-emerald-600 hover:text-teal-500">Sign in</Link></p>
         </div>
-      </motion.div>
+      </div>
     </section>
   )
 }

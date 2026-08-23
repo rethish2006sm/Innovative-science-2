@@ -15,10 +15,12 @@ import {
   TrendingUp,
   Award,
   BookOpen,
-  Activity
+  Activity,
+  Trash2,
 } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
-import { clearAuth, getStoredAuth, updateStoredUser } from '../authStorage'
+import { getStoredAuth, updateStoredUser } from '../authStorage'
+import { useAuth } from '../context/AuthContext'
 
 const createCroppedWebp = ({ imageSrc, zoom, offset }) => {
   return new Promise((resolve, reject) => {
@@ -66,6 +68,7 @@ const modalClasses =
 
 const Profilepage = () => {
   const navigate = useNavigate()
+  const { logout } = useAuth()
   const fileInputRef = useRef(null)
   const dragRef = useRef(null)
 
@@ -86,6 +89,7 @@ const Profilepage = () => {
   const [selectedImage, setSelectedImage] = useState('')
   const [zoom, setZoom] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [isDeleting, setIsDeleting] = useState(false)
 
   useEffect(() => {
     if (!auth) return
@@ -116,10 +120,27 @@ const Profilepage = () => {
     setIsSaving(false)
   }
 
-  const handleLogout = () => {
-    clearAuth()
+  const handleLogout = async () => {
+    await logout()
     setAuth(null)
     navigate('/signin')
+  }
+
+  const handleDeleteAccount = async () => {
+    if (!window.confirm('Delete your account and all saved progress, attempts, reports, feedback, battles, and profile data? This cannot be undone.')) {
+      return
+    }
+
+    setIsDeleting(true)
+    setError('')
+    try {
+      await apiRequest('/api/auth/account', { method: 'DELETE' })
+      await logout()
+      navigate('/signup', { replace: true })
+    } catch (deleteError) {
+      setError(deleteError.message || 'Could not delete your account.')
+      setIsDeleting(false)
+    }
   }
 
   const saveName = async (event) => {
@@ -387,14 +408,29 @@ const Profilepage = () => {
 
           {/* Sidebar Bottom Action: Logout */}
           <div className="mt-auto pt-4 border-t border-slate-200/60 lg:border-none flex justify-center">
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50/60 px-5 py-3 font-bold text-red-500 transition-all hover:bg-red-50 hover:text-red-600 active:scale-95"
-            >
-              <LogOut className="h-4 w-4" />
-              Logout Account
-            </button>
+            <div className="grid w-full gap-3">
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50/60 px-5 py-3 font-bold text-red-500 transition-all hover:bg-red-50 hover:text-red-600 active:scale-95"
+              >
+                <LogOut className="h-4 w-4" />
+                Logout Account
+              </button>
+              <div className="rounded-2xl border border-rose-100 bg-rose-50/60 p-3 text-left">
+                <p className="text-xs font-black uppercase tracking-wider text-rose-700">Danger zone</p>
+                <p className="mt-1 text-xs leading-5 text-rose-600">Permanently delete your account and all associated data.</p>
+                <button
+                  type="button"
+                  onClick={handleDeleteAccount}
+                  disabled={isDeleting}
+                  className="mt-2 inline-flex items-center gap-2 text-xs font-black text-rose-700 underline decoration-rose-300 underline-offset-4 transition hover:text-rose-900 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {isDeleting ? 'Deleting account…' : 'Delete account permanently'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
