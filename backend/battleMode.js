@@ -26,6 +26,27 @@ const battleReactionLimit = 40
 const battleAnswerLimit = 100
 const battleEmojis = ['🔥', '😂', '😎', '😱', '💪', '👏', '❤️', '🤣', '🚀', '🎯', '🧠']
 const allowedBattleObjectiveTypes = ['mcqs', 'true-or-false', 'correlation']
+const battleRoomOperationQueues = new Map()
+
+const withBattleRoomLock = async (roomKey, operation) => {
+  const key = String(roomKey)
+  const previousOperation = battleRoomOperationQueues.get(key) || Promise.resolve()
+  let releaseOperation
+  const currentOperation = new Promise((resolve) => {
+    releaseOperation = resolve
+  })
+  battleRoomOperationQueues.set(key, currentOperation)
+
+  await previousOperation
+  try {
+    return await operation()
+  } finally {
+    releaseOperation()
+    if (battleRoomOperationQueues.get(key) === currentOperation) {
+      battleRoomOperationQueues.delete(key)
+    }
+  }
+}
 
 const battleRoomPlayerSchema = {
   userId: {
@@ -506,6 +527,7 @@ const battleRoomView = (room, viewerUserId = '') => {
     totalQuestions: room.questions?.length || 0,
     questionStartedAt: room.questionStartedAt || null,
     questionEndsAt: room.questionEndsAt || null,
+    lastActivityAt: room.lastActivityAt || null,
     codeExpiresAt: room.codeExpiresAt || null,
     startedAt: room.startedAt || null,
     finishedAt: room.finishedAt || null,
@@ -860,9 +882,11 @@ const processBattleAnswer = async ({ room, user, answerIndex, io, models }) => {
   room.lastActivityAt = new Date()
 
   await room.save()
+  const roomView = battleRoomView(room, String(user._id))
+  const selfRank = roomView.leaderboard.find((entry) => entry.isSelf)?.rank ?? null
 
   io.to(room.code).emit('battle:room-update', {
-    room: battleRoomView(room, String(user._id)),
+    room: roomView,
     reason: 'answer',
   })
   io.to(room.code).emit('battle:answer-received', {
@@ -875,6 +899,7 @@ const processBattleAnswer = async ({ room, user, answerIndex, io, models }) => {
     streakBefore,
     streakAfter,
     scoreAwarded,
+    rank: selfRank,
   })
 
   const everyoneAnswered = (room.players || []).every((entry) =>
@@ -907,9 +932,17 @@ const processRoomExpiry = async ({ BattleRoom, io, models }) => {
     })
   }
 
-  const activeRooms = await BattleRoom.find({ status: 'active', questionEndsAt: { $lte: now } })
+  // Inspect all active rooms instead of relying on the Date query alone. This
+  // also recovers rooms whose deadline was written while the database was busy.
+  const activeRooms = await BattleRoom.find({ status: 'active' }).select('code')
   for (const room of activeRooms) {
-    await finalizeQuestion({ room, io, models, reason: 'timer' })
+    await withBattleRoomLock(room.code, async () => {
+      const latestRoom = await BattleRoom.findOne({ code: room.code })
+      const deadlineMs = latestRoom?.questionEndsAt ? new Date(latestRoom.questionEndsAt).getTime() : 0
+      if (latestRoom?.status === 'active' && deadlineMs > 0 && deadlineMs <= Date.now()) {
+        await finalizeQuestion({ room: latestRoom, io, models, reason: 'timer' })
+      }
+    })
   }
 }
 
@@ -1505,9 +1538,12 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
 
     socket.on('battle:answer', async ({ roomCode, answerIndex }) => {
       try {
-        const room = await BattleRoom.findOne({ code: safeUpper(roomCode) })
-        if (!room) throw new Error('Battle room not found.')
-        await processBattleAnswer({ room, user: socket.data.user, answerIndex, io, models })
+        const code = safeUpper(roomCode)
+        await withBattleRoomLock(code, async () => {
+          const room = await BattleRoom.findOne({ code })
+          if (!room) throw new Error('Battle room not found.')
+          await processBattleAnswer({ room, user: socket.data.user, answerIndex, io, models })
+        })
       } catch (error) {
         socket.emit('battle:error', { message: error.message })
       }

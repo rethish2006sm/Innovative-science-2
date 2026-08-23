@@ -252,7 +252,7 @@ export default function Classpage() {
 
         {/* Categories Horizontal Menu Bar (Responsive Scroll) */}
         <div className="sticky top-4 z-40 mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white/85 p-2 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-md">
-          <div className="flex overflow-x-auto no-scrollbar gap-2 pb-1 sm:pb-0 sm:grid sm:grid-cols-3 lg:grid-cols-6">
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
             {[ALL_POST_CATEGORY, ...CLASS_POST_CATEGORIES].map((category) => {
               const active = activeCategory === category.id;
               return (
@@ -261,7 +261,7 @@ export default function Classpage() {
                   type="button"
                   onClick={() => changeCategory(category.id)}
                   className={[
-                    "relative flex items-center justify-center gap-2 rounded-2xl py-3 px-4 text-sm font-bold tracking-wide transition-all duration-300 ease-out outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 shrink-0 whitespace-nowrap",
+                    "relative flex min-w-[12rem] flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold tracking-wide transition-all duration-300 ease-out outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 shrink-0 whitespace-nowrap",
                     active
                       ? "bg-slate-950 text-white shadow-md shadow-slate-950/10 scale-[1.01]"
                       : "bg-white text-slate-600 border border-transparent hover:border-slate-200 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.99]",

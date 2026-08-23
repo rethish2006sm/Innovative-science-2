@@ -149,7 +149,7 @@ const Footer = () => {
                     <Sparkles size={16} className="text-cyan-400" />
                   </motion.span>
                 </h1>
-                <p className="text-xs tracking-wide text-slate-400">by Rethish Sir</p>
+                <p className="text-xs tracking-wide text-slate-400">Mr. Rethish Mudaliar</p>
               </div>
             </motion.div>
 
@@ -162,7 +162,7 @@ const Footer = () => {
               className="mt-2 rounded-xl border border-cyan-500/20 bg-white/5 p-3 backdrop-blur-sm"
             >
               <p className="text-xs font-medium text-cyan-400 uppercase tracking-wider">Owner</p>
-              <p className="text-sm font-semibold text-white">Rethish Sir</p>
+              <p className="text-sm font-semibold text-white">Mr. Rethish Mudaliar</p>
               <p className="text-xs text-slate-400">Computer Engg.</p>
             </motion.div>
           </motion.div>

@@ -200,21 +200,21 @@ const Navbar = () => {
         </div>
 
         {/* Removed max-w restriction and padded the edges for edge-to-edge view */}
-        <div className="relative mx-auto flex h-24 w-full items-center justify-between px-6 min-[309.4mm]:px-10">
+        <div className="relative mx-auto flex h-24 w-full min-w-0 items-center gap-3 overflow-hidden px-3 sm:px-5 lg:px-6 xl:px-10">
           {/* Left Section: Mobile Menu + Logo */}
-          <div className="flex shrink-0 items-center gap-3 min-w-0">
+          <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3 lg:flex-[0_1_auto]">
             {/* Mobile Menu Toggle */}
               <motion.button
                 whileTap={{ scale: 0.9 }}
                 onClick={() => setIsMenuOpen(true)}
-              className="relative block rounded-full bg-white/5 p-2 text-slate-300 backdrop-blur-sm transition-all hover:bg-white/10 hover:text-teal-300 min-[309.4mm]:hidden"
+              className="relative block shrink-0 rounded-full bg-white/5 p-2 text-slate-300 backdrop-blur-sm transition-all hover:bg-white/10 hover:text-teal-300 lg:hidden"
               aria-label="Open menu"
             >
               <Menu size={20} />
             </motion.button>
 
             {/* Logo Section */}
-            <NavLink to="/" className="group flex min-w-0 items-center gap-2 sm:gap-3">
+            <NavLink to="/" className="group flex min-w-0 max-w-[clamp(13rem,32vw,25rem)] items-center gap-2 sm:gap-3">
               <motion.div
                 whileHover={{
                   scale: 1.08,
@@ -248,7 +248,7 @@ const Navbar = () => {
 
               {/* Website title now remains visible in mobile views with adjusted sizing */}
               <div className="min-w-0">
-                <h1 className="flex items-center gap-1 text-sm font-black tracking-tight text-white sm:text-lg md:text-2xl">
+                <h1 className="flex min-w-0 items-center gap-1 truncate text-sm font-black tracking-tight text-white sm:text-lg md:text-2xl">
                   Innovative Science 2
                   <motion.span
                     animate={{ rotate: [0, 10, -10, 0] }}
@@ -258,14 +258,14 @@ const Navbar = () => {
                   </motion.span>
                 </h1>
                 <p className="text-[10px] tracking-wide text-slate-400 sm:text-xs md:text-sm">
-                  by Rethish Sir
+                  Mr. Rethish Mudaliar
                 </p>
               </div>
             </NavLink>
           </div>
 
           {/* Right Section: Nav items grouped tightly next to the profile button */}
-          <div className="flex min-w-0 items-center gap-4 justify-end">
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-2 sm:gap-3 lg:gap-4">
             <motion.button
               type="button"
               whileTap={{ scale: 0.9 }}
@@ -276,7 +276,7 @@ const Navbar = () => {
                   navigate(auth ? '/profile' : '/signin');
                 }
               }}
-              className={`relative grid h-10 w-10 place-items-center overflow-hidden rounded-full border backdrop-blur-xl transition-all duration-300 min-[309.4mm]:hidden ${
+              className={`relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full border backdrop-blur-xl transition-all duration-300 lg:hidden ${
                 isProfilePage
                   ? 'border-teal-400/70 bg-teal-500/20 text-teal-300 shadow-[0_0_18px_rgba(20,184,166,0.45)]'
                   : 'border-white/10 bg-white/5 text-slate-300 hover:border-teal-400/40 hover:bg-white/10 hover:text-teal-300'
@@ -303,7 +303,7 @@ const Navbar = () => {
               variants={containerVariants}
               initial="hidden"
               animate="visible"
-              className="hidden shrink-0 items-center gap-2 overflow-x-auto min-[309.4mm]:flex"
+              className="hidden min-w-0 flex-1 items-center justify-start gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden lg:flex lg:gap-1.5 xl:justify-end xl:gap-2"
             >
               {desktopNavItems.map((item) => (
                 <motion.div key={item.name} variants={itemVariants} className="shrink-0">
@@ -315,7 +315,7 @@ const Navbar = () => {
                           transition: { type: 'spring', stiffness: 300 },
                         }}
                         whileTap={{ scale: 0.95 }}
-                        className={`group relative flex shrink-0 whitespace-nowrap overflow-hidden rounded-2xl px-5 py-2.5 transition-all duration-300 ${
+                        className={`group relative flex shrink-0 whitespace-nowrap overflow-hidden rounded-2xl px-2.5 py-2 text-xs transition-all duration-300 sm:px-3 sm:py-2.5 sm:text-sm xl:px-4 ${
                           isActive
                             ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_25px_rgba(20,184,166,0.5)]'
                             : 'bg-white/5 text-slate-300 backdrop-blur-sm hover:bg-white/10 hover:text-white'
@@ -348,7 +348,7 @@ const Navbar = () => {
                     <motion.div
                       whileHover={{ y: -3, scale: 1.02 }}
                       whileTap={{ scale: 0.96 }}
-                      className={`hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-2xl border px-5 py-2.5 text-sm font-semibold backdrop-blur-sm transition-all duration-300 min-[309.4mm]:flex ${
+                      className={`hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-2xl border px-2.5 py-2 text-xs font-semibold backdrop-blur-sm transition-all duration-300 sm:px-3 sm:py-2.5 sm:text-sm xl:px-4 lg:flex ${
                         isActive
                           ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_25px_rgba(16,185,129,0.25)]'
                           : 'border-emerald-400/20 bg-white/5 text-slate-200 hover:border-emerald-400/40 hover:bg-white/10 hover:text-white'
@@ -365,7 +365,7 @@ const Navbar = () => {
               variants={itemVariants}
               initial="hidden"
               animate="visible"
-              className="hidden min-w-0 items-center gap-2 min-[309.4mm]:flex"
+              className="hidden shrink-0 items-center gap-2 lg:flex"
             >
               {auth?.user?.isAdmin && (
                 <NavLink to="/admin" aria-label="Open admin panel">

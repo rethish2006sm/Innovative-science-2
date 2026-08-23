@@ -18,6 +18,7 @@ import {
   Save,
   Trash2,
   Zap,
+  WifiOff,
   X,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -25,44 +26,9 @@ import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 import { createBattleSocket } from '../lib/battleSocket'
 import { clearBattleSession, getBattleSession, saveBattleSession } from '../lib/battleSession'
+import BattleResultsPage from './BattleResultsPage'
 
 const reactionChoices = ['🔥', '😂', '😎', '😱', '💪', '👏', '❤️', '🤣', '🚀', '🎯', '🧠']
-const correctAnswerCards = [
-  {
-    title: 'Clean hit',
-    message: 'That was sharp. Your timing and instinct lined up perfectly.',
-    emojis: ['🔥', '✨', '🎯'],
-  },
-  {
-    title: 'Great answer',
-    message: 'You just turned the pressure into points.',
-    emojis: ['🚀', '⚡', '🏆'],
-  },
-  {
-    title: 'Locked in',
-    message: 'Focus, pace, and confidence all paid off there.',
-    emojis: ['💚', '🌟', '🧠'],
-  },
-]
-
-const wrongAnswerCards = [
-  {
-    title: 'Nice try',
-    message: 'That one missed, but the next swing can still land big.',
-    emojis: ['💡', '🌱', '🛠️'],
-  },
-  {
-    title: 'Keep moving',
-    message: 'Reset, breathe, and come back stronger on the next question.',
-    emojis: ['💪', '🔁', '🎯'],
-  },
-  {
-    title: 'Almost there',
-    message: 'You were close. The next one is yours.',
-    emojis: ['🧠', '✨', '🔥'],
-  },
-]
-
 const battleQuestionCounts = [10, 15, 20, 25]
 const battleTimeLimits = [10, 15]
 const battleDifficultyOptions = [
@@ -80,28 +46,23 @@ const buildLobbySettingsDraft = (room = {}) => ({
   roomChat: Boolean(room.settings?.roomChat),
 })
 
-const pickCard = (cards) => cards[Math.floor(Math.random() * cards.length)]
+const buildAnswerFeedback = ({ isCorrect, streakAfter = 0, scoreAwarded = 0, rank = null, correctOption = null }) => {
+  const safeScore = Math.max(0, Number(scoreAwarded) || 0)
+  const parsedRank = Number(rank)
+  const safeRank = Number.isInteger(parsedRank) && parsedRank > 0 ? parsedRank : null
 
-const buildAnswerFeedback = ({ isCorrect, streakAfter = 0, scoreAwarded = 0, correctOption = null }) => {
-  if (isCorrect) {
-    const card = pickCard(correctAnswerCards)
-    return {
-      tone: 'success',
-      badge: streakAfter >= 2 ? `Streak x${streakAfter}` : 'Correct answer',
-      title: card.title,
-      message: `${card.message}${scoreAwarded ? ` +${scoreAwarded} points.` : ''}`,
-      emojis: card.emojis,
-      correctOption,
-    }
-  }
-
-  const card = pickCard(wrongAnswerCards)
   return {
-    tone: 'danger',
-    badge: 'Wrong answer',
-    title: card.title,
-    message: card.message,
-    emojis: card.emojis,
+    tone: isCorrect ? 'success' : 'danger',
+    badge: isCorrect ? 'Correct answer' : 'Wrong answer',
+    title: isCorrect ? `+${safeScore}` : '+0',
+    message: isCorrect
+      ? safeRank
+        ? `#${safeRank} on the board`
+        : 'Points added to your score.'
+      : 'No points awarded.',
+    streakLabel: isCorrect && streakAfter > 0 ? `Streak x${streakAfter}` : '',
+    positionLabel: safeRank ? `#${safeRank}` : '',
+    scoreAwarded: safeScore,
     correctOption,
   }
 }
@@ -135,6 +96,17 @@ const normalizeRoom = (room = {}, authUserId = '') => {
       minPlayers: Number(room.settings?.minPlayers || 2),
     },
   }
+}
+
+const shouldAcceptBattleRoom = (current, next) => {
+  if (!current) return true
+  if (current.status !== next.status) return true
+  if (Number(next.currentQuestionIndex || 0) > Number(current.currentQuestionIndex || 0)) return true
+  if (Number(next.currentQuestionIndex || 0) < Number(current.currentQuestionIndex || 0)) return false
+
+  const currentActivity = current.lastActivityAt ? new Date(current.lastActivityAt).getTime() : 0
+  const nextActivity = next.lastActivityAt ? new Date(next.lastActivityAt).getTime() : 0
+  return nextActivity >= currentActivity
 }
 
 const BattleRoomPage = () => {
@@ -184,7 +156,82 @@ const BattleRoomPage = () => {
   const isCreator = Boolean(room) && String(room.createdBy) === String(auth?.user?.id)
   const selfPlayer = room?.players?.find((player) => player.isSelf) || null
   const alreadyAnswered = Boolean(selfPlayer?.answeredQuestions?.some((answer) => answer.questionIndex === room?.currentQuestionIndex - 1))
-  const canAnswer = room?.status === 'active' && currentQuestion && !selectedAnswer && !alreadyAnswered && currentQuestionTimeLeft > 0
+  const canAnswer = socketState === 'connected' && room?.status === 'active' && currentQuestion && selectedAnswer === null && !alreadyAnswered && currentQuestionTimeLeft > 0
+
+  useEffect(() => {
+    setSelectedAnswer(null)
+    setAnswerFeedback(null)
+    lastFeedbackKeyRef.current = ''
+  }, [room?.currentQuestionIndex])
+
+  useEffect(() => {
+    if (socketState === 'connected' && !alreadyAnswered) {
+      setSelectedAnswer(null)
+    }
+  }, [socketState, alreadyAnswered])
+
+  useEffect(() => {
+    if (!room?.code || room.status !== 'active' || currentQuestionTimeLeft !== 0) {
+      return undefined
+    }
+
+    let cancelled = false
+    const syncExpiredQuestion = async () => {
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${room.code}`)
+        if (cancelled) return
+
+        const nextRoom = normalizeRoom(data.room, auth.user.id)
+        setRoom(nextRoom)
+        if (nextRoom.status === 'finished') {
+          navigate(`/battle-mode/room/${nextRoom.code}/results`, { replace: true })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setToast(err.message || 'Could not sync the next question. Reconnecting...')
+        }
+      }
+    }
+
+    syncExpiredQuestion()
+    const syncTimer = window.setInterval(syncExpiredQuestion, 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(syncTimer)
+    }
+  }, [auth?.user?.id, currentQuestionTimeLeft, navigate, room?.code, room?.status])
+
+  useEffect(() => {
+    if (!room?.code || room.status !== 'active') {
+      return undefined
+    }
+
+    let cancelled = false
+    const syncBattleRoom = async () => {
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${room.code}`)
+        if (cancelled) return
+
+        const nextRoom = normalizeRoom(data.room, auth.user.id)
+        setRoom((current) => {
+          const currentActivity = current?.lastActivityAt ? new Date(current.lastActivityAt).getTime() : 0
+          const nextActivity = nextRoom.lastActivityAt ? new Date(nextRoom.lastActivityAt).getTime() : 0
+          if (!current || nextRoom.currentQuestionIndex > current.currentQuestionIndex || nextRoom.status !== current.status || nextActivity >= currentActivity) {
+            return nextRoom
+          }
+          return current
+        })
+      } catch (err) {
+        // Socket reconnect/status messaging handles temporary sync failures.
+      }
+    }
+
+    const syncTimer = window.setInterval(syncBattleRoom, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(syncTimer)
+    }
+  }, [auth?.user?.id, room?.code, room?.status])
 
   useEffect(() => {
     let cancelled = false
@@ -252,6 +299,14 @@ const BattleRoomPage = () => {
       setSocketState('offline')
     })
 
+    socket.on('connect_error', () => {
+      setSocketState('offline')
+    })
+
+    socket.io.on('reconnect_attempt', () => {
+      setSocketState('connecting')
+    })
+
     socket.on('battle:error', (payload) => {
       setToast(payload?.message || 'Battle update failed.')
       window.setTimeout(() => setToast(''), 2600)
@@ -259,7 +314,7 @@ const BattleRoomPage = () => {
 
     socket.on('battle:room-update', (payload) => {
       const nextRoom = normalizeRoom(payload?.room || {}, auth.user.id)
-      setRoom(nextRoom)
+      setRoom((current) => shouldAcceptBattleRoom(current, nextRoom) ? nextRoom : current)
       saveBattleSession({
         roomCode: nextRoom.code,
         roomId: nextRoom.id,
@@ -302,7 +357,7 @@ const BattleRoomPage = () => {
 
     socket.on('battle:question-update', (payload) => {
       const nextRoom = normalizeRoom(payload?.room || {}, auth.user.id)
-      setRoom(nextRoom)
+      setRoom((current) => shouldAcceptBattleRoom(current, nextRoom) ? nextRoom : current)
       setSelectedAnswer(null)
       setAnswerFeedback(null)
       lastFeedbackKeyRef.current = ''
@@ -364,6 +419,7 @@ const BattleRoomPage = () => {
         isCorrect: Boolean(payload?.isCorrect),
         streakAfter: Number(payload?.streakAfter || 0),
         scoreAwarded: Number(payload?.scoreAwarded || 0),
+        rank: Number(payload?.rank || 0),
         correctOption: Number(payload?.correctOption ?? -1),
       })
 
@@ -590,14 +646,6 @@ const BattleRoomPage = () => {
     }
 
     setSelectedAnswer(optionIndex)
-    setAnswerFeedback({
-      tone: 'pending',
-      badge: 'Answer locked',
-      title: 'Locked in',
-      message: 'Waiting for the result to land...',
-      emojis: ['⏳', '🎧', '⚡'],
-    })
-    window.clearTimeout(answerFeedbackTimerRef.current)
     socketRef.current?.emit('battle:answer', { roomCode, answerIndex: optionIndex })
   }
 
@@ -690,8 +738,8 @@ const BattleRoomPage = () => {
         </header>
 
         {visibleStage === 'lobby' && <LobbyStage room={room} isCreator={isCreator} allReady={allReady} onReady={sendReady} onStart={startBattle} onReaction={sendReaction} onSendMessage={sendChat} onSendReadyReminder={sendReadyReminder} onLeaveLobby={leaveLobby} onDeleteLobby={deleteLobby} onSaveSettings={saveLobbySettings} roomAction={roomAction} />}
-        {visibleStage === 'arena' && <ArenaStage room={room} currentQuestion={currentQuestion} selectedAnswer={selectedAnswer} answerFeedback={answerFeedback} canAnswer={canAnswer} currentQuestionTimeLeft={currentQuestionTimeLeft} currentQuestionProgress={currentQuestionProgress} onAnswer={submitAnswer} reactions={reactionChoices} onReaction={sendReaction} onSendMessage={sendChat} />}
-        {visibleStage === 'results' && <ResultsStage room={room} leaveToHome={leaveToHome} />}
+        {visibleStage === 'arena' && <ArenaStage room={room} currentQuestion={currentQuestion} selectedAnswer={selectedAnswer} answerFeedback={answerFeedback} canAnswer={canAnswer} currentQuestionTimeLeft={currentQuestionTimeLeft} currentQuestionProgress={currentQuestionProgress} socketState={socketState} onAnswer={submitAnswer} reactions={reactionChoices} onReaction={sendReaction} onSendMessage={sendChat} />}
+        {visibleStage === 'results' && <BattleResultsPage room={room} leaveToHome={leaveToHome} />}
 
         <AnimatePresence>
           {lobbyReminder && visibleStage === 'lobby' && (
@@ -716,72 +764,39 @@ const BattleRoomPage = () => {
         <AnimatePresence>
           {answerFeedback && (
             <motion.div
-              initial={{ opacity: 0, y: -22, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -18, scale: 0.96 }}
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 10 }}
               transition={{ duration: 0.24, ease: 'easeOut' }}
-              className="fixed left-1/2 top-4 z-[170] w-[min(92vw,34rem)] -translate-x-1/2"
+              className="fixed inset-0 z-[170] flex items-center justify-center px-4 text-center"
               aria-live="polite"
             >
-              <div
-                className={`overflow-hidden rounded-[1.75rem] border bg-white/95 shadow-[0_26px_80px_rgba(15,23,42,0.24)] backdrop-blur-xl ${
-                  answerFeedback.tone === 'success'
-                    ? 'border-emerald-200'
-                    : answerFeedback.tone === 'danger'
-                      ? 'border-red-200'
-                      : 'border-amber-200'
-                }`}
-              >
-                <div
-                  className={`flex items-start gap-3 px-4 py-4 sm:px-5 ${
+              <div className="flex max-w-[min(92vw,28rem)] flex-col items-center gap-2">
+                <h3
+                  className={`text-6xl font-black tracking-tight drop-shadow-[0_10px_30px_rgba(15,23,42,0.14)] sm:text-7xl ${
                     answerFeedback.tone === 'success'
-                      ? 'bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(34,211,238,0.08))]'
-                      : answerFeedback.tone === 'danger'
-                        ? 'bg-[linear-gradient(135deg,rgba(248,113,113,0.14),rgba(251,146,60,0.1))]'
-                        : 'bg-[linear-gradient(135deg,rgba(245,158,11,0.14),rgba(251,191,36,0.08))]'
+                      ? 'text-emerald-700'
+                      : 'text-red-700'
                   }`}
                 >
-                  <div
-                    className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-lg shadow-sm ${
-                      answerFeedback.tone === 'success'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : answerFeedback.tone === 'danger'
-                          ? 'bg-red-100 text-red-700'
-                          : 'bg-amber-100 text-amber-700'
-                    }`}
+                  {answerFeedback.title}
+                </h3>
+                {answerFeedback.streakLabel && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0, scale: [0.9, 1.06, 1] }}
+                    transition={{ delay: 0.08, duration: 0.18 }}
+                    className="-mt-1 inline-flex items-center gap-2 rounded-full border-2 border-orange-300 bg-gradient-to-r from-amber-100 via-orange-100 to-amber-200 px-4 py-2 text-base font-black uppercase tracking-[0.16em] text-orange-800 shadow-[0_8px_24px_rgba(245,158,11,0.3)] sm:px-5 sm:py-2.5 sm:text-lg"
                   >
-                    {answerFeedback.tone === 'success' ? <CheckCircle2 className="h-5 w-5" /> : answerFeedback.tone === 'danger' ? <ShieldAlert className="h-5 w-5" /> : <Zap className="h-5 w-5" />}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className={`text-[10px] font-black uppercase tracking-[0.28em] ${
-                        answerFeedback.tone === 'success'
-                          ? 'text-emerald-700'
-                          : answerFeedback.tone === 'danger'
-                            ? 'text-red-700'
-                            : 'text-amber-700'
-                      }`}
-                    >
-                      {answerFeedback.badge}
-                    </p>
-                    <h3 className="mt-1 text-lg font-black tracking-tight text-slate-950 sm:text-xl">
-                      {answerFeedback.title}
-                    </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      {answerFeedback.message}
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      {answerFeedback.emojis.map((emoji) => (
-                        <span
-                          key={`${answerFeedback.title}-${emoji}`}
-                          className="grid h-9 w-9 place-items-center rounded-full border border-white/70 bg-white text-lg shadow-sm"
-                        >
-                          {emoji}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                    <span className="text-2xl leading-none drop-shadow-sm" role="img" aria-label="Fire">
+                      🔥
+                    </span>
+                    <span>{answerFeedback.streakLabel}</span>
+                  </motion.div>
+                )}
+                <p className="text-base font-semibold text-slate-700 sm:text-lg">
+                  {answerFeedback.message}
+                </p>
               </div>
             </motion.div>
           )}
@@ -835,11 +850,18 @@ const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, o
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isReadyDialogOpen, setIsReadyDialogOpen] = useState(false)
   const [readyNotice, setReadyNotice] = useState('')
+  const readyButtonRef = useRef(null)
   const selfPlayer = room.players.find((player) => player.isSelf) || null
   const selfReady = Boolean(selfPlayer?.ready)
   const expiryMs = Math.max(0, new Date(room.codeExpiresAt).getTime() - Date.now())
   const minutes = Math.floor(expiryMs / 60000)
   const seconds = Math.floor((expiryMs % 60000) / 1000)
+
+  useEffect(() => {
+    if (room.status === 'lobby') {
+      readyButtonRef.current?.focus({ preventScroll: true })
+    }
+  }, [room.status])
 
   useEffect(() => {
     if (!isSettingsOpen && !isReadyDialogOpen) {
@@ -918,8 +940,11 @@ const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, o
           <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
               <motion.button
                 type="button"
+                ref={readyButtonRef}
                 onClick={() => setIsReadyDialogOpen(true)}
                 disabled={roomAction === 'leaving' || roomAction === 'deleting'}
+                aria-pressed={selfReady}
+                aria-label={selfReady ? 'Change ready status to not ready' : 'Mark yourself ready'}
                 animate={
                   selfReady
                     ? {
@@ -944,10 +969,10 @@ const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, o
                 transition={{ duration: selfReady ? 2.2 : 1.8, repeat: Infinity, ease: 'easeInOut' }}
                 whileHover={{ scale: 1.02, y: -2 }}
                 whileTap={{ scale: 0.98 }}
-                className={`group relative overflow-hidden rounded-[1.25rem] border p-3 text-left shadow-sm transition hover:shadow-lg sm:rounded-[1.5rem] sm:p-4 ${
+                className={`group relative min-h-[92px] w-full cursor-pointer overflow-hidden rounded-[1.25rem] border-2 p-3 text-left shadow-[0_14px_30px_rgba(245,158,11,0.16)] transition hover:-translate-y-1 hover:shadow-[0_20px_42px_rgba(245,158,11,0.24)] focus:outline-none focus-visible:ring-4 focus-visible:ring-cyan-300/70 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-[104px] sm:rounded-[1.5rem] sm:p-4 ${
                   selfReady
-                    ? 'border-emerald-200 bg-emerald-50'
-                    : 'border-amber-200 bg-amber-50'
+                    ? 'border-emerald-400 bg-gradient-to-br from-emerald-50 to-emerald-100 shadow-[0_14px_30px_rgba(16,185,129,0.18)] hover:shadow-[0_20px_42px_rgba(16,185,129,0.28)]'
+                    : 'border-amber-400 bg-gradient-to-br from-amber-50 to-orange-100'
                 }`}
               >
                 <motion.span
@@ -971,7 +996,7 @@ const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, o
                     <CheckCircle2 className="h-4 w-4 sm:h-5 sm:w-5" />
                   </span>
                   <div className="min-w-0">
-                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-950 sm:text-sm sm:tracking-[0.18em]">{selfReady ? 'Ready' : 'Ready up'}</p>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-950 sm:text-sm sm:tracking-[0.2em]">{selfReady ? 'Ready' : 'Ready up'}</p>
                     <p className="mt-1 text-[10px] leading-4 text-slate-600 sm:text-xs sm:leading-5">
                       {selfReady ? 'Tap to switch back to not ready.' : 'Tap when you are set and want to lock in.'}
                     </p>
@@ -1031,7 +1056,7 @@ const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, o
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {room.players.map((player) => (
-                <PlayerCard key={player.userId} player={player} compact onSendReadyReminder={onSendReadyReminder} />
+                <PlayerCard key={player.userId} player={player} compact isCreator={String(player.userId) === String(room.createdBy)} onSendReadyReminder={onSendReadyReminder} />
               ))}
             </div>
           </div>
@@ -1075,11 +1100,26 @@ const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, o
   )
 }
 
-const ArenaStage = ({ room, currentQuestion, selectedAnswer, answerFeedback, canAnswer, currentQuestionTimeLeft, currentQuestionProgress, onAnswer, reactions, onReaction, onSendMessage }) => {
+const ArenaStage = ({ room, currentQuestion, selectedAnswer, answerFeedback, canAnswer, currentQuestionTimeLeft, currentQuestionProgress, socketState, onAnswer, reactions, onReaction, onSendMessage }) => {
   const isCriticalTimer = currentQuestionTimeLeft > 0 && currentQuestionTimeLeft <= 5
+  const needsSync = socketState !== 'connected' || !currentQuestion
+  const syncMessage = socketState === 'offline'
+    ? 'Connection lost. Check your internet; we are reconnecting and will sync the latest question automatically.'
+    : socketState === 'connecting'
+      ? 'Reconnecting to the live battle. Please keep this page open.'
+      : 'Syncing the latest question from the battle server. Please wait a moment.'
 
   return (
     <>
+      {needsSync && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm" role="status" aria-live="polite">
+          <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          <div>
+            <p className="text-sm font-black">Battle connection needs attention</p>
+            <p className="mt-1 text-xs leading-5 text-amber-800">{syncMessage}</p>
+          </div>
+        </div>
+      )}
       <div className="grid flex-1 min-h-0 gap-3 items-start lg:grid-cols-[minmax(0,1fr)_360px] lg:min-h-0">
         <div className="flex h-full min-h-0 flex-col gap-2 rounded-[2rem] border border-white/80 bg-white p-2.5 shadow-[0_20px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-4 lg:h-[calc(100vh-9rem)] lg:overflow-y-auto lg:pr-1">
           <div className="sticky top-0 z-20 rounded-[1.25rem] border border-slate-200 bg-slate-50/95 px-3 py-2 backdrop-blur lg:hidden">
@@ -1252,6 +1292,64 @@ const ArenaStage = ({ room, currentQuestion, selectedAnswer, answerFeedback, can
     </>
   )
 }
+
+const PremiumResultsStage = ({ room, leaveToHome }) => {
+  const rewards = room.battleSummary?.rewards || []
+  const selfPlayer = room.players.find((player) => player.isSelf) || null
+  const selfReward = rewards.find((item) => String(item.userId) === String(selfPlayer?.userId))
+  const selfRank = Number(selfReward?.rank || selfPlayer?.rank || 0)
+  const ordinal = (rank) => `${rank}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'}`
+
+  return (
+    <div className="relative flex-1 overflow-hidden rounded-[2.25rem] bg-slate-950 p-1 shadow-[0_30px_100px_rgba(15,23,42,0.22)] sm:p-2">
+      <div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-cyan-400/20 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 h-80 w-80 rounded-full bg-emerald-400/15 blur-3xl" />
+      <div className="relative grid gap-4 p-4 sm:p-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)] lg:p-8">
+        <section className="flex min-w-0 flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.24em] text-amber-200">
+              <Crown className="h-4 w-4" /> Match complete
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Room {room.code}</span>
+          </div>
+
+          <div className="mt-8 max-w-2xl">
+            <p className="text-sm font-bold uppercase tracking-[0.22em] text-cyan-300">Final standings are in</p>
+            <h2 className="mt-3 text-4xl font-black leading-[0.98] tracking-tight text-white sm:text-6xl">{selfRank === 1 ? 'Victory is yours.' : 'You made it to the finish line.'}</h2>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">Every answer counted, and your rewards are now locked into your profile.</p>
+          </div>
+
+          <div className="mt-8 grid gap-3 sm:grid-cols-[1.15fr_0.85fr]">
+            <div className="relative overflow-hidden rounded-[1.75rem] border border-cyan-300/30 bg-gradient-to-br from-cyan-400 to-emerald-400 p-5 text-slate-950 shadow-[0_20px_50px_rgba(34,211,238,0.18)] sm:p-6">
+              <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/25 blur-2xl" />
+              <div className="relative flex items-start justify-between gap-4">
+                <div className="min-w-0"><p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-950/60">Your result</p><h3 className="mt-2 truncate text-2xl font-black sm:text-3xl">{selfPlayer?.name || 'Your score'}</h3></div>
+                <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-slate-950 text-xl font-black text-white shadow-lg">#{selfRank || '-'}</div>
+              </div>
+              <div className="relative mt-7 flex items-end justify-between gap-3"><div><p className="text-4xl font-black tracking-tight sm:text-5xl">{selfReward?.score || selfPlayer?.score || 0}</p><p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-950/60">Total points</p></div><div className="text-right"><p className="text-2xl font-black">+{selfReward?.brainCells || 0}</p><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-950/60">Brain Cells</p></div></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 rounded-[1.75rem] border border-white/10 bg-white/[0.06] p-4 sm:p-5">
+              <ResultStat label="Correct" value={selfPlayer?.correctCount || 0} /><ResultStat label="Wrong" value={selfPlayer?.wrongCount || 0} /><ResultStat label="Best streak" value={selfPlayer?.highestStreak || 0} /><ResultStat label="Players" value={room.players.length} />
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3"><ResultStat label="Questions" value={room.battleSummary?.totalQuestions || room.totalQuestions || 0} dark /><ResultStat label="Chat" value={room.settings.roomChat ? 'On' : 'Off'} dark /><ResultStat label="Reactions" value={room.settings.emojiReactions ? 'On' : 'Off'} dark /></div>
+          <button type="button" onClick={leaveToHome} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-black text-slate-950 shadow-[0_14px_35px_rgba(255,255,255,0.12)] transition hover:-translate-y-0.5 hover:bg-cyan-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-cyan-300/60 sm:w-fit">Return to website <ArrowRight className="h-4 w-4" /></button>
+        </section>
+
+        <section className="min-w-0 rounded-[1.75rem] border border-white/10 bg-white/[0.06] p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-300">The podium</p><h3 className="mt-1 text-2xl font-black text-white">Final leaderboard</h3></div><Trophy className="h-7 w-7 text-amber-300" /></div>
+          <div className="mt-5 grid gap-2.5">{room.leaderboard.map((player) => <div key={player.userId} className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${player.isSelf ? 'border-emerald-300/60 bg-emerald-300/15' : 'border-white/10 bg-slate-950/30'}`}><div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-sm font-black ${player.rank === 1 ? 'bg-amber-300 text-amber-950' : 'bg-white/10 text-white'}`}>{player.rank}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-black text-white">{player.name}{player.isSelf ? ' · You' : ''}</p><p className="mt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{player.correctCount} correct · 🔥 {player.streak || 0} streak</p></div><p className="shrink-0 text-lg font-black text-cyan-200">{player.score}</p></div>)}</div>
+          <div className="mt-5 border-t border-white/10 pt-5"><p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-300">Rewards by rank</p><div className="mt-3 grid gap-2">{room.leaderboard.slice(0, 3).map((player) => { const reward = rewards.find((item) => String(item.userId) === String(player.userId)); return <div key={player.userId} className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.05] px-3 py-2.5"><span className="text-xs font-bold text-slate-300">{ordinal(player.rank)} · {player.name}</span><span className="text-xs font-black text-emerald-300">+{reward?.brainCells || 0} cells</span></div> })}</div></div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+const ResultStat = ({ label, value, dark = false }) => (
+  <div className={dark ? 'rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3' : 'rounded-2xl bg-slate-950/25 px-3 py-3'}><p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-white">{value}</p></div>
+)
 
 const ResultsStage = ({ room, leaveToHome }) => {
   const rewards = room.battleSummary?.rewards || []
@@ -2038,7 +2136,7 @@ const MobileReactionDock = ({ onReaction, enabled = false }) => {
   )
 }
 
-const PlayerCard = ({ player, compact = false, onSendReadyReminder = null }) => {
+const PlayerCard = ({ player, compact = false, isCreator = false, onSendReadyReminder = null }) => {
   if (compact) {
     return (
       <div className={`relative rounded-[1.4rem] border px-4 py-3 pr-12 ${player.isSelf ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
@@ -2056,7 +2154,14 @@ const PlayerCard = ({ player, compact = false, onSendReadyReminder = null }) => 
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h4 className="truncate text-sm font-black text-slate-950">{player.name}</h4>
-            <p className="mt-1 text-[11px] text-slate-500">{player.isSelf ? 'You' : 'Player'}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+              <span>{player.isSelf ? 'You' : 'Player'}</span>
+              {isCreator && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
+                  <Crown className="h-3 w-3" /> Host
+                </span>
+              )}
+            </div>
           </div>
           <span
             className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${
@@ -2141,3 +2246,5 @@ const MetricRow = ({ label, value }) => (
 )
 
 export default BattleRoomPage
+
+
