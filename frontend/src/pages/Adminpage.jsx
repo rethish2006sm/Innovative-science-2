@@ -145,6 +145,16 @@ const Adminpage = () => {
   const [messageSending, setMessageSending] = useState(false)
   const [messageError, setMessageError] = useState('')
   const [messageSuccess, setMessageSuccess] = useState('')
+  const [pushTitle, setPushTitle] = useState('')
+  const [pushBody, setPushBody] = useState('')
+  const [pushLink, setPushLink] = useState('/#/')
+  const [pushSending, setPushSending] = useState(false)
+  const [pushError, setPushError] = useState('')
+  const [pushSuccess, setPushSuccess] = useState('')
+  const [aiNotificationPreview, setAiNotificationPreview] = useState(null)
+  const [aiNotificationLoading, setAiNotificationLoading] = useState(false)
+  const [aiNotificationSending, setAiNotificationSending] = useState(false)
+  const [aiNotificationError, setAiNotificationError] = useState('')
   const [adminMessages, setAdminMessages] = useState([])
   const [adminMessagesLoading, setAdminMessagesLoading] = useState(false)
   const [adminMessagesLoaded, setAdminMessagesLoaded] = useState(false)
@@ -766,6 +776,70 @@ const Adminpage = () => {
       setMessageError(err.message)
     } finally {
       setMessageSending(false)
+    }
+  }
+
+  const sendWebPushMessage = async (event) => {
+    event.preventDefault()
+    setPushSending(true)
+    setPushError('')
+    setPushSuccess('')
+    try {
+      if (!pushTitle.trim() || !pushBody.trim()) {
+        throw new Error('Add a push notification title and message.')
+      }
+      const data = await apiRequest('/api/admin/push/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetType: 'all',
+          targetUserIds: [],
+          title: pushTitle.trim(),
+          body: pushBody.trim(),
+          link: pushLink.trim() || '/#/',
+        }),
+      })
+      const failureHint = data.push?.failures?.[0]?.reason ? ` Provider: ${data.push.failures[0].reason}` : ''
+      setPushSuccess(`Web Push prepared for ${data.audienceCount || 0} students. ${data.push?.registered || 0} browser device(s) were registered, ${data.push?.sent || 0} received it, and ${data.push?.failed || 0} failed. ${data.push?.removed || 0} stale device(s) were removed; those students should revisit and enable notifications again.${failureHint}`)
+      setPushTitle('')
+      setPushBody('')
+    } catch (err) {
+      setPushError(err.message)
+    } finally {
+      setPushSending(false)
+    }
+  }
+
+  const previewAiNotification = async () => {
+    setAiNotificationLoading(true)
+    setAiNotificationError('')
+    try {
+      const data = await apiRequest('/api/admin/notifications/ai-preview', {
+        method: 'POST',
+        body: JSON.stringify({ days: 30 }),
+      })
+      setAiNotificationPreview(data)
+    } catch (err) {
+      setAiNotificationError(err.message)
+    } finally {
+      setAiNotificationLoading(false)
+    }
+  }
+
+  const sendAiNotification = async () => {
+    setAiNotificationSending(true)
+    setAiNotificationError('')
+    try {
+      const data = await apiRequest('/api/admin/notifications/ai-send', {
+        method: 'POST',
+        body: JSON.stringify({ targetType: 'all', days: 30 }),
+      })
+      setMessageSuccess(`Fact-checked AI notification sent to ${data.audienceCount || 0} students.`)
+      setAiNotificationPreview(null)
+      loadAdminMessages({ silent: true })
+    } catch (err) {
+      setAiNotificationError(err.message)
+    } finally {
+      setAiNotificationSending(false)
     }
   }
 
@@ -2448,6 +2522,84 @@ const Adminpage = () => {
                           {messageSuccess}
                         </div>
                       )}
+
+                      <div className="mt-5 rounded-3xl border border-amber-100 bg-amber-50/70 p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-black text-amber-950">Browser Web Push</p>
+                            <p className="mt-1 text-sm leading-6 text-amber-900">
+                              This is separate from the popup. It is delivered by the browser service worker, including when students are not on the website.
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.2em] text-amber-700">All students</span>
+                        </div>
+
+                        {pushError && <p className="mt-3 rounded-2xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{pushError}</p>}
+                        {pushSuccess && <p className="mt-3 rounded-2xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">{pushSuccess}</p>}
+
+                        <form onSubmit={sendWebPushMessage} className="mt-4 grid gap-3 rounded-2xl border border-amber-100 bg-white p-4">
+                          <div className="grid gap-3 lg:grid-cols-2">
+                            <label className="grid gap-2 text-sm font-bold text-slate-600">
+                              Push title
+                              <input value={pushTitle} onChange={(event) => setPushTitle(event.target.value)} maxLength={180} placeholder="New science update" className="h-11 rounded-xl border border-slate-200 px-3 text-slate-900 outline-none focus:border-amber-400" />
+                            </label>
+                            <label className="grid gap-2 text-sm font-bold text-slate-600">
+                              Open link
+                              <input value={pushLink} onChange={(event) => setPushLink(event.target.value)} placeholder="/#/chapters" className="h-11 rounded-xl border border-slate-200 px-3 text-slate-900 outline-none focus:border-amber-400" />
+                            </label>
+                          </div>
+                          <label className="grid gap-2 text-sm font-bold text-slate-600">
+                            Push message
+                            <textarea value={pushBody} onChange={(event) => setPushBody(event.target.value)} maxLength={2000} rows={3} placeholder="This appears as a browser notification, not a popup." className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:border-amber-400" />
+                          </label>
+                          <button type="submit" disabled={pushSending} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 font-bold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60">
+                            {pushSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <BellRing className="h-4 w-4" />}
+                            {pushSending ? 'Sending Web Push...' : 'Send Web Push to all students'}
+                          </button>
+                        </form>
+                      </div>
+
+                      <div className="mt-5 rounded-3xl border border-violet-100 bg-violet-50/70 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-black text-violet-950">Fact-checked AI update</p>
+                            <p className="mt-1 max-w-2xl text-sm leading-6 text-violet-800">
+                              AI reads the recorded content changes and current chapters first. It cannot announce a chapter that does not exist.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={previewAiNotification}
+                            disabled={aiNotificationLoading || aiNotificationSending}
+                            className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-violet-700 px-4 font-bold text-white transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {aiNotificationLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <BellRing className="h-4 w-4" />}
+                            {aiNotificationLoading ? 'Analyzing...' : 'Analyze changes'}
+                          </button>
+                        </div>
+
+                        {aiNotificationError && (
+                          <p className="mt-3 rounded-2xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{aiNotificationError}</p>
+                        )}
+
+                        {aiNotificationPreview && (
+                          <div className="mt-4 rounded-2xl border border-violet-100 bg-white p-4">
+                            <p className="text-xs font-black uppercase tracking-[0.2em] text-violet-600">
+                              {aiNotificationPreview.facts?.changes?.length || 0} verified change(s) found
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-slate-700">{aiNotificationPreview.message}</p>
+                            <button
+                              type="button"
+                              onClick={sendAiNotification}
+                              disabled={aiNotificationSending}
+                              className="mt-4 inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {aiNotificationSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                              {aiNotificationSending ? 'Sending...' : 'Send to every student'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
 
                       <form onSubmit={sendStudentPopupMessage} className="mt-5 grid gap-4 rounded-3xl border border-cyan-100 bg-cyan-50/70 p-4">
                         <div className="grid gap-4 lg:grid-cols-2">

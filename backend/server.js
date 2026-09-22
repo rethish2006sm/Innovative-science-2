@@ -11,6 +11,7 @@ const sharp = require('sharp')
 const path = require('path')
 const compression = require('compression')
 const { Server } = require('socket.io')
+const webpush = require('web-push')
 const { getApps, initializeApp, cert, applicationDefault } = require('firebase-admin/app')
 const { getAuth } = require('firebase-admin/auth')
 const { initBattleMode } = require('./battleMode')
@@ -70,6 +71,9 @@ const ADMIN_PASSWORD = '1234567'
 const PYQ_FIXED_TITLE = 'Class 10 Science 2'
 const PYQ_FIXED_SUBJECT = 'Science 2'
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-lite'
+const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || '').trim()
+const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || '').trim()
+const VAPID_SUBJECT = String(process.env.VAPID_SUBJECT || 'mailto:innovativesci2@gmail.com').trim()
 const MAX_COMPLETION_TOKENS = Number(process.env.MAX_COMPLETION_TOKENS || 1800)
 const allowedOrigins = [
   ...(process.env.CLIENT_URL || '')
@@ -80,20 +84,29 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
 ]
 
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+} else {
+  console.warn('Web Push is not configured. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in backend/.env.')
+}
+
 let firebaseAdminAuth = null
 try {
-  if (!getApps().length) {
-    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-      : undefined
-    const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'innovativescience2-f988a'
-    initializeApp(serviceAccount
-      ? { credential: cert(serviceAccount), projectId: firebaseProjectId }
-      : process.env.GOOGLE_APPLICATION_CREDENTIALS
-        ? { credential: applicationDefault(), projectId: firebaseProjectId }
-        : { projectId: firebaseProjectId })
+  const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+    ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+    : undefined
+  const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'innovativescience2-f988a'
+
+  if (serviceAccount || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    if (!getApps().length) {
+      initializeApp(serviceAccount
+        ? { credential: cert(serviceAccount), projectId: firebaseProjectId }
+        : { credential: applicationDefault(), projectId: firebaseProjectId })
+    }
+    firebaseAdminAuth = getAuth()
+  } else {
+    console.warn('Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON on the server to sync Firebase users to MongoDB.')
   }
-  firebaseAdminAuth = getAuth()
 } catch (error) {
   console.warn(`Firebase Admin could not initialize: ${error.message}`)
 }
@@ -499,6 +512,26 @@ const ObjectiveType = mongoose.model('ObjectiveType', objectiveTypeSchema)
 const ObjectiveQuestion = mongoose.model('ObjectiveQuestion', objectiveQuestionSchema)
 const PracticeScore = mongoose.model('PracticeScore', practiceScoreSchema)
 
+// Immutable content history used by the fact-checked notification generator.
+// Keep this separate from the content collections so deletes remain auditable.
+const contentChangeSchema = new mongoose.Schema(
+  {
+    entityType: { type: String, required: true, enum: ['chapter', 'topic', 'objective-type', 'question'] },
+    entityId: { type: String, required: true },
+    action: { type: String, required: true, enum: ['created', 'updated', 'deleted'] },
+    actor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    chapterId: { type: mongoose.Schema.Types.ObjectId, ref: 'Chapter', default: null },
+    topicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Topic', default: null },
+    objectiveTypeId: { type: mongoose.Schema.Types.ObjectId, ref: 'ObjectiveType', default: null },
+    before: { type: mongoose.Schema.Types.Mixed, default: null },
+    after: { type: mongoose.Schema.Types.Mixed, default: null },
+  },
+  { timestamps: true },
+)
+contentChangeSchema.index({ createdAt: -1 })
+contentChangeSchema.index({ entityType: 1, entityId: 1, createdAt: -1 })
+const ContentChange = mongoose.model('ContentChange', contentChangeSchema)
+
 const classSchema = new mongoose.Schema(
   {
     name: {
@@ -861,6 +894,39 @@ const battleRewardSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+const notificationSchema = new mongoose.Schema(
+  {
+    recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    type: { type: String, required: true, default: 'CONTENT_UPDATE' },
+    title: { type: String, required: true, trim: true, maxlength: 180 },
+    message: { type: String, required: true, trim: true, maxlength: 2000 },
+    link: { type: String, trim: true, default: '' },
+    source: { type: String, trim: true, default: 'ai-content-audit' },
+    facts: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    readAt: { type: Date, default: null },
+    pushSentAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+)
+notificationSchema.index({ recipient: 1, createdAt: -1 })
+const Notification = mongoose.model('Notification', notificationSchema)
+
+const pushSubscriptionSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    endpoint: { type: String, required: true, unique: true, trim: true },
+    expirationTime: { type: Number, default: null },
+    keys: {
+      p256dh: { type: String, required: true },
+      auth: { type: String, required: true },
+    },
+    userAgent: { type: String, default: '', maxlength: 500 },
+  },
+  { timestamps: true },
+)
+pushSubscriptionSchema.index({ user: 1, updatedAt: -1 })
+const PushSubscription = mongoose.model('PushSubscription', pushSubscriptionSchema)
+
 battleRewardSchema.index({ roomId: 1, userId: 1 }, { unique: true })
 
 const BattleReward = mongoose.models.BattleReward || mongoose.model('BattleReward', battleRewardSchema)
@@ -943,6 +1009,280 @@ const siteNoticeSchema = new mongoose.Schema(
   { timestamps: true },
 )
 const SiteNotice = mongoose.model('SiteNotice', siteNoticeSchema)
+
+const auditSnapshot = (value) => {
+  if (!value) return null
+  const plain = typeof value.toObject === 'function' ? value.toObject() : { ...value }
+  delete plain.questionImage
+  delete plain.answerImage
+  delete plain.photos
+  delete plain.pdf
+  return JSON.parse(JSON.stringify(plain, (key, item) => (
+    Buffer.isBuffer(item) ? undefined : item
+  )))
+}
+
+const recordContentChange = async ({ entityType, entity, action, actor, context = {} }) => {
+  try {
+    const snapshot = auditSnapshot(entity)
+    return await ContentChange.create({
+      entityType,
+      entityId: String(entity?._id || context.entityId || ''),
+      action,
+      actor: actor?._id || actor || null,
+      chapterId: context.chapterId || entity?.chapter || null,
+      topicId: context.topicId || entity?.topic || null,
+      objectiveTypeId: context.objectiveTypeId || entity?.objectiveType || null,
+      ...(action === 'deleted' ? { before: snapshot } : { after: { ...snapshot, ...(context.after || {}) } }),
+      ...(action === 'updated' && context.before ? { before: auditSnapshot(context.before) } : {}),
+    })
+  } catch (error) {
+    console.error(`Could not record ${entityType} ${action} audit: ${error.message}`)
+    return null
+  }
+}
+
+const buildNotificationFacts = async (days = 30) => {
+  const since = new Date(Date.now() - Math.max(1, Math.min(Number(days) || 30, 90)) * 24 * 60 * 60 * 1000)
+  const changes = await ContentChange.find({ createdAt: { $gte: since } })
+    .sort({ createdAt: -1 })
+    .limit(100)
+    .lean()
+
+  const [chapters, topics, objectiveTypes, questionCounts] = await Promise.all([
+    Chapter.find().select('number name').sort({ number: 1 }).lean(),
+    Topic.find().select('number name chapter').populate('chapter', 'number name').sort({ createdAt: -1 }).limit(200).lean(),
+    ObjectiveType.find().select('type topic').populate({ path: 'topic', select: 'name chapter', populate: { path: 'chapter', select: 'number name' } }).lean(),
+    ObjectiveQuestion.aggregate([
+      { $group: { _id: '$objectiveType', count: { $sum: 1 } } },
+    ]),
+  ])
+  const countMap = new Map(questionCounts.map((item) => [String(item._id), Number(item.count || 0)]))
+  const validChapterNumbers = new Set(chapters.map((chapter) => String(chapter.number)))
+  return {
+    changes: changes.map((change) => ({
+      action: change.action,
+      entityType: change.entityType,
+      entityId: change.entityId,
+      after: change.after,
+      before: change.before,
+      createdAt: change.createdAt,
+    })),
+    currentContent: {
+      chapters: chapters.map(({ number, name }) => ({ number, name })),
+      topics: topics.map((topic) => ({ number: topic.number, name: topic.name, chapter: topic.chapter?.number || null })),
+      questionSets: objectiveTypes.map((item) => ({
+        type: item.type,
+        topic: item.topic?.name || '',
+        chapter: item.topic?.chapter?.number || null,
+        questionCount: countMap.get(String(item._id)) || 0,
+      })),
+    },
+    validChapterNumbers: [...validChapterNumbers],
+  }
+}
+
+const fallbackFactBasedMessage = (name, facts) => {
+  const latest = facts.changes?.[0]
+  const current = facts.currentContent?.chapters || []
+  if (latest?.entityType === 'question' && latest.after?.chapterNumber) {
+    return `Hey ${name}, new questions are ready in Chapter ${latest.after.chapterNumber}. Give them a try!`
+  }
+  if (latest?.entityType === 'topic' && latest.after?.chapter) {
+    return `Hey ${name}, a new topic is ready in Chapter ${latest.after.chapter}. Open it when you are ready to learn!`
+  }
+  if (latest?.entityType === 'chapter' && latest.after?.number) {
+    return `Hey ${name}, Chapter ${latest.after.number} is now available. Your next science challenge is waiting!`
+  }
+  const firstChapter = current[0]
+  return firstChapter
+    ? `Hey ${name}, Chapter ${firstChapter.number} has practice content ready. Pick a topic and make a little progress today!`
+    : `Hey ${name}, new science practice is ready. Choose a topic and make a little progress today!`
+}
+
+const createFactBasedMessage = async (name, facts) => {
+  const fallback = fallbackFactBasedMessage(name, facts)
+  if (!process.env.OPENROUTER_API_KEY) return fallback
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        temperature: 0.1,
+        max_tokens: 120,
+        messages: [
+          { role: 'system', content: 'Write one short friendly student notification. Return only the message text. Use only facts in the supplied JSON. Never invent chapter numbers, topics, questions, or deadlines.' },
+          { role: 'user', content: `Student name: ${name}\nVerified facts: ${JSON.stringify(facts)}` },
+        ],
+      }),
+    })
+    const data = await response.json().catch(() => null)
+    const message = String(data?.choices?.[0]?.message?.content || '').replace(/["`]/g, '').trim()
+    if (!response.ok || !message || message.length > 240) return fallback
+    const mentionedChapters = [...message.matchAll(/chapter\s*(\d+)/gi)].map((match) => match[1])
+    if (mentionedChapters.some((number) => !facts.validChapterNumbers.includes(number))) return fallback
+    return message
+  } catch (error) {
+    return fallback
+  }
+}
+
+const INDIA_NOTIFICATION_SLOTS = ['09:30', '14:00', '17:00', '22:00', '00:00', '01:00']
+let scheduledPushRunning = false
+
+const indiaNowParts = () => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]))
+}
+
+const getVerifiedStudyMessage = ({ name, facts, latestChange = null, slot = '' }) => {
+  const latest = latestChange?.after || {}
+  if (latestChange?.action === 'created' && latestChange.entityType === 'chapter' && latest.number) {
+    return `Hey ${name}, naya Chapter ${latest.number} is live! Ab thoda science karo, warna chapter tumse bolega: “kal milte hain” 😄`
+  }
+  if (latestChange?.action === 'created' && latestChange.entityType === 'topic' && latest.chapter) {
+    return `Hey ${name}, Chapter ${latest.chapter} mein naya topic add hua hai. Chalo, thoda padhai aur thoda “wah kya samjha!” moment 😄`
+  }
+  if (latestChange?.action === 'created' && latestChange.entityType === 'question' && latest.chapterNumber) {
+    return `Hey ${name}, Chapter ${latest.chapterNumber} mein naye questions ready hain. Solve karo—Brain Cells ko bhi attendance chahiye 😄`
+  }
+
+  const questionSets = facts.currentContent?.questionSets || []
+  const available = questionSets
+    .filter((item) => Number(item.questionCount || 0) > 0 && item.chapter)
+    .reduce((map, item) => map.set(String(item.chapter), (map.get(String(item.chapter)) || 0) + Number(item.questionCount || 0)), new Map())
+  const firstChapter = [...available.entries()].sort((left, right) => Number(left[0]) - Number(right[0]))[0]
+  if (!firstChapter) return ''
+  const [chapterNumber, questionCount] = firstChapter
+  if (slot === '00:00' || slot === '01:00') {
+    return `Good night ${name} 🌙 Chapter ${chapterNumber} mein ${questionCount} questions ready hain—kal fresh mind se kar lena, tension nahi!`
+  }
+  if (slot === '14:00') {
+    return `Hey ${name}, lunch ke baad 10-minute science break? Chapter ${chapterNumber} mein ${questionCount} questions hain—bas ek small win, phir full chill 😄`
+  }
+  return `Hey ${name}, Chapter ${chapterNumber} mein ${questionCount} real questions ready hain. Aaj thoda practice kar lo—padhai bhi, progress bhi, mast!`
+}
+
+const sendVerifiedPushToUsers = async ({ recipients, title, source, link = '/#/', messageForUser }) => {
+  const userIds = recipients.map((recipient) => recipient._id)
+  if (!userIds.length) return { sent: 0, registered: 0, skipped: 0 }
+  const existing = await Notification.find({ recipient: { $in: userIds }, source }).select('recipient').lean()
+  const sentTo = new Set(existing.map((item) => String(item.recipient)))
+  const pending = recipients.filter((recipient) => !sentTo.has(String(recipient._id)) && messageForUser(recipient))
+  const rows = pending.map((recipient) => ({
+    recipient: recipient._id,
+    type: 'WEB_PUSH',
+    title,
+    message: messageForUser(recipient),
+    link,
+    source,
+  }))
+  if (rows.length) await Notification.insertMany(rows)
+  let sent = 0
+  let registered = 0
+  for (const recipient of pending) {
+    const message = messageForUser(recipient)
+    const result = await sendWebPushToUsers([recipient._id], { title, body: message, url: link, tag: source })
+    sent += result.sent
+    registered += result.registered
+    if (result.sent) {
+      await Notification.updateOne({ recipient: recipient._id, source }, { $set: { pushSentAt: new Date() } })
+    }
+  }
+  return { sent, registered, skipped: existing.length }
+}
+
+const notifyNewContentChange = async (change) => {
+  if (!change || change.action !== 'created') return
+  const recipients = await User.find({ isAdmin: false }).select('_id name').lean()
+  const facts = await buildNotificationFacts(1)
+  const title = change.entityType === 'chapter' ? 'New chapter added' : 'New study content added'
+  return sendVerifiedPushToUsers({
+    recipients,
+    title,
+    source: `content-change-${change._id}`,
+    messageForUser: (recipient) => getVerifiedStudyMessage({ name: recipient.name || 'Student', facts, latestChange: change }),
+  })
+}
+
+const runScheduledPushSlot = async () => {
+  if (scheduledPushRunning) return
+  const parts = indiaNowParts()
+  const slot = `${parts.hour}:${parts.minute}`
+  if (!INDIA_NOTIFICATION_SLOTS.includes(slot)) return
+  scheduledPushRunning = true
+  try {
+    const dayKey = `${parts.year}-${parts.month}-${parts.day}`
+    const recipients = await User.find({ isAdmin: false }).select('_id name').lean()
+    const facts = await buildNotificationFacts(1)
+    const latestChange = facts.changes?.[0]
+    const source = `daily-push-${dayKey}-${slot}`
+    await sendVerifiedPushToUsers({
+      recipients,
+      title: 'Innovative Science 2',
+      source,
+      messageForUser: (recipient) => getVerifiedStudyMessage({ name: recipient.name || 'Student', facts, latestChange, slot }),
+    })
+  } finally {
+    scheduledPushRunning = false
+  }
+}
+
+const notifyNewClassPost = async (post) => {
+  if (!post?.classId) return
+  const classDoc = await Class.findById(post.classId).select('name').lean()
+  const recipients = await User.find({ isAdmin: false, classId: post.classId }).select('_id name').lean()
+  if (!recipients.length) return
+  const label = CLASS_POST_CATEGORY_LABELS[post.category] || 'Class update'
+  return sendVerifiedPushToUsers({
+    recipients,
+    title: `${label} added`,
+    source: `class-post-${post._id}`,
+    link: `/#/class/${post.classId}`,
+    messageForUser: (recipient) => `Hey ${recipient.name || 'Student'}, ${label.toLowerCase()} ${classDoc?.name ? `for ${classDoc.name}` : ''} is ready. Dekho, phir smart study karo 😄`,
+  })
+}
+
+const sendWebPushToUsers = async (userIds, payload) => {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY || !userIds.length) {
+    return { sent: 0, failed: 0, removed: 0, configured: Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) }
+  }
+
+  const subscriptions = await PushSubscription.find({ user: { $in: userIds } }).lean()
+  const results = await Promise.all(subscriptions.map(async (subscription) => {
+    try {
+      await webpush.sendNotification(
+        { endpoint: subscription.endpoint, expirationTime: subscription.expirationTime, keys: subscription.keys },
+        JSON.stringify(payload),
+      )
+      return 'sent'
+    } catch (error) {
+      if ([400, 401, 403, 404, 410].includes(Number(error.statusCode))) {
+        await PushSubscription.deleteOne({ _id: subscription._id })
+        return { status: 'removed', code: Number(error.statusCode), reason: String(error.body || error.message || '').slice(0, 180) }
+      }
+      console.warn(`Web Push delivery failed: ${error.message}`)
+      return { status: 'failed', code: Number(error.statusCode) || 0, reason: String(error.body || error.message || '').slice(0, 180) }
+    }
+  }))
+  return {
+    sent: results.filter((result) => result === 'sent').length,
+    failed: results.filter((result) => result.status === 'failed').length,
+    removed: results.filter((result) => result.status === 'removed').length,
+    registered: subscriptions.length,
+    failures: results.filter((result) => result.status === 'failed').map((result) => ({ code: result.code, reason: result.reason })),
+    configured: true,
+  }
+}
 const ContactMessage = mongoose.model(
   'ContactMessage',
   new mongoose.Schema(
@@ -2486,6 +2826,7 @@ app.post('/api/auth/firebase', async (req, res) => {
     }
 
     let user = await User.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
+    let createdNewUser = false
     if (!user) {
       user = await User.create({
         firebaseUid: firebaseUser.uid,
@@ -2493,18 +2834,22 @@ app.post('/api/auth/firebase', async (req, res) => {
         email: normalizedEmail,
         phoneNumber: String(phoneNumber || '').trim(),
       })
+      createdNewUser = true
     } else {
       let changed = false
+      const requestedName = String(name || firebaseUser.name || '').trim()
+      const requestedPhoneNumber = String(phoneNumber || '').trim()
+
       if (!user.firebaseUid) {
         user.firebaseUid = firebaseUser.uid
         changed = true
       }
-      if (!user.name && (firebaseUser.name || name)) {
-        user.name = firebaseUser.name || name
+      if (requestedName && user.name !== requestedName) {
+        user.name = requestedName
         changed = true
       }
-      if (!user.phoneNumber && phoneNumber) {
-        user.phoneNumber = String(phoneNumber).trim()
+      if (requestedPhoneNumber && user.phoneNumber !== requestedPhoneNumber) {
+        user.phoneNumber = requestedPhoneNumber
         changed = true
       }
       if (changed) {
@@ -2513,8 +2858,17 @@ app.post('/api/auth/firebase', async (req, res) => {
     }
 
     await user.populate('classId', 'name')
+    if (createdNewUser) {
+      sendVerifiedPushToUsers({
+        recipients: [user],
+        title: 'Welcome to Innovative Science 2 🎉',
+        source: `welcome-user-${user._id}`,
+        messageForUser: (recipient) => `Welcome ${recipient.name || 'Student'}! Tumhari science journey start ho gayi—chalo Brain Cells collect karte hain 😄`,
+      }).catch((error) => console.warn(`Welcome push failed: ${error.message}`))
+    }
     return res.json({ token: createToken(user), user: publicUser(user) })
   } catch (error) {
+    console.error('Could not connect Firebase account:', error)
     return res.status(500).json({ message: 'Could not connect the Firebase account.' })
   }
 })
@@ -2594,6 +2948,12 @@ app.post('/api/auth/signup', async (req, res) => {
       password: String(password),
       passwordHash: '',
     })
+    sendVerifiedPushToUsers({
+      recipients: [user],
+      title: 'Welcome to Innovative Science 2 🎉',
+      source: `welcome-user-${user._id}`,
+      messageForUser: (recipient) => `Welcome ${recipient.name || 'Student'}! Tumhari science journey start ho gayi—chalo Brain Cells collect karte hain 😄`,
+    }).catch((error) => console.warn(`Welcome push failed: ${error.message}`))
     await user.populate('classId', 'name')
     const token = createToken(user)
 
@@ -2904,6 +3264,9 @@ app.post('/api/chapters', authRequired, adminRequired, async (req, res) => {
       marksWithoutOption: Number(marksWithoutOption),
     })
 
+    const change = await recordContentChange({ entityType: 'chapter', entity: chapter, action: 'created', actor: req.user })
+    await notifyNewContentChange(change)
+
     clearCachedResponses('chapters:')
     res.status(201).json({ chapter })
   } catch (error) {
@@ -2918,6 +3281,7 @@ app.post('/api/chapters', authRequired, adminRequired, async (req, res) => {
 app.patch('/api/chapters/:id', authRequired, adminRequired, async (req, res) => {
   try {
     const { number, name, marks, marksWithoutOption } = req.body
+    const previousChapter = await Chapter.findById(req.params.id).lean()
     const chapter = await Chapter.findByIdAndUpdate(
       req.params.id,
       {
@@ -2932,6 +3296,8 @@ app.patch('/api/chapters/:id', authRequired, adminRequired, async (req, res) => 
     if (!chapter) {
       return res.status(404).json({ message: 'Chapter not found.' })
     }
+
+    await recordContentChange({ entityType: 'chapter', entity: chapter, action: 'updated', actor: req.user, context: { before: previousChapter } })
 
     clearCachedResponses('chapters:')
     res.json({ chapter })
@@ -2951,6 +3317,8 @@ app.delete('/api/chapters/:id', authRequired, adminRequired, async (req, res) =>
     if (!chapter) {
       return res.status(404).json({ message: 'Chapter not found.' })
     }
+
+    await recordContentChange({ entityType: 'chapter', entity: chapter, action: 'deleted', actor: req.user })
 
     const topicIds = await Topic.find({ chapter: chapter._id }).distinct('_id')
     const objectiveTypeIds = await ObjectiveType.find({ topic: { $in: topicIds } }).distinct('_id')
@@ -3069,6 +3437,9 @@ app.post('/api/chapters/:chapterNumber/topics', authRequired, adminRequired, asy
       studyText: studyText || '',
     })
 
+    const change = await recordContentChange({ entityType: 'topic', entity: topic, action: 'created', actor: req.user, context: { chapterId: chapter._id, after: { chapter: chapter.number, chapterName: chapter.name } } })
+    await notifyNewContentChange(change)
+
     res.status(201).json({ topic })
   } catch (error) {
     if (error.code === 11000) {
@@ -3082,6 +3453,7 @@ app.post('/api/chapters/:chapterNumber/topics', authRequired, adminRequired, asy
 app.patch('/api/topics/:id', authRequired, adminRequired, async (req, res) => {
   try {
     const { number, name, description, studyText } = req.body
+    const previousTopic = await Topic.findById(req.params.id).lean()
 
     if (String(studyText || '').length > 12000) {
       return res.status(400).json({ message: 'Topic paragraph must be 12000 characters or less.' })
@@ -3106,6 +3478,8 @@ app.patch('/api/topics/:id', authRequired, adminRequired, async (req, res) => {
     if (!topic) {
       return res.status(404).json({ message: 'Topic not found.' })
     }
+
+    await recordContentChange({ entityType: 'topic', entity: topic, action: 'updated', actor: req.user, context: { before: previousTopic, chapterId: topic.chapter } })
 
     res.json({ topic })
   } catch (error) {
@@ -3181,6 +3555,8 @@ app.post('/api/topics/:id/objective-types', authRequired, adminRequired, async (
       type,
     })
 
+    await recordContentChange({ entityType: 'objective-type', entity: objectiveType, action: 'created', actor: req.user, context: { topicId: topic._id } })
+
     res.status(201).json({ objectiveType })
   } catch (error) {
     if (error.code === 11000) {
@@ -3198,6 +3574,8 @@ app.delete('/api/objective-types/:id', authRequired, adminRequired, async (req, 
     if (!objectiveType) {
       return res.status(404).json({ message: 'Objective type not found.' })
     }
+
+    await recordContentChange({ entityType: 'objective-type', entity: objectiveType, action: 'deleted', actor: req.user })
 
     await ObjectiveQuestion.deleteMany({ objectiveType: objectiveType._id })
     await PracticeScore.deleteMany({ objectiveType: objectiveType._id })
@@ -3341,6 +3719,16 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
         ...(answerImage ? { answerImage } : {}),
       })
 
+      const questionContext = await ObjectiveType.findById(objectiveType._id).populate({ path: 'topic', populate: { path: 'chapter', select: 'number name' } })
+      const change = await recordContentChange({
+        entityType: 'question',
+        entity: savedQuestion,
+        action: 'created',
+        actor: req.user,
+        context: { objectiveTypeId: objectiveType._id, topicId: questionContext?.topic?._id, chapterId: questionContext?.topic?.chapter?._id, after: { chapterNumber: questionContext?.topic?.chapter?.number, chapterName: questionContext?.topic?.chapter?.name, topicName: questionContext?.topic?.name } },
+      })
+      await notifyNewContentChange(change)
+
       return res.status(201).json({ question: savedQuestion })
     }
 
@@ -3377,6 +3765,16 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
       ...(questionImage ? { questionImage } : {}),
       ...(answerImage ? { answerImage } : {}),
     })
+
+    const questionContext = await ObjectiveType.findById(objectiveType._id).populate({ path: 'topic', populate: { path: 'chapter', select: 'number name' } })
+    const change = await recordContentChange({
+      entityType: 'question',
+      entity: savedQuestion,
+      action: 'created',
+      actor: req.user,
+      context: { objectiveTypeId: objectiveType._id, topicId: questionContext?.topic?._id, chapterId: questionContext?.topic?.chapter?._id, after: { chapterNumber: questionContext?.topic?.chapter?.number, chapterName: questionContext?.topic?.chapter?.name, topicName: questionContext?.topic?.name } },
+    })
+    await notifyNewContentChange(change)
 
     res.status(201).json({ question: savedQuestion })
   } catch (error) {
@@ -3481,7 +3879,10 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
     const parsedOptions = typeof options === 'string' ? JSON.parse(options || '[]') : options
     const parsedPairs = typeof pairs === 'string' ? JSON.parse(pairs || '[]') : pairs
     const parsedCorrectOptions = typeof correctOptions === 'string' ? JSON.parse(correctOptions || '[]') : correctOptions
-    const existingQuestion = await ObjectiveQuestion.findById(req.params.id).populate('objectiveType')
+    const existingQuestion = await ObjectiveQuestion.findById(req.params.id).populate({
+      path: 'objectiveType',
+      populate: { path: 'topic', populate: { path: 'chapter', select: 'number name' } },
+    })
 
     if (!existingQuestion) {
       return res.status(404).json({ message: 'Question not found.' })
@@ -3530,6 +3931,8 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
         { new: true, runValidators: true },
       )
 
+      await recordContentChange({ entityType: 'question', entity: updatedQuestion, action: 'updated', actor: req.user, context: { before: existingQuestion, objectiveTypeId: existingQuestion.objectiveType?._id, topicId: existingQuestion.objectiveType?.topic?._id, chapterId: existingQuestion.objectiveType?.topic?.chapter?._id, after: { chapterNumber: existingQuestion.objectiveType?.topic?.chapter?.number, chapterName: existingQuestion.objectiveType?.topic?.chapter?.name, topicName: existingQuestion.objectiveType?.topic?.name } } })
+
       return res.json({ question: updatedQuestion })
     }
 
@@ -3571,6 +3974,8 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
       { new: true, runValidators: true },
     )
 
+    await recordContentChange({ entityType: 'question', entity: updatedQuestion, action: 'updated', actor: req.user, context: { before: existingQuestion, objectiveTypeId: existingQuestion.objectiveType?._id, topicId: existingQuestion.objectiveType?.topic?._id, chapterId: existingQuestion.objectiveType?.topic?.chapter?._id, after: { chapterNumber: existingQuestion.objectiveType?.topic?.chapter?.number, chapterName: existingQuestion.objectiveType?.topic?.chapter?.name, topicName: existingQuestion.objectiveType?.topic?.name } } })
+
     res.json({ question: updatedQuestion })
   } catch (error) {
     res.status(error.message?.startsWith('Match the following') || error.message?.startsWith('Please complete') ? 400 : 500).json({ message: error.message || 'Could not update question.' })
@@ -3584,6 +3989,8 @@ app.delete('/api/objective-questions/:id', authRequired, adminRequired, async (r
     if (!question) {
       return res.status(404).json({ message: 'Question not found.' })
     }
+
+    await recordContentChange({ entityType: 'question', entity: question, action: 'deleted', actor: req.user, context: { objectiveTypeId: question.objectiveType } })
 
     res.json({ message: 'Question deleted successfully.' })
   } catch (error) {
@@ -3846,6 +4253,8 @@ app.delete('/api/topics/:id', authRequired, adminRequired, async (req, res) => {
       return res.status(404).json({ message: 'Topic not found.' })
     }
 
+    await recordContentChange({ entityType: 'topic', entity: topic, action: 'deleted', actor: req.user, context: { chapterId: topic.chapter } })
+
     const objectiveTypeIds = await ObjectiveType.find({ topic: topic._id }).distinct('_id')
     await ObjectiveQuestion.deleteMany({ objectiveType: { $in: objectiveTypeIds } })
     await PracticeScore.deleteMany({ objectiveType: { $in: objectiveTypeIds } })
@@ -3891,9 +4300,22 @@ app.get('/api/admin/dashboard', authRequired, adminRequired, async (req, res) =>
 app.get('/api/leaderboard', optionalAuth, async (req, res) => {
   try {
     const scope = String(req.query.scope || 'all').toLowerCase()
-    const requestedClassId = String(req.query.classId || req.user?.classId || '').trim()
+    const isClassScope = scope === 'class'
+    const authenticatedClassId = req.user?.classId?._id || req.user?.classId || ''
+    const requestedClassId = String(
+      isClassScope ? (req.query.classId || authenticatedClassId) : '',
+    ).trim()
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 20)
-    const classFilter = scope === 'class' && requestedClassId ? { classId: requestedClassId } : {}
+
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ message: 'Leaderboard is temporarily unavailable. Please try again shortly.' })
+    }
+
+    if (isClassScope && requestedClassId && !mongoose.isValidObjectId(requestedClassId)) {
+      return res.status(400).json({ message: 'The selected class is invalid.' })
+    }
+
+    const classFilter = isClassScope && requestedClassId ? { classId: requestedClassId } : {}
     const users = await User.find({
       isAdmin: false,
       ...classFilter,
@@ -3908,12 +4330,15 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
       leaderboard: users.map((user) => formatLeaderboardUser(user)),
       scope,
       classId: requestedClassId,
-      className: requestedClassId ? (await Class.findById(requestedClassId).select('name').lean())?.name || '' : '',
+      className: isClassScope && requestedClassId
+        ? (await Class.findById(requestedClassId).select('name').lean())?.name || ''
+        : '',
     }
 
     res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
+    console.error('Could not load leaderboard:', error)
     res.status(500).json({ message: 'Could not load leaderboard.' })
   }
 })
@@ -4628,6 +5053,219 @@ app.get('/api/messages/me', authRequired, async (req, res) => {
   }
 })
 
+app.get('/api/notifications/me', authRequired, async (req, res) => {
+  try {
+    const notifications = await Notification.find({ recipient: req.user._id }).sort({ createdAt: -1 }).limit(100).lean()
+    res.json({ notifications })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load notifications.' })
+  }
+})
+
+app.get('/api/push/public-key', (req, res) => {
+  if (!VAPID_PUBLIC_KEY) return res.status(503).json({ message: 'Web Push is not configured.' })
+  res.json({ publicKey: VAPID_PUBLIC_KEY })
+})
+
+app.post('/api/push/subscribe', authRequired, async (req, res) => {
+  try {
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return res.status(503).json({ message: 'Web Push is not configured.' })
+    const subscription = req.body?.subscription
+    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+      return res.status(400).json({ message: 'A valid browser push subscription is required.' })
+    }
+    const saved = await PushSubscription.findOneAndUpdate(
+      { endpoint: String(subscription.endpoint) },
+      {
+        user: req.user._id,
+        endpoint: String(subscription.endpoint),
+        expirationTime: subscription.expirationTime || null,
+        keys: { p256dh: String(subscription.keys.p256dh), auth: String(subscription.keys.auth) },
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    )
+    const welcome = await Notification.findOne({
+      recipient: req.user._id,
+      type: 'WEB_PUSH',
+      source: { $regex: /^welcome-user-/ },
+      pushSentAt: null,
+    }).sort({ createdAt: -1 }).lean()
+    if (welcome) {
+      const welcomePush = await sendWebPushToUsers([req.user._id], {
+        title: welcome.title,
+        body: welcome.message,
+        url: welcome.link || '/#/',
+        tag: welcome.source,
+      })
+      if (welcomePush.sent) await Notification.updateOne({ _id: welcome._id }, { $set: { pushSentAt: new Date() } })
+    }
+    res.status(201).json({ subscriptionId: saved._id })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not save push subscription.' })
+  }
+})
+
+app.get('/api/push/status', authRequired, async (req, res) => {
+  try {
+    const subscriptions = await PushSubscription.find({ user: req.user._id }).select('_id endpoint updatedAt').lean()
+    res.json({ registered: subscriptions.length > 0, deviceCount: subscriptions.length })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not check push notification status.' })
+  }
+})
+
+app.delete('/api/push/subscribe', authRequired, async (req, res) => {
+  try {
+    const endpoint = String(req.body?.endpoint || '').trim()
+    if (endpoint) await PushSubscription.deleteOne({ user: req.user._id, endpoint })
+    res.json({ message: 'Push subscription removed.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not remove push subscription.' })
+  }
+})
+
+app.patch('/api/notifications/:id/read', authRequired, async (req, res) => {
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      { _id: req.params.id, recipient: req.user._id },
+      { $set: { readAt: new Date() } },
+      { new: true },
+    )
+    if (!notification) return res.status(404).json({ message: 'Notification not found.' })
+    res.json({ notification })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not mark notification as read.' })
+  }
+})
+
+app.get('/api/admin/notifications/content-history', authRequired, adminRequired, async (req, res) => {
+  try {
+    const changes = await ContentChange.find().sort({ createdAt: -1 }).limit(200).populate('actor', 'name email').lean()
+    res.json({ changes })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load content history.' })
+  }
+})
+
+app.post('/api/admin/notifications/ai-preview', authRequired, adminRequired, async (req, res) => {
+  try {
+    const facts = await buildNotificationFacts(req.body?.days)
+    if (!facts.changes.length) return res.status(404).json({ message: 'There are no recent content changes to announce.' })
+    const message = await createFactBasedMessage('Student', facts)
+    res.json({ title: 'Science update', message, facts: { changes: facts.changes, currentContent: facts.currentContent } })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not analyze content changes.' })
+  }
+})
+
+app.post('/api/admin/notifications/ai-send', authRequired, adminRequired, async (req, res) => {
+  try {
+    const facts = await buildNotificationFacts(req.body?.days)
+    if (!facts.changes.length) return res.status(404).json({ message: 'There are no recent content changes to announce.' })
+    const targetType = String(req.body?.targetType || 'all')
+    let recipients = []
+    if (targetType === 'all') {
+      recipients = await User.find({ isAdmin: false }).select('name email classId').lean()
+    } else if (targetType === 'class' && req.body?.targetClassId) {
+      recipients = await User.find({ isAdmin: false, classId: req.body.targetClassId }).select('name email classId').lean()
+    } else if (targetType === 'user' && Array.isArray(req.body?.targetUserIds)) {
+      recipients = await User.find({ isAdmin: false, _id: { $in: req.body.targetUserIds } }).select('name email classId').lean()
+    } else {
+      return res.status(400).json({ message: 'Choose a valid notification audience.' })
+    }
+    if (!recipients.length) return res.status(404).json({ message: 'No students matched the selected audience.' })
+
+    const template = await createFactBasedMessage('Student', facts)
+    const title = String(req.body?.title || 'Science update').trim().slice(0, 180)
+    const notificationRows = recipients.map((recipient) => ({
+      recipient: recipient._id,
+      type: 'CONTENT_UPDATE',
+      title,
+      message: template.replace(/\bStudent\b/g, recipient.name || 'there'),
+      source: 'ai-content-audit',
+      facts: facts.changes.slice(0, 20),
+    }))
+    await Notification.insertMany(notificationRows)
+    const pushResult = await sendWebPushToUsers(recipients.map((recipient) => recipient._id), {
+      title,
+      body: template.replace(/\bStudent\b/g, 'there'),
+      url: '/#/notifications',
+      tag: 'content-update',
+    })
+    const popup = await Message.create({
+      createdBy: req.user._id,
+      targetType: targetType === 'class' ? 'class' : targetType === 'user' ? 'user' : 'all',
+      targetUserIds: recipients.map((recipient) => recipient._id),
+      targetClassId: targetType === 'class' ? req.body.targetClassId : null,
+      subject: title,
+      body: template.replace(/\bStudent\b/g, 'there'),
+      audienceCount: recipients.length,
+      sentUserEmails: recipients.map((recipient) => recipient.email),
+    })
+    res.status(201).json({ message: popup, audienceCount: recipients.length, generatedMessage: template, facts: facts.changes, push: pushResult })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not send the fact-checked notification.' })
+  }
+})
+
+app.post('/api/admin/push/send', authRequired, adminRequired, async (req, res) => {
+  try {
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+      return res.status(503).json({ message: 'Web Push is not configured on the server.' })
+    }
+
+    const targetType = String(req.body?.targetType || 'all')
+    const title = String(req.body?.title || '').trim().slice(0, 180)
+    const body = String(req.body?.body || '').trim().slice(0, 2000)
+    const link = String(req.body?.link || '/#/').trim().slice(0, 500)
+    let recipients = []
+
+    if (!title || !body) {
+      return res.status(400).json({ message: 'Push title and message are required.' })
+    }
+
+    if (targetType === 'all') {
+      recipients = await User.find({ isAdmin: false }).select('_id name email').lean()
+    } else if (targetType === 'class' && req.body?.targetClassId) {
+      recipients = await User.find({ isAdmin: false, classId: req.body.targetClassId }).select('_id name email').lean()
+    } else if (targetType === 'user' && Array.isArray(req.body?.targetUserIds)) {
+      recipients = await User.find({ isAdmin: false, _id: { $in: req.body.targetUserIds } }).select('_id name email').lean()
+    } else {
+      return res.status(400).json({ message: 'Choose a valid push audience.' })
+    }
+
+    if (!recipients.length) {
+      return res.status(404).json({ message: 'No students matched the selected audience.' })
+    }
+
+    await Notification.insertMany(recipients.map((recipient) => ({
+      recipient: recipient._id,
+      type: 'ADMIN_WEB_PUSH',
+      title,
+      message: body,
+      link,
+      source: 'admin-web-push',
+    })))
+
+    const push = await sendWebPushToUsers(recipients.map((recipient) => recipient._id), {
+      title,
+      body,
+      url: link,
+      tag: `admin-web-push-${Date.now()}`,
+    })
+
+    res.status(201).json({
+      message: 'Web Push notification sent.',
+      audienceCount: recipients.length,
+      subscribedDevices: push.registered,
+      push,
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not send Web Push notification.' })
+  }
+})
+
 app.post('/api/messages/:id/acknowledge', authRequired, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).populate('classId', 'name')
@@ -4782,7 +5420,14 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
       sentUserEmails: recipients.map((item) => item.email),
     })
 
-    res.status(201).json({ message: publicMessage(messageDoc), audienceCount: recipients.length })
+    const push = await sendWebPushToUsers(recipients.map((item) => item._id), {
+      title: normalizedSubject || 'New message from Innovative Science 2',
+      body: normalizedBody,
+      url: '/#/',
+      tag: `admin-message-${messageDoc._id}`,
+    })
+
+    res.status(201).json({ message: publicMessage(messageDoc), audienceCount: recipients.length, push })
   } catch (error) {
     res.status(500).json({ message: 'Could not send message.' })
   }
@@ -5756,6 +6401,7 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
       })
 
       await createdPost.populate('createdBy', 'name isAdmin')
+      await notifyNewClassPost(createdPost)
       savedPosts.push(createdPost)
     }
 
@@ -5967,6 +6613,7 @@ app.post(
       })
 
       await post.populate('createdBy', 'name isAdmin')
+      await notifyNewClassPost(post)
 
       clearCachedResponses('class-feed:')
       emitClassFeedUpdate(classDoc._id, 'created')
@@ -6073,6 +6720,7 @@ app.post(
         })
 
         await post.populate('createdBy', 'name isAdmin')
+        await notifyNewClassPost(post)
         createdPosts.push(publicClassPost(post))
       }
 
@@ -6142,6 +6790,9 @@ const startServer = async () => {
 
     await ensureAdminUser()
     await syncLeaderboardTotalsFromAttempts()
+    setInterval(() => {
+      runScheduledPushSlot().catch((error) => console.error(`Scheduled Web Push failed: ${error.message}`))
+    }, 30 * 1000)
     console.log(`Admin ready: ${ADMIN_EMAIL}`)
   } catch (error) {
     console.error('MongoDB connection failed:', error.message)

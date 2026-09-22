@@ -1,29 +1,48 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, MessageCircleMore, X } from 'lucide-react'
+import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, Mail, X } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-
-const WHATSAPP_NUMBER = '917304930375'
-const WHATSAPP_FALLBACK_MESSAGE = 'Hello Sir, I need help with my account password.'
-const WHATSAPP_LINK = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_FALLBACK_MESSAGE)}`
 
 const Signinpage = () => {
   const navigate = useNavigate()
-  const { signIn, signInWithGoogle, authLoading, error: authError } = useAuth()
+  const { signIn, signInWithGoogle, resetPassword, authLoading, error: authError } = useAuth()
   const [form, setForm] = useState({ email: '', password: '' })
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [isForgotOpen, setIsForgotOpen] = useState(false)
   const [isGoogleLoading, setIsGoogleLoading] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetError, setResetError] = useState('')
+  const [resetStatus, setResetStatus] = useState('')
+  const [isResetLoading, setIsResetLoading] = useState(false)
 
   const openForgotPassword = () => {
+    setResetEmail(form.email.trim())
+    setResetError('')
+    setResetStatus('')
     setIsForgotOpen(true)
   }
 
   const closeForgotPassword = () => {
     setIsForgotOpen(false)
+  }
+
+  const handlePasswordReset = async (event) => {
+    event.preventDefault()
+    setResetError('')
+    setResetStatus('')
+    setIsResetLoading(true)
+
+    try {
+      await resetPassword(resetEmail)
+      setResetStatus('Password reset email sent. Check your inbox and spam folder.')
+    } catch (resetActionError) {
+      setResetError(resetActionError.message || 'Could not send the password reset email.')
+    } finally {
+      setIsResetLoading(false)
+    }
   }
 
   const handleSubmit = async (event) => {
@@ -207,19 +226,20 @@ const Signinpage = () => {
 
       {isForgotOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 backdrop-blur-sm">
-          <motion.div
+          <motion.form
             initial={{ opacity: 0, scale: 0.96, y: 16 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
+            onSubmit={handlePasswordReset}
             className="w-full max-w-md rounded-3xl border border-white/60 bg-white p-6 shadow-2xl shadow-slate-950/20 sm:p-8"
           >
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-700">
-                  <MessageCircleMore size={22} />
+                  <Mail size={22} />
                 </div>
                 <h2 className="text-2xl font-black text-slate-900">Forgot password</h2>
                 <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
-                  Please contact sir directly on WhatsApp to get the password for this account.
+                  Enter the email address linked to your account and Firebase will send a secure reset link.
                 </p>
               </div>
               <button
@@ -232,20 +252,29 @@ const Signinpage = () => {
               </button>
             </div>
 
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
-              Tap the WhatsApp button and send your registered email or class details. Sir can check the account faster that way.
-            </div>
+            <label className="grid gap-2 text-sm font-bold text-slate-700">
+              Email address
+              <input
+                type="email"
+                value={resetEmail}
+                onChange={(event) => setResetEmail(event.target.value)}
+                required
+                placeholder="student@science.edu"
+                className="h-13 rounded-2xl border-2 border-slate-100 px-4 text-slate-800 outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/10"
+              />
+            </label>
+
+            {resetError && <p className="mt-4 text-sm font-bold text-rose-500">{resetError}</p>}
+            {resetStatus && <p className="mt-4 text-sm font-bold text-emerald-700">{resetStatus}</p>}
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              <a
-                href={WHATSAPP_LINK}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex h-13 items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 font-bold text-white transition hover:scale-[1.01]"
-                onClick={closeForgotPassword}
+              <button
+                type="submit"
+                disabled={isResetLoading}
+                className="inline-flex h-13 items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 font-bold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Contact Sir on WhatsApp
-              </a>
+                {isResetLoading ? 'Sending...' : 'Send reset email'}
+              </button>
               <button
                 type="button"
                 onClick={closeForgotPassword}
@@ -254,7 +283,7 @@ const Signinpage = () => {
                 Close
               </button>
             </div>
-          </motion.div>
+          </motion.form>
         </div>
       )}
     </section>

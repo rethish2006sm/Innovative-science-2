@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
@@ -39,6 +39,7 @@ import { io } from 'socket.io-client'
 import { API_BASE_URL, apiRequest } from './api'
 import { authEvents, getStoredAuth, updateStoredUser } from './authStorage'
 import { clearBattleSession, getBattleSession, getBattleSessionRoute, saveBattleSession } from './lib/battleSession'
+import { registerWebPush } from './lib/webPush'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
 const SITE_DESCRIPTION =
@@ -290,21 +291,7 @@ const ScrollToTop = () => {
   return null
 }
 
-const AuthRedirect = ({ children }) => {
-  const { user, loading, authLoading } = useAuth()
-
-  if (loading) {
-    return <div className="grid min-h-screen place-items-center bg-slate-50 px-4 text-center text-sm font-bold text-slate-500">Checking your session…</div>
-  }
-
-  if (authLoading) return children
-
-  if (user || getStoredAuth()) {
-    return <Navigate to="/" replace />
-  }
-
-  return children
-}
+const AuthRedirect = ({ children }) => children
 
 const AuthRequiredScreen = () => (
   <section className="flex min-h-[calc(100vh-6rem)] w-full items-center justify-center bg-slate-50 px-4 py-10">
@@ -350,6 +337,10 @@ const AppLayout = () => {
   const navigate = useNavigate()
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [showSigninReminder, setShowSigninReminder] = useState(false)
+  const [pushPermission, setPushPermission] = useState(() => (
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  ))
+  const [pushEnabling, setPushEnabling] = useState(false)
   const [siteNotice, setSiteNotice] = useState(null)
   const [dismissedNoticeKey, setDismissedNoticeKey] = useState('')
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
@@ -371,6 +362,35 @@ const AppLayout = () => {
       window.removeEventListener('storage', syncAuth)
     }
   }, [])
+
+  useEffect(() => {
+    if (!auth?.token || auth?.user?.isAdmin) return undefined
+
+    let cancelled = false
+    const setupPush = async () => {
+      try {
+        const result = await registerWebPush()
+        if (!cancelled && result?.permission) setPushPermission(result.permission)
+      } catch (error) {
+        // Notification permission is optional; the in-app message system remains available.
+        console.warn('Could not enable browser notifications:', error.message)
+      }
+    }
+    setupPush()
+    return () => { cancelled = true }
+  }, [auth?.token, auth?.user?.isAdmin])
+
+  const enableBrowserNotifications = async () => {
+    setPushEnabling(true)
+    try {
+      const result = await registerWebPush()
+      setPushPermission(result?.permission || pushPermission)
+    } catch (error) {
+      console.warn('Could not enable browser notifications:', error.message)
+    } finally {
+      setPushEnabling(false)
+    }
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -548,6 +568,22 @@ const AppLayout = () => {
       />
       <RankNotifier />
       <StudentMessagePopup />
+      {auth?.token && !auth?.user?.isAdmin && pushPermission === 'default' && (
+        <div className="fixed bottom-4 left-4 right-4 z-[60] mx-auto flex max-w-xl items-center justify-between gap-4 rounded-2xl border border-cyan-200 bg-white p-4 shadow-2xl">
+          <div>
+            <p className="text-sm font-black text-slate-950">Get updates even when this page is closed</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">Allow browser notifications for new science content.</p>
+          </div>
+          <button
+            type="button"
+            onClick={enableBrowserNotifications}
+            disabled={pushEnabling}
+            className="shrink-0 rounded-xl bg-cyan-700 px-4 py-2 text-xs font-black text-white hover:bg-cyan-800 disabled:opacity-60"
+          >
+            {pushEnabling ? 'Enabling...' : 'Enable'}
+          </button>
+        </div>
+      )}
       {!isObjectivePracticeRoute && !isBattleRoute && <Navbar />}
       <div className={isObjectivePracticeRoute || isBattleRoute ? '' : 'pt-24'}>
         {showSiteNotice && (

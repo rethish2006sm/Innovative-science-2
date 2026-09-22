@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithCustomToken,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -22,6 +23,7 @@ const firebaseErrorMessage = (error) => {
     'auth/wrong-password': 'Email or password is incorrect.',
     'auth/user-disabled': 'This account has been disabled.',
     'auth/operation-not-allowed': 'This sign-in method is not enabled in Firebase Console.',
+    'auth/unauthorized-domain': 'This website domain must be added to Firebase Authentication authorized domains.',
     'auth/invalid-email': 'Please enter a valid email address.',
     'auth/weak-password': 'Password must be at least 6 characters.',
     'auth/popup-closed-by-user': 'Google sign-in was cancelled.',
@@ -127,13 +129,28 @@ export const AuthProvider = ({ children }) => {
     }
   })
   const signInWithGoogle = () => runAuthAction(() => signInWithPopup(firebaseAuth, googleProvider))
+  const resetPassword = async (email) => {
+    const normalizedEmail = String(email || '').trim()
+    if (!normalizedEmail) {
+      throw new Error('Enter your email address first.')
+    }
+
+    setError('')
+    try {
+      await sendPasswordResetEmail(firebaseAuth, normalizedEmail)
+    } catch (authError) {
+      const message = firebaseErrorMessage(authError)
+      setError(message)
+      throw new Error(message)
+    }
+  }
   const completeProfile = (profile) => syncBackendSession(firebaseAuth.currentUser, profile)
   const logout = async () => {
     await signOut(firebaseAuth)
     clearAuth()
   }
 
-  const value = useMemo(() => ({ user, loading, authLoading, error, signUp, signIn, signInWithGoogle, completeProfile, logout }), [user, loading, authLoading, error])
+  const value = useMemo(() => ({ user, loading, authLoading, error, signUp, signIn, signInWithGoogle, resetPassword, completeProfile, logout }), [user, loading, authLoading, error])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
