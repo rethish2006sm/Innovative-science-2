@@ -97,16 +97,14 @@ try {
     : undefined
   const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'innovativescience2-f988a'
 
-  if (serviceAccount || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    if (!getApps().length) {
-      initializeApp(serviceAccount
-        ? { credential: cert(serviceAccount), projectId: firebaseProjectId }
-        : { credential: applicationDefault(), projectId: firebaseProjectId })
-    }
-    firebaseAdminAuth = getAuth()
-  } else {
-    console.warn('Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON on the server to sync Firebase users to MongoDB.')
+  if (!getApps().length) {
+    initializeApp(serviceAccount
+      ? { credential: cert(serviceAccount), projectId: firebaseProjectId }
+      : process.env.GOOGLE_APPLICATION_CREDENTIALS
+        ? { credential: applicationDefault(), projectId: firebaseProjectId }
+        : { projectId: firebaseProjectId })
   }
+  firebaseAdminAuth = getAuth()
 } catch (error) {
   console.warn(`Firebase Admin could not initialize: ${error.message}`)
 }
