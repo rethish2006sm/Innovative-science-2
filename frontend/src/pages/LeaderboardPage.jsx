@@ -4,6 +4,12 @@ import { BarChart3, Crown, Sparkles, Trophy, Users } from 'lucide-react'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+
+const isTransientLeaderboardError = (error) => (
+  !error?.status || [408, 429, 500, 502, 503, 504].includes(Number(error.status))
+)
+
 const normalizeLeaderboardRows = (rows = []) => (
   Array.isArray(rows) ? rows.map((row, index) => normalizeLeaderboardRow(row, index)) : []
 )
@@ -129,7 +135,24 @@ const LeaderboardPage = () => {
 
     try {
       const classQuery = nextScope === 'class' && nextClassId ? `&classId=${nextClassId}` : ''
-      const data = await apiRequest(`/api/leaderboard?scope=${nextScope}${classQuery}&limit=20`)
+      let data
+      let lastError
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          data = await apiRequest(`/api/leaderboard?scope=${nextScope}${classQuery}&limit=20`)
+          break
+        } catch (requestError) {
+          lastError = requestError
+          if (!isTransientLeaderboardError(requestError) || attempt === 2) {
+            throw requestError
+          }
+          await wait(500 * (attempt + 1))
+        }
+      }
+
+      if (!data) {
+        throw lastError || new Error('Could not load leaderboard.')
+      }
 
       if (requestId !== requestIdRef.current) {
         return

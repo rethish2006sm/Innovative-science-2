@@ -1126,8 +1126,8 @@ const createFactBasedMessage = async (name, facts) => {
   }
 }
 
-const INDIA_NOTIFICATION_SLOTS = ['09:30', '14:00', '17:00', '22:00', '00:00', '01:00']
 let scheduledPushRunning = false
+let lastScheduledPushBucket = ''
 
 const indiaNowParts = () => {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -1170,25 +1170,58 @@ const getVerifiedStudyMessage = ({ name, facts, latestChange = null, slot = '' }
   return `Hey ${name}, Chapter ${chapterNumber} mein ${questionCount} real questions ready hain. Aaj thoda practice kar lo—padhai bhi, progress bhi, mast!`
 }
 
+const hashText = (value = '') => [...String(value)].reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0, 7)
+
+const getScheduledReminderCandidates = (name, facts) => {
+  const content = []
+  for (const topic of facts.currentContent?.topics || []) {
+    if (topic.chapter && topic.name) content.push(`Chapter ${topic.chapter} / ${topic.name}`)
+  }
+  for (const item of facts.currentContent?.questionSets || []) {
+    if (item.chapter && item.type) content.push(`Chapter ${item.chapter}'s ${item.type.replace(/-/g, ' ')} practice`)
+  }
+  for (const chapter of facts.currentContent?.chapters || []) {
+    if (chapter.number) content.push(`Chapter ${chapter.number}${chapter.name ? `: ${chapter.name}` : ''}`)
+  }
+  const uniqueContent = [...new Set(content)]
+  const templates = [
+    (item) => `Hey ${name}, visit the website and check out ${item}.`,
+    (item) => `Hey ${name}, ${item} is waiting for you. Open Innovative Science 2 when you have a moment.`,
+    (item) => `Quick science reminder, ${name}: explore ${item} today.`,
+    (item) => `Hey ${name}, take a small study break and practise ${item}.`,
+    (item) => `${name}, your next science win could be in ${item}. Visit the website and try it.`,
+    (item) => `Ready for a little science, ${name}? Check out ${item} on the website.`,
+    (item) => `Hey ${name}, keep your progress moving—visit the website for ${item}.`,
+    (item) => `A fresh reminder for you, ${name}: ${item} is worth a quick look.`,
+  ]
+  const candidates = []
+  for (const item of uniqueContent) {
+    for (const template of templates) candidates.push(template(item))
+  }
+  return [...new Set(candidates)]
+}
+
 const sendVerifiedPushToUsers = async ({ recipients, title, source, link = '/#/', messageForUser }) => {
   const userIds = recipients.map((recipient) => recipient._id)
   if (!userIds.length) return { sent: 0, registered: 0, skipped: 0 }
   const existing = await Notification.find({ recipient: { $in: userIds }, source }).select('recipient').lean()
   const sentTo = new Set(existing.map((item) => String(item.recipient)))
-  const pending = recipients.filter((recipient) => !sentTo.has(String(recipient._id)) && messageForUser(recipient))
-  const rows = pending.map((recipient) => ({
+  const pending = recipients
+    .filter((recipient) => !sentTo.has(String(recipient._id)))
+    .map((recipient) => ({ recipient, message: messageForUser(recipient) }))
+    .filter((item) => item.message)
+  const rows = pending.map(({ recipient, message }) => ({
     recipient: recipient._id,
     type: 'WEB_PUSH',
     title,
-    message: messageForUser(recipient),
+    message,
     link,
     source,
   }))
   if (rows.length) await Notification.insertMany(rows)
   let sent = 0
   let registered = 0
-  for (const recipient of pending) {
-    const message = messageForUser(recipient)
+  for (const { recipient, message } of pending) {
     const result = await sendWebPushToUsers([recipient._id], { title, body: message, url: link, tag: source })
     sent += result.sent
     registered += result.registered
@@ -1215,24 +1248,61 @@ const notifyNewContentChange = async (change) => {
 const runScheduledPushSlot = async () => {
   if (scheduledPushRunning) return
   const parts = indiaNowParts()
-  const slot = `${parts.hour}:${parts.minute}`
-  if (!INDIA_NOTIFICATION_SLOTS.includes(slot)) return
+  const minute = Number(parts.minute)
+  const slotMinute = minute < 30 ? '00' : '30'
+  const dayKey = `${parts.year}-${parts.month}-${parts.day}`
+  const slot = `${parts.hour}:${slotMinute}`
+  const bucket = `${dayKey}-${slot}`
+  if (bucket === lastScheduledPushBucket) return
   scheduledPushRunning = true
   try {
-    const dayKey = `${parts.year}-${parts.month}-${parts.day}`
     const recipients = await User.find({ isAdmin: false }).select('_id name').lean()
     const facts = await buildNotificationFacts(1)
     const latestChange = facts.changes?.[0]
-    const source = `daily-push-${dayKey}-${slot}`
+    const source = `scheduled-push-${dayKey}-${slot}`
+    const previous = await Notification.find({
+      recipient: { $in: recipients.map((recipient) => recipient._id) },
+      source: /^scheduled-push-/,
+    }).select('recipient message').sort({ createdAt: -1 }).lean()
+    const previousByUser = new Map()
+    for (const item of previous) {
+      const key = String(item.recipient)
+      if (!previousByUser.has(key)) previousByUser.set(key, new Set())
+      previousByUser.get(key).add(item.message)
+    }
     await sendVerifiedPushToUsers({
       recipients,
       title: 'Innovative Science 2',
       source,
-      messageForUser: (recipient) => getVerifiedStudyMessage({ name: recipient.name || 'Student', facts, latestChange, slot }),
+      messageForUser: (recipient) => {
+        const name = recipient.name || 'Student'
+        const candidates = getScheduledReminderCandidates(name, facts)
+        const fallback = getVerifiedStudyMessage({ name, facts, latestChange })
+        if (!candidates.length) return fallback
+        const used = previousByUser.get(String(recipient._id)) || new Set()
+        const offset = hashText(`${recipient._id}:${source}`) % candidates.length
+        return candidates.find((candidate, index) => !used.has(candidate) && index >= offset)
+          || candidates.find((candidate) => !used.has(candidate))
+          || candidates[offset]
+      },
     })
+    lastScheduledPushBucket = bucket
   } finally {
     scheduledPushRunning = false
   }
+}
+
+const scheduleNextPushSlot = () => {
+  const indiaOffsetMilliseconds = (5 * 60 + 30) * 60 * 1000
+  const indiaNow = Date.now() + indiaOffsetMilliseconds
+  const halfHour = 30 * 60 * 1000
+  const nextBoundary = Math.ceil(indiaNow / halfHour) * halfHour
+  const delay = Math.max(1000, nextBoundary - indiaNow)
+  setTimeout(() => {
+    runScheduledPushSlot()
+      .catch((error) => console.error(`Scheduled Web Push failed: ${error.message}`))
+      .finally(scheduleNextPushSlot)
+  }, delay)
 }
 
 const notifyNewClassPost = async (post) => {
@@ -6788,9 +6858,7 @@ const startServer = async () => {
 
     await ensureAdminUser()
     await syncLeaderboardTotalsFromAttempts()
-    setInterval(() => {
-      runScheduledPushSlot().catch((error) => console.error(`Scheduled Web Push failed: ${error.message}`))
-    }, 30 * 1000)
+    scheduleNextPushSlot()
     console.log(`Admin ready: ${ADMIN_EMAIL}`)
   } catch (error) {
     console.error('MongoDB connection failed:', error.message)
