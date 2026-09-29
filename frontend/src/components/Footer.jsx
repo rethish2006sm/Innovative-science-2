@@ -35,18 +35,20 @@ const resultNavItems = [
 
 // Animation Variants
 const containerVariants = {
-  hidden: { opacity: 0 },
+  // Footer content should be available as soon as it enters the page. The
+  // old stagger made the footer look like it was still loading.
+  hidden: { opacity: 1 },
   visible: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.12,
-      delayChildren: 0.2,
+      staggerChildren: 0,
+      delayChildren: 0,
     },
   },
 };
 
 const itemVariants = {
-  hidden: { y: 30, opacity: 0 },
+  hidden: { y: 0, opacity: 1 },
   visible: {
     y: 0,
     opacity: 1,
@@ -71,10 +73,6 @@ const Footer = () => {
       initial={{ y: 120, opacity: 0 }}
       whileInView={{ y: 0, opacity: 1 }}
       viewport={{ once: true }}
-      transition={{
-        duration: 0.8,
-        ease: [0.22, 1, 0.36, 1],
-      }}
       className="relative overflow-hidden border-t border-cyan-500/10 bg-gradient-to-b from-[#162226] to-[#0f1618] backdrop-blur-2xl"
     >
       {/* Animated Background Elements matching the Navbar theme */}
@@ -89,7 +87,7 @@ const Footer = () => {
             repeat: Infinity,
             ease: 'linear',
           }}
-          className="absolute left-[-180px] top-[-120px] h-96 w-96 rounded-full bg-gradient-to-r from-teal-500/10 to-cyan-500/15 blur-3xl"
+          className="mobile-static-decoration absolute left-[-180px] top-[-120px] h-96 w-96 rounded-full bg-gradient-to-r from-teal-500/10 to-cyan-500/15 blur-3xl"
         />
 
         <motion.div
@@ -102,7 +100,7 @@ const Footer = () => {
             repeat: Infinity,
             ease: 'linear',
           }}
-          className="absolute bottom-[-140px] right-[-140px] h-96 w-96 rounded-full bg-gradient-to-r from-cyan-500/10 to-emerald-500/10 blur-3xl"
+          className="mobile-static-decoration absolute bottom-[-140px] right-[-140px] h-96 w-96 rounded-full bg-gradient-to-r from-cyan-500/10 to-emerald-500/10 blur-3xl"
         />
 
         <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'dotPattern\' x=\'0\' y=\'0\' width=\'20\' height=\'20\' patternUnits=\'userSpaceOnUse\'%3E%3Ccircle fill=\'rgba(255,255,255,0.015)\' cx=\'2\' cy=\'2\' r=\'1.5\'%3E%3C/circle%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100%25\' height=\'100%25\' fill=\'url(%23dotPattern)\'%3E%3C/rect%3E%3C/svg%3E')] opacity-30" />

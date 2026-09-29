@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { HashRouter, Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
@@ -30,6 +30,7 @@ import Profilepage from './pages/Profilepage'
 import Signinpage from './pages/Signinpage'
 import Signuppage from './pages/Signuppage'
 import CompleteProfilePage from './pages/CompleteProfilePage'
+import SettingsPage from './pages/SettingsPage'
 import PyqsPage from './pages/PyqsPage'
 import Testbuilderpage from './pages/Testbuilderpage'
 import Topicspage from './pages/Topicspage'
@@ -291,7 +292,33 @@ const ScrollToTop = () => {
   return null
 }
 
-const AuthRedirect = ({ children }) => children
+const hasCompleteProfile = (profile = {}) => Boolean(
+  profile.name?.trim() &&
+  /^\d{10}$/.test(profile.phoneNumber || '') &&
+  profile.dateOfBirth &&
+  profile.gender &&
+  profile.bloodGroup &&
+  profile.state === 'Maharashtra' &&
+  profile.city &&
+  profile.area?.trim() &&
+  profile.schoolName?.trim() &&
+  profile.finalExamPercentage !== null &&
+  profile.finalExamPercentage !== undefined &&
+  profile.finalExamPercentage !== '',
+)
+
+const AuthRedirect = ({ children }) => {
+  const { user, loading } = useAuth()
+  const storedUser = getStoredAuth()?.user
+
+  if (loading) {
+    return <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">Checking your session…</div>
+  }
+
+  if (!user && !storedUser) return children
+
+  return <Navigate to={hasCompleteProfile(storedUser) ? '/' : '/complete-profile'} replace />
+}
 
 const AuthRequiredScreen = () => (
   <section className="flex min-h-[calc(100vh-6rem)] w-full items-center justify-center bg-slate-50 px-4 py-10">
@@ -337,10 +364,6 @@ const AppLayout = () => {
   const navigate = useNavigate()
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [showSigninReminder, setShowSigninReminder] = useState(false)
-  const [pushPermission, setPushPermission] = useState(() => (
-    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
-  ))
-  const [pushEnabling, setPushEnabling] = useState(false)
   const [siteNotice, setSiteNotice] = useState(null)
   const [dismissedNoticeKey, setDismissedNoticeKey] = useState('')
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
@@ -365,32 +388,19 @@ const AppLayout = () => {
 
   useEffect(() => {
     if (!auth?.token || auth?.user?.isAdmin) return undefined
-
-    let cancelled = false
     const setupPush = async () => {
       try {
-        const result = await registerWebPush()
-        if (!cancelled && result?.permission) setPushPermission(result.permission)
+        await registerWebPush()
       } catch (error) {
-        // Notification permission is optional; the in-app message system remains available.
         console.warn('Could not enable browser notifications:', error.message)
       }
     }
     setupPush()
-    return () => { cancelled = true }
-  }, [auth?.token, auth?.user?.isAdmin])
-
-  const enableBrowserNotifications = async () => {
-    setPushEnabling(true)
-    try {
-      const result = await registerWebPush()
-      setPushPermission(result?.permission || pushPermission)
-    } catch (error) {
-      console.warn('Could not enable browser notifications:', error.message)
-    } finally {
-      setPushEnabling(false)
+    window.addEventListener('innovative-science-push-updated', setupPush)
+    return () => {
+      window.removeEventListener('innovative-science-push-updated', setupPush)
     }
-  }
+  }, [auth?.token, auth?.user?.isAdmin])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -398,7 +408,10 @@ const AppLayout = () => {
     }
 
     const socket = io(API_BASE_URL, {
-      transports: ['websocket', 'polling'],
+      // Polling avoids a noisy failed WebSocket upgrade when the local backend
+      // or proxy does not expose the Socket.IO WebSocket endpoint.
+      transports: ['polling'],
+      upgrade: false,
       withCredentials: true,
     })
 
@@ -568,22 +581,6 @@ const AppLayout = () => {
       />
       <RankNotifier />
       <StudentMessagePopup />
-      {auth?.token && !auth?.user?.isAdmin && pushPermission === 'default' && (
-        <div className="fixed bottom-4 left-4 right-4 z-[60] mx-auto flex max-w-xl items-center justify-between gap-4 rounded-2xl border border-cyan-200 bg-white p-4 shadow-2xl">
-          <div>
-            <p className="text-sm font-black text-slate-950">Get updates even when this page is closed</p>
-            <p className="mt-1 text-xs font-semibold text-slate-500">Allow browser notifications for new science content.</p>
-          </div>
-          <button
-            type="button"
-            onClick={enableBrowserNotifications}
-            disabled={pushEnabling}
-            className="shrink-0 rounded-xl bg-cyan-700 px-4 py-2 text-xs font-black text-white hover:bg-cyan-800 disabled:opacity-60"
-          >
-            {pushEnabling ? 'Enabling...' : 'Enable'}
-          </button>
-        </div>
-      )}
       {!isObjectivePracticeRoute && !isBattleRoute && <Navbar />}
       <div className={isObjectivePracticeRoute || isBattleRoute ? '' : 'pt-24'}>
         {showSiteNotice && (
@@ -628,6 +625,7 @@ const AppLayout = () => {
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/diagram-based-question" element={<Diagrams />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/identify-symbol" element={<Identifysymbol />} />
           <Route path="/profile" element={<ProtectedRoute><Profilepage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/complete-profile" element={<ProtectedRoute><CompleteProfilePage /></ProtectedRoute>} />
           <Route path="/pyqs" element={<PyqsPage />} />
           <Route
@@ -649,7 +647,7 @@ const AppLayout = () => {
           </Routes>
         </main>
       </div>
-      {!isObjectivePracticeRoute && !isBattleRoute && <Footer />}
+      {!isObjectivePracticeRoute && !isBattleRoute && <div className="app-footer"><Footer /></div>}
       {showSigninReminder && !auth?.token && !isAuthRoute && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[2rem] border border-white/70 bg-white p-6 shadow-2xl">

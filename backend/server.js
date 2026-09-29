@@ -165,6 +165,13 @@ const emitClassFeedUpdate = (classId, reason = 'updated') => {
   })
 }
 
+// Google Firebase sign-in opens a cross-origin popup and needs this opener policy
+// so the popup can close itself after authentication.
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
+  next()
+})
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -219,6 +226,15 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    dateOfBirth: { type: String, trim: true, default: '' },
+    gender: { type: String, trim: true, default: '' },
+    bloodGroup: { type: String, trim: true, default: '' },
+    state: { type: String, trim: true, default: '' },
+    city: { type: String, trim: true, default: '' },
+    area: { type: String, trim: true, default: 'Bhandup' },
+    schoolName: { type: String, trim: true, default: '' },
+    finalExamPercentage: { type: Number, min: 0, max: 100, default: null },
+    lastLoginAt: { type: Date, default: null },
     password: {
       type: String,
       default: '',
@@ -408,6 +424,11 @@ const objectiveQuestionSchema = new mongoose.Schema(
       default: '',
       maxlength: 800,
     },
+    isBoardQuestion: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     options: {
       type: [String],
       required: true,
@@ -486,8 +507,24 @@ const practiceScoreSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    attemptedQuestions: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     rewardedQuestionIds: {
       type: [String],
+      default: [],
+    },
+    attemptedQuestionIds: {
+      type: [String],
+      default: [],
+    },
+    questionResults: {
+      type: [{
+        questionId: String,
+        isCorrect: Boolean,
+      }],
       default: [],
     },
     doneRewarded: {
@@ -1248,10 +1285,8 @@ const notifyNewContentChange = async (change) => {
 const runScheduledPushSlot = async () => {
   if (scheduledPushRunning) return
   const parts = indiaNowParts()
-  const minute = Number(parts.minute)
-  const slotMinute = minute < 30 ? '00' : '30'
   const dayKey = `${parts.year}-${parts.month}-${parts.day}`
-  const slot = `${parts.hour}:${slotMinute}`
+  const slot = `${parts.hour}:00`
   const bucket = `${dayKey}-${slot}`
   if (bucket === lastScheduledPushBucket) return
   scheduledPushRunning = true
@@ -1295,8 +1330,8 @@ const runScheduledPushSlot = async () => {
 const scheduleNextPushSlot = () => {
   const indiaOffsetMilliseconds = (5 * 60 + 30) * 60 * 1000
   const indiaNow = Date.now() + indiaOffsetMilliseconds
-  const halfHour = 30 * 60 * 1000
-  const nextBoundary = Math.ceil(indiaNow / halfHour) * halfHour
+  const oneHour = 60 * 60 * 1000
+  const nextBoundary = Math.ceil(indiaNow / oneHour) * oneHour
   const delay = Math.max(1000, nextBoundary - indiaNow)
   setTimeout(() => {
     runScheduledPushSlot()
@@ -1485,6 +1520,16 @@ const publicUser = (user, { includePassword = false } = {}) => ({
   name: user.name,
   email: user.email,
   phoneNumber: user.phoneNumber || '',
+  dateOfBirth: user.dateOfBirth || '',
+  gender: user.gender || '',
+  bloodGroup: user.bloodGroup || '',
+  state: user.state || '',
+  city: user.city || '',
+  area: user.area || 'Bhandup',
+  schoolName: user.schoolName || '',
+  finalExamPercentage: Number.isFinite(user.finalExamPercentage) ? user.finalExamPercentage : null,
+  lastLoginAt: user.lastLoginAt || null,
+  createdAt: user.createdAt || null,
   ...(includePassword ? { password: user.password || user.passwordHash || '' } : {}),
   isAdmin: Boolean(user.isAdmin),
   classId: user.classId?._id?.toString?.() || user.classId?.toString?.() || '',
@@ -2381,13 +2426,40 @@ const createToken = (user) => {
   })
 }
 
-const verifyFirebaseIdToken = async (token) => {
-  if (!firebaseAdminAuth || !token) {
-    return null
+const verifyFirebaseIdToken = async (token, publicApiKey = '') => {
+  if (!token) return null
+
+  if (firebaseAdminAuth) {
+    try {
+      return await firebaseAdminAuth.verifyIdToken(token)
+    } catch (error) {
+      console.warn(`Firebase Admin token verification failed; using public fallback: ${error.message}`)
+    }
   }
+
+  // Local development can run without a Firebase service-account JSON file.
+  // Firebase's Identity Toolkit endpoint still validates the ID token itself.
+  const apiKey = String(publicApiKey || process.env.FIREBASE_WEB_API_KEY || '').trim()
+  if (!apiKey) return null
+
   try {
-    return await firebaseAdminAuth.verifyIdToken(token)
+    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: token }),
+    })
+    const data = await response.json()
+    const firebaseUser = data?.users?.[0]
+
+    if (!response.ok || !firebaseUser?.localId) return null
+
+    return {
+      uid: firebaseUser.localId,
+      email: firebaseUser.email || '',
+      name: firebaseUser.displayName || '',
+    }
   } catch (error) {
+    console.warn(`Firebase public token verification failed: ${error.message}`)
     return null
   }
 }
@@ -2881,8 +2953,22 @@ app.get('/api/health', (req, res) => {
 // Firebase owns credentials. MongoDB stores only the Firebase UID and app profile data.
 app.post('/api/auth/firebase', async (req, res) => {
   try {
-    const { idToken, name = '', email = '', phoneNumber = '' } = req.body || {}
-    const firebaseUser = await verifyFirebaseIdToken(String(idToken || ''))
+    const {
+      idToken,
+      firebaseApiKey = '',
+      name = '',
+      email = '',
+      phoneNumber = '',
+      dateOfBirth,
+      gender,
+      bloodGroup,
+      state,
+      city,
+      area,
+      schoolName,
+      finalExamPercentage,
+    } = req.body || {}
+    const firebaseUser = await verifyFirebaseIdToken(String(idToken || ''), firebaseApiKey)
 
     if (!firebaseUser?.uid) {
       return res.status(401).json({ message: 'Invalid Firebase session.' })
@@ -2901,6 +2987,16 @@ app.post('/api/auth/firebase', async (req, res) => {
         name: String(firebaseUser.name || name || normalizedEmail.split('@')[0]).trim() || 'Student',
         email: normalizedEmail,
         phoneNumber: String(phoneNumber || '').trim(),
+        dateOfBirth: String(dateOfBirth || '').trim(),
+        gender: String(gender || '').trim(),
+        bloodGroup: String(bloodGroup || '').trim(),
+        state: String(state || '').trim(),
+        city: String(city || '').trim(),
+        area: String(area || '').trim() || 'Bhandup',
+        schoolName: String(schoolName || '').trim(),
+        finalExamPercentage: finalExamPercentage === '' || finalExamPercentage === undefined || finalExamPercentage === null
+          ? null
+          : Number(finalExamPercentage),
       })
       createdNewUser = true
     } else {
@@ -2920,6 +3016,26 @@ app.post('/api/auth/firebase', async (req, res) => {
         user.phoneNumber = requestedPhoneNumber
         changed = true
       }
+      const profileFields = { dateOfBirth, gender, bloodGroup, state, city, area, schoolName, finalExamPercentage }
+      Object.entries(profileFields).forEach(([key, value]) => {
+        if (value !== undefined && user[key] !== (key === 'finalExamPercentage' && value !== '' ? Number(value) : String(value || '').trim())) {
+          user[key] = key === 'finalExamPercentage'
+            ? (value === '' || value === null ? null : Number(value))
+            : String(value || '').trim()
+          changed = true
+        }
+      })
+      if (user.email !== normalizedEmail) {
+        const emailOwner = await User.findOne({
+          email: normalizedEmail,
+          _id: { $ne: user._id },
+        })
+        if (emailOwner) {
+          return res.status(409).json({ message: 'This email is already used by another account.' })
+        }
+        user.email = normalizedEmail
+        changed = true
+      }
       if (changed) {
         await user.save()
       }
@@ -2934,6 +3050,8 @@ app.post('/api/auth/firebase', async (req, res) => {
         messageForUser: (recipient) => `Welcome ${recipient.name || 'Student'}! Tumhari science journey start ho gayi—chalo Brain Cells collect karte hain 😄`,
       }).catch((error) => console.warn(`Welcome push failed: ${error.message}`))
     }
+    user.lastLoginAt = new Date()
+    await user.save()
     return res.json({ token: createToken(user), user: publicUser(user) })
   } catch (error) {
     console.error('Could not connect Firebase account:', error)
@@ -3016,6 +3134,8 @@ app.post('/api/auth/signup', async (req, res) => {
       password: String(password),
       passwordHash: '',
     })
+    user.lastLoginAt = new Date()
+    await user.save()
     sendVerifiedPushToUsers({
       recipients: [user],
       title: 'Welcome to Innovative Science 2 🎉',
@@ -3057,6 +3177,8 @@ app.post('/api/auth/signin', async (req, res) => {
     }
 
     await user.populate('classId', 'name')
+    user.lastLoginAt = new Date()
+    await user.save()
 
     res.json({
       token: createToken(user),
@@ -3154,13 +3276,49 @@ app.delete('/api/auth/account', authRequired, async (req, res) => {
 
 app.patch('/api/auth/profile', authRequired, async (req, res) => {
   try {
-    const { name } = req.body
+    const {
+      name,
+      phoneNumber = '',
+      dateOfBirth = '',
+      gender = '',
+      bloodGroup = '',
+      state = '',
+      city = '',
+      area = 'Bhandup',
+      schoolName = '',
+      finalExamPercentage = null,
+    } = req.body
 
     if (!name?.trim()) {
       return res.status(400).json({ message: 'Name is required.' })
     }
 
+    const normalizedPhoneNumber = String(phoneNumber || '').trim()
+    if (normalizedPhoneNumber && !/^\d{10}$/.test(normalizedPhoneNumber)) {
+      return res.status(400).json({ message: 'Mobile number must contain exactly 10 digits.' })
+    }
+
     req.user.name = name.trim()
+    req.user.phoneNumber = normalizedPhoneNumber
+    req.user.dateOfBirth = String(dateOfBirth || '').trim()
+    req.user.gender = String(gender || '').trim()
+    req.user.bloodGroup = String(bloodGroup || '').trim()
+    const normalizedState = String(state || 'Maharashtra').trim()
+    if (normalizedState !== 'Maharashtra') {
+      return res.status(400).json({ message: 'Only Maharashtra is currently supported.' })
+    }
+    req.user.state = 'Maharashtra'
+    req.user.city = String(city || '').trim()
+    req.user.area = String(area || '').trim() || 'Bhandup'
+    req.user.schoolName = String(schoolName || '').trim()
+
+    if (finalExamPercentage === '' || finalExamPercentage === null || finalExamPercentage === undefined) {
+      req.user.finalExamPercentage = null
+    } else if (!Number.isFinite(Number(finalExamPercentage)) || Number(finalExamPercentage) < 0 || Number(finalExamPercentage) > 100) {
+      return res.status(400).json({ message: 'Std 9 percentage must be between 0 and 100.' })
+    } else {
+      req.user.finalExamPercentage = Number(finalExamPercentage)
+    }
     await req.user.save()
     const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
 
@@ -3258,6 +3416,17 @@ app.post('/api/auth/profile-image', authRequired, upload.single('profileImage'),
   }
 })
 
+app.delete('/api/auth/profile-image', authRequired, async (req, res) => {
+  try {
+    req.user.profileImage = undefined
+    await req.user.save()
+    const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
+    res.json({ user: publicUser(refreshedUser) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not remove profile image.' })
+  }
+})
+
 app.get('/api/auth/users/:id/avatar', async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('profileImage')
@@ -3306,10 +3475,70 @@ app.get('/api/objective-questions/:id/answer-image', async (req, res) => {
   }
 })
 
-app.get('/api/chapters', async (req, res) => {
+app.get('/api/chapters', optionalAuth, async (req, res) => {
   try {
     const chapters = await Chapter.find().select('number name marks marksWithoutOption').sort({ number: 1 }).lean()
-    const payload = { chapters }
+    const chapterIds = chapters.map((chapter) => chapter._id)
+    const topics = await Topic.find({ chapter: { $in: chapterIds } }).select('_id chapter').lean()
+    const topicIds = topics.map((topic) => topic._id)
+    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic').lean()
+    const objectiveTypeIds = objectiveTypes.map((objectiveType) => objectiveType._id)
+    const questionCounts = await ObjectiveQuestion.aggregate([
+      { $match: { objectiveType: { $in: objectiveTypeIds } } },
+      { $group: { _id: '$objectiveType', count: { $sum: 1 }, questionIds: { $push: '$_id' } } },
+    ])
+    const questionCountMap = new Map(questionCounts.map((item) => [String(item._id), Number(item.count || 0)]))
+    const questionIdMap = new Map(questionCounts.map((item) => [String(item._id), (item.questionIds || []).map(String)]))
+    const scoreMap = new Map()
+
+    if (req.user && objectiveTypeIds.length > 0) {
+      const scores = await PracticeScore.find({
+        user: req.user._id,
+        objectiveType: { $in: objectiveTypeIds },
+      }).select('objectiveType bestScore questionResults').lean()
+
+      scores.forEach((score) => {
+        scoreMap.set(String(score.objectiveType), score)
+      })
+    }
+
+    const topicChapterMap = new Map(topics.map((topic) => [String(topic._id), String(topic.chapter)]))
+    const chapterProgressMap = new Map(chapters.map((chapter) => [String(chapter._id), { correctQuestions: 0, totalQuestions: 0 }]))
+
+    objectiveTypes.forEach((objectiveType) => {
+      const chapterId = topicChapterMap.get(String(objectiveType.topic))
+      const progress = chapterProgressMap.get(chapterId)
+      if (!progress) return
+
+      const questionTotal = questionCountMap.get(String(objectiveType._id)) || 0
+      const score = scoreMap.get(String(objectiveType._id))
+      const currentQuestionIds = new Set(questionIdMap.get(String(objectiveType._id)) || [])
+      const currentResults = (score?.questionResults || []).filter((result) => currentQuestionIds.has(String(result.questionId)))
+      const correctQuestions = currentResults.length > 0
+        ? currentResults.filter((result) => result.isCorrect).length
+        : Math.min(Number(score?.bestScore || 0), questionTotal)
+
+      progress.totalQuestions += questionTotal
+      progress.correctQuestions += Math.min(correctQuestions, questionTotal)
+    })
+
+    const chaptersWithProgress = chapters.map((chapter) => {
+      const progress = chapterProgressMap.get(String(chapter._id)) || { correctQuestions: 0, totalQuestions: 0 }
+      const percentage = progress.totalQuestions
+        ? Math.round((progress.correctQuestions / progress.totalQuestions) * 100)
+        : 0
+
+      return {
+        ...chapter,
+        progress: {
+          ...progress,
+          percentage,
+          isDone: progress.totalQuestions > 0 && progress.correctQuestions >= progress.totalQuestions,
+        },
+      }
+    })
+
+    const payload = { chapters: chaptersWithProgress }
     res.set('Cache-Control', 'no-store')
     res.json(payload)
   } catch (error) {
@@ -3415,56 +3644,74 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
     const topics = await Topic.find({ chapter: chapter._id }).sort({ number: 1 })
     const topicIds = topics.map((topic) => topic._id)
     const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic').lean()
+    const objectiveTypeIds = objectiveTypes.map((objectiveType) => objectiveType._id)
+    const questionGroups = await ObjectiveQuestion.aggregate([
+      { $match: { objectiveType: { $in: objectiveTypeIds } } },
+      { $group: {
+        _id: '$objectiveType',
+        questionIds: { $push: '$_id' },
+        boardQuestionIds: { $push: { $cond: ['$isBoardQuestion', '$_id', null] } },
+        boardQuestionCount: { $sum: { $cond: ['$isBoardQuestion', 1, 0] } },
+      } },
+    ])
+    const questionIdMap = new Map(questionGroups.map((item) => [String(item._id), (item.questionIds || []).map(String)]))
+    const boardQuestionIdMap = new Map(questionGroups.map((item) => [String(item._id), (item.boardQuestionIds || []).filter(Boolean).map(String)]))
+    const boardCountMap = new Map(questionGroups.map((item) => [String(item._id), Number(item.boardQuestionCount || 0)]))
     const scoreMap = new Map()
 
-    if (req.user) {
+    if (req.user && objectiveTypeIds.length > 0) {
       const scores = await PracticeScore.find({
         user: req.user._id,
-        objectiveType: { $in: objectiveTypes.map((objectiveType) => objectiveType._id) },
-      }).lean()
-      const objectiveTopicMap = new Map(objectiveTypes.map((objectiveType) => [
-        String(objectiveType._id),
-        String(objectiveType.topic),
-      ]))
+        objectiveType: { $in: objectiveTypeIds },
+      }).select('objectiveType bestScore questionResults').lean()
 
       scores.forEach((score) => {
-        const topicId = objectiveTopicMap.get(String(score.objectiveType))
-
-        if (!topicId || !score.totalQuestions) return
-
-        const current = scoreMap.get(topicId) || {
-          attemptedTypes: 0,
-          totalBestScore: 0,
-          totalQuestions: 0,
-          totalPercent: 0,
-        }
-        const bestScore = Number(score.bestScore || 0)
-        const totalQuestions = Number(score.totalQuestions || 0)
-
-        current.attemptedTypes += 1
-        current.totalBestScore += bestScore
-        current.totalQuestions += totalQuestions
-        current.totalPercent += totalQuestions ? (bestScore / totalQuestions) * 100 : 0
-        scoreMap.set(topicId, current)
+        scoreMap.set(String(score.objectiveType), score)
       })
     }
 
+    const topicProgressMap = new Map(topics.map((topic) => [String(topic._id), { correctQuestions: 0, totalQuestions: 0, boardQuestionCount: 0, boardCorrectQuestions: 0 }]))
+    objectiveTypes.forEach((objectiveType) => {
+      const topicProgress = topicProgressMap.get(String(objectiveType.topic))
+      if (!topicProgress) return
+
+      const questionIds = questionIdMap.get(String(objectiveType._id)) || []
+      const questionIdSet = new Set(questionIds)
+      const score = scoreMap.get(String(objectiveType._id))
+      const currentResults = (score?.questionResults || []).filter((result) => questionIdSet.has(String(result.questionId)))
+      const correctQuestions = currentResults.length > 0
+        ? currentResults.filter((result) => result.isCorrect).length
+        : Math.min(Number(score?.bestScore || 0), questionIds.length)
+
+      topicProgress.totalQuestions += questionIds.length
+      topicProgress.correctQuestions += Math.min(correctQuestions, questionIds.length)
+      topicProgress.boardQuestionCount += boardCountMap.get(String(objectiveType._id)) || 0
+      const boardQuestionIds = boardQuestionIdMap.get(String(objectiveType._id)) || []
+      const boardQuestionIdSet = new Set(boardQuestionIds)
+      const boardResults = currentResults.filter((result) => boardQuestionIdSet.has(String(result.questionId)))
+      topicProgress.boardCorrectQuestions += boardResults.length > 0
+        ? boardResults.filter((result) => result.isCorrect).length
+        : 0
+    })
+
+    res.set('Cache-Control', 'no-store')
     res.json({
       chapter,
       topics: topics.map((topic) => {
-        const progress = scoreMap.get(String(topic._id))
-        const averagePercent = progress?.attemptedTypes
-          ? Math.round(progress.totalPercent / progress.attemptedTypes)
+        const progress = topicProgressMap.get(String(topic._id)) || { correctQuestions: 0, totalQuestions: 0, boardQuestionCount: 0, boardCorrectQuestions: 0 }
+        const percentage = progress.totalQuestions
+          ? Math.round((progress.correctQuestions / progress.totalQuestions) * 100)
           : 0
 
         return {
           ...publicTopic(topic, Boolean(req.user?.isAdmin)),
+          boardQuestionCount: progress.boardQuestionCount,
+          boardCorrectQuestions: progress.boardCorrectQuestions,
           practiceProgress: {
-            averagePercent,
-            attemptedTypes: progress?.attemptedTypes || 0,
-            bestScore: progress?.totalBestScore || 0,
-            totalQuestions: progress?.totalQuestions || 0,
-            isDone: Boolean(progress?.attemptedTypes),
+            percentage,
+            correctQuestions: progress.correctQuestions,
+            totalQuestions: progress.totalQuestions,
+            isDone: progress.totalQuestions > 0 && progress.correctQuestions >= progress.totalQuestions,
           },
         }
       }),
@@ -3559,6 +3806,34 @@ app.patch('/api/topics/:id', authRequired, adminRequired, async (req, res) => {
   }
 })
 
+const reconcilePracticeScore = (score, currentQuestionIds = []) => {
+  if (!score) return null
+
+  const savedQuestionIds = Array.isArray(score.questionIds) ? score.questionIds.map(String) : []
+  if (!savedQuestionIds.length) return score
+
+  const currentIds = currentQuestionIds.map(String)
+  const changed = savedQuestionIds.length !== currentIds.length
+    || savedQuestionIds.some((questionId) => !currentIds.includes(questionId))
+
+  if (!changed) return score
+
+  const currentIdSet = new Set(currentIds)
+  const scoreData = typeof score.toObject === 'function' ? score.toObject() : { ...score }
+  const attemptedQuestionIds = (scoreData.attemptedQuestionIds || []).map(String).filter((questionId) => currentIdSet.has(questionId))
+  const questionResults = (scoreData.questionResults || []).filter((item) => currentIdSet.has(String(item.questionId)))
+
+  return {
+    ...scoreData,
+    questionIds: currentIds,
+    attemptedQuestionIds,
+    attemptedQuestions: attemptedQuestionIds.length,
+    questionResults,
+    totalQuestions: currentIds.length,
+    isDone: false,
+  }
+}
+
 app.get('/api/topics/:id/objective-types', optionalAuth, async (req, res) => {
   try {
     const topic = await Topic.findById(req.params.id).populate('chapter')
@@ -3573,8 +3848,26 @@ app.get('/api/topics/:id/objective-types', optionalAuth, async (req, res) => {
       { $match: { objectiveType: { $in: objectiveTypeIds } } },
       { $group: { _id: '$objectiveType', count: { $sum: 1 } } },
     ])
+    const boardQuestionCounts = await ObjectiveQuestion.aggregate([
+      { $match: { objectiveType: { $in: objectiveTypeIds }, isBoardQuestion: true } },
+      { $group: { _id: '$objectiveType', count: { $sum: 1 } } },
+    ])
+    const objectiveQuestions = await ObjectiveQuestion.find({ objectiveType: { $in: objectiveTypeIds } }).select('_id objectiveType isBoardQuestion').lean()
+    const questionIdsMap = new Map()
+    objectiveQuestions.forEach((question) => {
+      const key = String(question.objectiveType)
+      questionIdsMap.set(key, [...(questionIdsMap.get(key) || []), String(question._id)])
+    })
+    const boardQuestionIdsMap = new Map()
+    objectiveQuestions.forEach((question) => {
+      if (!question.isBoardQuestion) return
+      const key = String(question.objectiveType)
+      boardQuestionIdsMap.set(key, [...(boardQuestionIdsMap.get(key) || []), String(question._id)])
+    })
     const countMap = new Map(questionCounts.map((item) => [String(item._id), item.count]))
+    const boardCountMap = new Map(boardQuestionCounts.map((item) => [String(item._id), item.count]))
     const scoreMap = new Map()
+    const historyMap = new Map()
 
     if (req.user) {
       const scores = await PracticeScore.find({
@@ -3585,6 +3878,27 @@ app.get('/api/topics/:id/objective-types', optionalAuth, async (req, res) => {
       scores.forEach((score) => {
         scoreMap.set(String(score.objectiveType), score)
       })
+
+      const attempts = await PracticeAttempt.find({
+        user: req.user._id,
+        objectiveTypeIds: { $in: objectiveTypeIds },
+        attemptType: 'practice',
+      }).select('objectiveTypeIds questionBreakdown').lean()
+
+      attempts.forEach((attempt) => {
+        ;(attempt.objectiveTypeIds || []).forEach((objectiveTypeId) => {
+          const key = String(objectiveTypeId)
+          const history = historyMap.get(key) || { questionIds: new Set(), results: new Map() }
+          ;(attempt.questionBreakdown || []).forEach((item) => {
+            if (!item.questionId) return
+            history.questionIds.add(String(item.questionId))
+            if (item.status !== 'skipped') {
+              history.results.set(String(item.questionId), item.status === 'correct')
+            }
+          })
+          historyMap.set(key, history)
+        })
+      })
     }
 
     const isAdmin = Boolean(req.user?.isAdmin)
@@ -3592,12 +3906,38 @@ app.get('/api/topics/:id/objective-types', optionalAuth, async (req, res) => {
     res.json({
       topic: publicTopic(topic, isAdmin),
       chapter: topic.chapter,
-      objectiveTypes: objectiveTypes.map((objectiveType) => ({
-        ...objectiveType,
-        questionCount: countMap.get(String(objectiveType._id)) || 0,
-        bestScore: scoreMap.get(String(objectiveType._id)) || null,
-        isDone: Boolean(scoreMap.get(String(objectiveType._id))?.isDone),
-      })),
+      objectiveTypes: objectiveTypes.map((objectiveType) => {
+        const currentQuestionIds = questionIdsMap.get(String(objectiveType._id)) || []
+        let bestScore = scoreMap.get(String(objectiveType._id)) || null
+        const history = historyMap.get(String(objectiveType._id))
+
+        if (bestScore && (!bestScore.questionIds || bestScore.questionIds.length === 0) && history?.questionIds.size) {
+          bestScore = {
+            ...bestScore,
+            questionIds: [...history.questionIds],
+            attemptedQuestionIds: [...history.results.keys()],
+            attemptedQuestions: history.results.size,
+            questionResults: [...history.results.entries()].map(([questionId, isCorrect]) => ({ questionId, isCorrect })),
+          }
+        }
+
+        bestScore = reconcilePracticeScore(bestScore, currentQuestionIds)
+        const boardQuestionIds = boardQuestionIdsMap.get(String(objectiveType._id)) || []
+        const boardQuestionIdSet = new Set(boardQuestionIds)
+        const boardResults = (bestScore?.questionResults || []).filter((result) => boardQuestionIdSet.has(String(result.questionId)))
+        const boardCorrectQuestions = boardResults.length > 0
+          ? boardResults.filter((result) => result.isCorrect).length
+          : 0
+
+        return {
+          ...objectiveType,
+          questionCount: countMap.get(String(objectiveType._id)) || 0,
+          boardQuestionCount: boardCountMap.get(String(objectiveType._id)) || 0,
+          boardCorrectQuestions,
+          bestScore,
+          isDone: Boolean(bestScore?.isDone),
+        }
+      }),
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load objective types.' })
@@ -3671,11 +4011,44 @@ app.get('/api/topics/:topicId/objective-types/:type/practice', optionalAuth, asy
       return res.status(404).json({ message: 'Objective type not found.' })
     }
 
-    const questions = await ObjectiveQuestion.find({ objectiveType: objectiveType._id }).sort({ createdAt: 1 })
+    const practiceQuestionQuery = {
+      objectiveType: objectiveType._id,
+      ...(String(req.query.boardOnly || '').toLowerCase() === 'true' ? { isBoardQuestion: true } : {}),
+    }
+    const questions = await ObjectiveQuestion.find(practiceQuestionQuery).sort({ createdAt: 1 })
     const isAdmin = Boolean(req.user?.isAdmin)
-    const bestScore = req.user
+    let bestScore = req.user
       ? await PracticeScore.findOne({ user: req.user._id, objectiveType: objectiveType._id })
       : null
+
+    if (req.user && bestScore && (!bestScore.questionResults || bestScore.questionResults.length === 0)) {
+      const previousAttempts = await PracticeAttempt.find({
+        user: req.user._id,
+        objectiveTypeIds: objectiveType._id,
+        attemptType: 'practice',
+      }).sort({ createdAt: 1 }).lean()
+      const previousQuestionIds = new Set()
+      const previousResults = new Map()
+
+      previousAttempts.forEach((attempt) => {
+        ;(attempt.questionBreakdown || []).forEach((item) => {
+          if (!item.questionId) return
+          previousQuestionIds.add(String(item.questionId))
+          if (item.status !== 'skipped') previousResults.set(String(item.questionId), item.status === 'correct')
+        })
+      })
+
+      if (previousResults.size > 0) {
+        const scoreData = bestScore.toObject()
+        scoreData.questionIds = [...previousQuestionIds]
+        scoreData.questionResults = [...previousResults.entries()].map(([questionId, isCorrect]) => ({ questionId, isCorrect }))
+        scoreData.attemptedQuestionIds = [...previousResults.keys()]
+        scoreData.attemptedQuestions = previousResults.size
+        bestScore = scoreData
+      }
+    }
+
+    bestScore = reconcilePracticeScore(bestScore, questions.map((question) => String(question._id)))
 
     res.json({
       topic: publicTopic(topic, isAdmin),
@@ -3685,8 +4058,8 @@ app.get('/api/topics/:topicId/objective-types/:type/practice', optionalAuth, asy
       questions: questions.map((question) => ({
         _id: question._id,
         question: question.question,
-        options: question.options,
-        pairs: question.pairs,
+        options: Array.isArray(question.options) ? question.options : [],
+        pairs: Array.isArray(question.pairs) ? question.pairs : [],
         imageUrl: publicQuestionImageUrl(question),
         answerImageUrl: publicAnswerImageUrl(question),
         chapterId: topic.chapter?._id,
@@ -3694,12 +4067,56 @@ app.get('/api/topics/:topicId/objective-types/:type/practice', optionalAuth, asy
         chapterName: topic.chapter?.name,
         topicName: topic.name,
         objectiveTypeId: objectiveType._id,
+        isBoardQuestion: Boolean(question.isBoardQuestion),
         ...(isAdmin ? { correctOption: question.correctOption } : {}),
         ...(isAdmin ? { correctOptions: question.correctOptions } : {}),
       })),
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load practice questions.' })
+  }
+})
+
+app.get('/api/chapters/:chapterNumber/board-questions', optionalAuth, async (req, res) => {
+  try {
+    const chapter = await Chapter.findOne({ number: Number(req.params.chapterNumber) }).select('number name')
+
+    if (!chapter) {
+      return res.status(404).json({ message: 'Chapter not found.' })
+    }
+
+    const topics = await Topic.find({ chapter: chapter._id }).select('_id number name').sort({ number: 1 }).lean()
+    const topicIds = topics.map((topic) => topic._id)
+    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic type').lean()
+    const objectiveTypeIds = objectiveTypes.map((item) => item._id)
+    const questions = await ObjectiveQuestion.find({ objectiveType: { $in: objectiveTypeIds }, isBoardQuestion: true })
+      .select('_id objectiveType question options pairs questionImage answerImage createdAt')
+      .sort({ createdAt: 1 })
+      .lean()
+
+    const topicMap = new Map(topics.map((topic) => [String(topic._id), topic]))
+    const typeMap = new Map(objectiveTypes.map((item) => [String(item._id), item]))
+    const result = questions.map((question) => {
+      const objectiveType = typeMap.get(String(question.objectiveType))
+      const topic = topicMap.get(String(objectiveType?.topic))
+      return {
+        _id: question._id,
+        question: question.question,
+        options: question.options,
+        pairs: question.pairs,
+        imageUrl: publicQuestionImageUrl(question),
+        answerImageUrl: publicAnswerImageUrl(question),
+        objectiveTypeId: objectiveType?._id,
+        objectiveType: objectiveType?.type || '',
+        topicId: topic?._id,
+        topicName: topic?.name || '',
+        topicNumber: topic?.number || null,
+      }
+    })
+
+    res.json({ chapter, questions: result })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load board questions.' })
   }
 })
 
@@ -3721,11 +4138,17 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
       return res.status(400).json({ message: 'Done status must be true or false.' })
     }
 
+    const questionIds = (await ObjectiveQuestion.find({ objectiveType: objectiveType._id }).select('_id').lean()).map((question) => String(question._id))
+
     const bestScore = await PracticeScore.findOneAndUpdate(
       { user: req.user._id, objectiveType: objectiveType._id },
       {
         $set: {
           isDone,
+          totalQuestions: questionIds.length,
+          questionIds,
+          attemptedQuestionIds: isDone ? questionIds : [],
+          attemptedQuestions: isDone ? questionIds.length : 0,
         },
       },
       {
@@ -3753,6 +4176,7 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
     }
 
     const { question, options, correctOption, pairs, correctOptions } = req.body
+    const isBoardQuestion = ['true', '1', 'on'].includes(String(req.body.isBoardQuestion || '').toLowerCase())
     const parsedOptions = typeof options === 'string' ? JSON.parse(options || '[]') : options
     const parsedPairs = typeof pairs === 'string' ? JSON.parse(pairs || '[]') : pairs
     const parsedCorrectOptions = typeof correctOptions === 'string' ? JSON.parse(correctOptions || '[]') : correctOptions
@@ -3782,6 +4206,7 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
       })
       const savedQuestion = await ObjectiveQuestion.create({
         objectiveType: objectiveType._id,
+        isBoardQuestion,
         ...matchPayload,
         ...(questionImage ? { questionImage } : {}),
         ...(answerImage ? { answerImage } : {}),
@@ -3827,6 +4252,7 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
 
     const savedQuestion = await ObjectiveQuestion.create({
       objectiveType: objectiveType._id,
+      isBoardQuestion,
       question,
       options: cleanedOptions,
       correctOption: correctIndex,
@@ -3944,6 +4370,7 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
 ]), async (req, res) => {
   try {
     const { question, options, correctOption, pairs, correctOptions } = req.body
+    const isBoardQuestion = ['true', '1', 'on'].includes(String(req.body.isBoardQuestion || '').toLowerCase())
     const parsedOptions = typeof options === 'string' ? JSON.parse(options || '[]') : options
     const parsedPairs = typeof pairs === 'string' ? JSON.parse(pairs || '[]') : pairs
     const parsedCorrectOptions = typeof correctOptions === 'string' ? JSON.parse(correctOptions || '[]') : correctOptions
@@ -3954,6 +4381,41 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
 
     if (!existingQuestion) {
       return res.status(404).json({ message: 'Question not found.' })
+    }
+
+    // Allow admins to promote or remove a question from the board-question
+    // set without having to resend the full question payload.
+    const hasOnlyBoardStatus = Object.prototype.hasOwnProperty.call(req.body || {}, 'isBoardQuestion')
+      && !Object.prototype.hasOwnProperty.call(req.body || {}, 'question')
+      && !Object.prototype.hasOwnProperty.call(req.body || {}, 'options')
+      && !Object.prototype.hasOwnProperty.call(req.body || {}, 'pairs')
+
+    if (hasOnlyBoardStatus) {
+      const updatedQuestion = await ObjectiveQuestion.findByIdAndUpdate(
+        req.params.id,
+        { $set: { isBoardQuestion } },
+        { new: true, runValidators: true },
+      )
+
+      await recordContentChange({
+        entityType: 'question',
+        entity: updatedQuestion,
+        action: 'updated',
+        actor: req.user,
+        context: {
+          before: existingQuestion,
+          objectiveTypeId: existingQuestion.objectiveType?._id,
+          topicId: existingQuestion.objectiveType?.topic?._id,
+          chapterId: existingQuestion.objectiveType?.topic?.chapter?._id,
+          after: {
+            chapterNumber: existingQuestion.objectiveType?.topic?.chapter?.number,
+            chapterName: existingQuestion.objectiveType?.topic?.chapter?.name,
+            topicName: existingQuestion.objectiveType?.topic?.name,
+          },
+        },
+      })
+
+      return res.json({ question: updatedQuestion })
     }
 
     const imageUpdate = {}
@@ -3995,7 +4457,7 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
       })
       const updatedQuestion = await ObjectiveQuestion.findByIdAndUpdate(
         req.params.id,
-        imageUpdate.$unset ? { $set: matchPayload, $unset: imageUpdate.$unset } : { ...matchPayload, ...imageUpdate },
+        imageUpdate.$unset ? { $set: { ...matchPayload, isBoardQuestion }, $unset: imageUpdate.$unset } : { ...matchPayload, isBoardQuestion, ...imageUpdate },
         { new: true, runValidators: true },
       )
 
@@ -4029,12 +4491,14 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
       imageUpdate.$unset ? {
         $set: {
           question,
+          isBoardQuestion,
           options: cleanedOptions,
           correctOption: correctIndex,
         },
         $unset: imageUpdate.$unset,
       } : {
         question,
+        isBoardQuestion,
         options: cleanedOptions,
         correctOption: correctIndex,
         ...imageUpdate,
@@ -4097,6 +4561,7 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
             lowScore: totalQuestions,
             attemptCount: (existingScore?.attemptCount || 0) + 1,
             totalQuestions,
+            attemptedQuestions: shouldMarkDone ? totalQuestions : 0,
             doneRewarded: true,
             isDone: true,
           },
@@ -4104,6 +4569,7 @@ app.post('/api/objective-types/:id/done', authRequired, async (req, res) => {
         : {
           $set: {
             totalQuestions,
+            attemptedQuestions: 0,
             doneRewarded: Boolean(existingScore?.doneRewarded),
             isDone: false,
           },
@@ -4191,10 +4657,24 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
     const score = scored.score
     const wrongCount = scored.wrongCount
     const skippedCount = scored.skippedCount
-
     const existingScore = await PracticeScore.findOne({
       user: req.user._id,
       objectiveType: objectiveType._id,
+    })
+    const attemptedQuestionIds = new Set((existingScore?.attemptedQuestionIds || []).map((item) => String(item)))
+    questionBreakdown.forEach((item) => {
+      if (item.status !== 'skipped' && item.questionId) {
+        attemptedQuestionIds.add(String(item.questionId))
+      }
+    })
+    const attemptedQuestions = attemptedQuestionIds.size
+    const questionResults = new Map(
+      (existingScore?.questionResults || []).map((item) => [String(item.questionId), Boolean(item.isCorrect)]),
+    )
+    questionBreakdown.forEach((item) => {
+      if (item.status !== 'skipped' && item.questionId) {
+        questionResults.set(String(item.questionId), item.status === 'correct')
+      }
     })
     const previousBestScore = existingScore?.bestScore || 0
     const bestScore = Math.max(previousBestScore, score)
@@ -4239,8 +4719,12 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
         lowScore,
         attemptCount,
         totalQuestions: questions.length,
+        questionIds: questions.map((question) => String(question._id)),
+        attemptedQuestions,
+        attemptedQuestionIds: [...attemptedQuestionIds],
+        questionResults: [...questionResults.entries()].map(([questionId, isCorrect]) => ({ questionId, isCorrect })),
         rewardedQuestionIds: [...rewardedQuestionIds],
-        isDone: true,
+        isDone: attemptedQuestions >= questions.length,
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     )
@@ -4836,6 +5320,10 @@ app.post('/api/feedback', optionalAuth, async (req, res) => {
     const normalizedSourceKey = String(sourceKey || '').trim()
     const normalizedClientKey = String(clientKey || '').trim()
 
+    if (normalizedSourceType === 'topic' && !req.user) {
+      return res.status(401).json({ message: 'Please sign in to rate this chapter.' })
+    }
+
     const user = req.user || null
     const userClassId = user?.classId?._id || user?.classId || null
     const classDoc = userClassId ? await Class.findById(userClassId).lean() : null
@@ -4902,7 +5390,6 @@ app.get('/api/feedback/context', optionalAuth, async (req, res) => {
 
     const feedback = await Feedback.find(query)
       .sort({ createdAt: -1 })
-      .limit(Math.min(Math.max(Number(req.query.limit) || 20, 1), 50))
       .lean()
 
     const dedupedFeedback = []
@@ -4926,17 +5413,21 @@ app.get('/api/feedback/context', optionalAuth, async (req, res) => {
       ? Math.round((dedupedFeedback.reduce((sum, item) => sum + Number(item.rating || 0), 0) / ratingCount) * 10) / 10
       : 0
     const currentUserId = req.user?._id ? String(req.user._id) : ''
-    const userRating = currentUserId
-      ? dedupedFeedback.find((item) => String(item.user || '') === currentUserId)?.rating || 0
+    const currentUserFeedback = currentUserId
+      ? dedupedFeedback.find((item) => String(item.user || '') === currentUserId)
       : clientKey
-        ? dedupedFeedback.find((item) => String(item.clientKey || '') === clientKey)?.rating || 0
-        : 0
+        ? dedupedFeedback.find((item) => String(item.clientKey || '') === clientKey)
+        : null
+    const userRating = currentUserFeedback?.rating || 0
 
     res.json({
       feedback: dedupedFeedback.map(publicFeedback),
       averageRating,
       ratingCount,
       userRating,
+      userFeedback: currentUserFeedback
+        ? { rating: Number(currentUserFeedback.rating || 0), message: currentUserFeedback.message || '' }
+        : null,
       sourceType: normalizedSourceType,
       sourceKey,
     })
@@ -5171,6 +5662,44 @@ app.post('/api/push/subscribe', authRequired, async (req, res) => {
     res.status(201).json({ subscriptionId: saved._id })
   } catch (error) {
     res.status(500).json({ message: 'Could not save push subscription.' })
+  }
+})
+
+app.post('/api/push/device-message', authRequired, async (req, res) => {
+  try {
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+      return res.status(503).json({ message: 'Web Push is not configured on the server.' })
+    }
+
+    const endpoint = String(req.body?.endpoint || '').trim()
+    const title = String(req.body?.title || '').trim().slice(0, 180)
+    const body = String(req.body?.body || '').trim().slice(0, 2000)
+    const url = String(req.body?.url || '/#/').trim().slice(0, 500)
+    if (!endpoint || !title || !body) {
+      return res.status(400).json({ message: 'A device endpoint, title, and message are required.' })
+    }
+
+    const subscription = await PushSubscription.findOne({ user: req.user._id, endpoint }).lean()
+    if (!subscription) return res.status(404).json({ message: 'This device is not subscribed to Web Push.' })
+
+    try {
+      await webpush.sendNotification(
+        { endpoint: subscription.endpoint, expirationTime: subscription.expirationTime, keys: subscription.keys },
+        JSON.stringify({ title, body, url, tag: `device-message-${Date.now()}` }),
+      )
+    } catch (error) {
+      if ([400, 401, 403, 404, 410].includes(Number(error.statusCode))) {
+        await PushSubscription.deleteOne({ _id: subscription._id })
+      }
+      throw error
+    }
+
+    res.json({ sent: true })
+  } catch (error) {
+    if ([400, 401, 403, 404, 410].includes(Number(error.statusCode))) {
+      return res.status(410).json({ message: 'This device push subscription is no longer active.' })
+    }
+    res.status(500).json({ message: 'Could not send the device notification.' })
   }
 })
 

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { LogIn, Dna, Eye, EyeOff, Leaf, Microscope, Mail, X } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import { getStoredAuth } from '../authStorage'
 
 const Signinpage = () => {
   const navigate = useNavigate()
@@ -52,7 +53,22 @@ const Signinpage = () => {
 
     try {
       await signIn(form.email.trim(), form.password)
-      navigate('/', { replace: true })
+      const profile = getStoredAuth()?.user || {}
+      const hasCompleteProfile = Boolean(
+        profile.name?.trim() &&
+        /^\d{10}$/.test(profile.phoneNumber || '') &&
+        profile.dateOfBirth &&
+        profile.gender &&
+        profile.bloodGroup &&
+        profile.state === 'Maharashtra' &&
+        profile.city &&
+        profile.area?.trim() &&
+        profile.schoolName?.trim() &&
+        profile.finalExamPercentage !== null &&
+        profile.finalExamPercentage !== undefined &&
+        profile.finalExamPercentage !== '',
+      )
+      navigate(hasCompleteProfile ? '/' : '/complete-profile', { replace: true })
     } catch (err) {
       setError(authError || err.message)
     } finally {
@@ -65,7 +81,22 @@ const Signinpage = () => {
     setIsGoogleLoading(true)
     try {
       await signInWithGoogle()
-      navigate('/complete-profile', { replace: true })
+      const profile = getStoredAuth()?.user || {}
+      const hasCompleteProfile = Boolean(
+        profile.name?.trim() &&
+        /^\d{10}$/.test(profile.phoneNumber || '') &&
+        profile.dateOfBirth &&
+        profile.gender &&
+        profile.bloodGroup &&
+        profile.state === 'Maharashtra' &&
+        profile.city &&
+        profile.area?.trim() &&
+        profile.schoolName?.trim() &&
+        profile.finalExamPercentage !== null &&
+        profile.finalExamPercentage !== undefined &&
+        profile.finalExamPercentage !== '',
+      )
+      navigate(hasCompleteProfile ? '/' : '/complete-profile', { replace: true })
       return
     } catch (err) {
       setError(authError || err.message)

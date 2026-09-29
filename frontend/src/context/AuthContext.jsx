@@ -1,12 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
   sendPasswordResetEmail,
   signInWithCustomToken,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateEmail as firebaseUpdateEmail,
   updateProfile,
 } from 'firebase/auth'
 import { firebaseAuth, googleProvider } from '../firebase'
@@ -29,6 +33,7 @@ const firebaseErrorMessage = (error) => {
     'auth/popup-closed-by-user': 'Google sign-in was cancelled.',
     'auth/popup-blocked': 'Please allow popups to sign in with Google.',
     'auth/network-request-failed': 'Network error. Please try again.',
+    'auth/requires-recent-login': 'Please verify your account again before changing the email address.',
   }
   return messages[error?.code] || error?.message || 'Authentication failed. Please try again.'
 }
@@ -39,19 +44,28 @@ export const AuthProvider = ({ children }) => {
   const [authLoading, setAuthLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const syncBackendSession = useCallback(async (firebaseUser, profile = {}) => {
+  const syncBackendSession = useCallback(async (firebaseUser, profile = {}, forceTokenRefresh = false) => {
     if (!firebaseUser) {
       if (getStoredAuth()?.provider !== 'legacy') clearAuth()
       return null
     }
-    const idToken = await firebaseUser.getIdToken()
+    const idToken = await firebaseUser.getIdToken(forceTokenRefresh)
     const data = await apiRequest('/api/auth/firebase', {
       method: 'POST',
       body: JSON.stringify({
         idToken,
+        firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
         name: profile.name || firebaseUser.displayName || '',
         email: firebaseUser.email || '',
         phoneNumber: profile.phoneNumber || firebaseUser.phoneNumber || '',
+        dateOfBirth: profile.dateOfBirth,
+        gender: profile.gender,
+        bloodGroup: profile.bloodGroup,
+        state: profile.state,
+        city: profile.city,
+        area: profile.area,
+        schoolName: profile.schoolName,
+        finalExamPercentage: profile.finalExamPercentage,
       }),
     })
     saveAuth({ token: data.token, user: { ...data.user, firebaseUid: firebaseUser.uid } })
@@ -145,12 +159,39 @@ export const AuthProvider = ({ children }) => {
     }
   }
   const completeProfile = (profile) => syncBackendSession(firebaseAuth.currentUser, profile)
+  const changeEmail = useCallback(async (newEmail, currentPassword = '') => {
+    const firebaseUser = firebaseAuth.currentUser
+    const normalizedEmail = String(newEmail || '').trim().toLowerCase()
+
+    if (!firebaseUser) {
+      throw new Error('Your authentication session has expired. Please sign in again.')
+    }
+
+    try {
+      const isGoogleUser = firebaseUser.providerData.some((provider) => provider.providerId === 'google.com')
+
+      if (isGoogleUser) {
+        await reauthenticateWithPopup(firebaseUser, googleProvider)
+      } else {
+        if (!currentPassword) {
+          throw new Error('Current password is required.')
+        }
+        const credential = EmailAuthProvider.credential(firebaseUser.email, currentPassword)
+        await reauthenticateWithCredential(firebaseUser, credential)
+      }
+
+      await firebaseUpdateEmail(firebaseUser, normalizedEmail)
+      return syncBackendSession(firebaseUser, {}, true)
+    } catch (authError) {
+      throw new Error(firebaseErrorMessage(authError))
+    }
+  }, [syncBackendSession])
   const logout = async () => {
     await signOut(firebaseAuth)
     clearAuth()
   }
 
-  const value = useMemo(() => ({ user, loading, authLoading, error, signUp, signIn, signInWithGoogle, resetPassword, completeProfile, logout }), [user, loading, authLoading, error])
+  const value = useMemo(() => ({ user, loading, authLoading, error, signUp, signIn, signInWithGoogle, resetPassword, completeProfile, changeEmail, logout }), [user, loading, authLoading, error, changeEmail])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 

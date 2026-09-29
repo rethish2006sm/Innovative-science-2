@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
   BarChart3,
   BookOpen,
+  ChevronDown,
   Flame,
   Info,
   LogIn,
@@ -18,6 +19,7 @@ import {
   Users,
   User,
   Menu,
+  MoreHorizontal,
   X,
   FlaskConical,
   FileText,
@@ -74,6 +76,12 @@ const navItems = [
   },
 ];
 
+const aboutNavItem = {
+  name: 'About',
+  path: '/about',
+  icon: <Info size={18} />,
+};
+
 const containerVariants = {
   hidden: { opacity: 0 },
   visible: {
@@ -98,8 +106,26 @@ const itemVariants = {
   },
 };
 
+// The drawer itself provides the entrance animation. Keeping its contents
+// static prevents a noticeable stagger every time the menu is opened.
+const drawerVariants = {
+  hidden: { opacity: 1 },
+  visible: { opacity: 1 },
+};
+
+const drawerItemVariants = {
+  hidden: { y: 0, opacity: 1 },
+  visible: { y: 0, opacity: 1 },
+};
+
 const Navbar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const [isScienceMenuOpen, setIsScienceMenuOpen] = useState(false);
+  const [selectedScience, setSelectedScience] = useState('Science 2');
+  const moreMenuRef = useRef(null);
+  const scienceMenuRef = useRef(null);
+  const mobileScienceMenuRef = useRef(null);
   const [auth, setAuth] = useState(() => getStoredAuth());
   const location = useLocation();
   const navigate = useNavigate();
@@ -107,6 +133,7 @@ const Navbar = () => {
   const isAdminPage = location.pathname === '/admin' || location.pathname === '/dashboard';
   const classButtonPath = auth?.user?.classId ? `/class/${auth.user.classId}` : '';
   const classButtonLabel = auth?.user?.className?.trim() || 'Class';
+  const profileInitial = (auth?.user?.name || auth?.user?.email || 'U').trim().charAt(0).toUpperCase();
   const hasClassButton = Boolean(classButtonPath);
   const hideContactForStudent = Boolean(auth?.user?.classId) && !auth?.user?.isAdmin;
   const homeNavItem = navItems.find((item) => item.name === 'Home');
@@ -118,6 +145,14 @@ const Navbar = () => {
       item.name !== 'Feedback' &&
       (!hideContactForStudent || item.name !== 'Contact'),
   );
+  const primaryDesktopNavItems = desktopNavItems.filter((item) => ['Chapters', 'PYQs', 'Battle Mode'].includes(item.name));
+  const moreDesktopNavItems = [
+    aboutNavItem,
+    ...navItems.filter(
+      (item) => !['Chapters', 'PYQs', 'Battle Mode'].includes(item.name)
+        && (!hideContactForStudent || item.name !== 'Contact'),
+    ),
+  ];
   const mobileNavItems = [
     homeNavItem,
     {
@@ -133,6 +168,8 @@ const Navbar = () => {
 
   useEffect(() => {
     setIsMenuOpen(false);
+    setIsMoreOpen(false);
+    setIsScienceMenuOpen(false);
     setAuth(getStoredAuth());
   }, [location]);
 
@@ -159,6 +196,35 @@ const Navbar = () => {
     };
   }, [isMenuOpen]);
 
+  useEffect(() => {
+    if (!isMoreOpen) return undefined;
+
+    const handleOutsideClick = (event) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target)) {
+        setIsMoreOpen(false);
+      }
+    };
+
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [isMoreOpen]);
+
+  useEffect(() => {
+    if (!isScienceMenuOpen) return undefined;
+
+    const handleOutsideClick = (event) => {
+      const clickedDesktopMenu = scienceMenuRef.current?.contains(event.target);
+      const clickedMobileMenu = mobileScienceMenuRef.current?.contains(event.target);
+
+      if (!clickedDesktopMenu && !clickedMobileMenu) {
+        setIsScienceMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [isScienceMenuOpen]);
+
   return (
     <>
       <motion.nav
@@ -168,7 +234,7 @@ const Navbar = () => {
           duration: 0.8,
           ease: [0.22, 1, 0.36, 1],
         }}
-        className="fixed top-0 left-0 z-50 w-full border-b border-teal-500/10 bg-[#0a0c1a]/70 backdrop-blur-2xl"
+        className="fixed top-0 left-0 z-[100] w-full border-b border-teal-500/10 bg-[#0a0c1a]/70 backdrop-blur-2xl"
       >
         {/* Animated Gradient Background */}
         <div className="absolute inset-0 overflow-hidden">
@@ -182,7 +248,7 @@ const Navbar = () => {
               repeat: Infinity,
               ease: 'linear',
             }}
-            className="absolute left-[-150px] top-[-150px] h-96 w-96 rounded-full bg-gradient-to-r from-teal-400/20 to-cyan-400/20 blur-3xl"
+            className="mobile-static-decoration absolute left-[-150px] top-[-150px] h-96 w-96 rounded-full bg-gradient-to-r from-teal-400/20 to-cyan-400/20 blur-3xl"
           />
           <motion.div
             animate={{
@@ -194,13 +260,13 @@ const Navbar = () => {
               repeat: Infinity,
               ease: 'linear',
             }}
-            className="absolute right-[-120px] bottom-[-120px] h-96 w-96 rounded-full bg-gradient-to-r from-rose-400/20 to-amber-400/20 blur-3xl"
+            className="mobile-static-decoration absolute right-[-120px] bottom-[-120px] h-96 w-96 rounded-full bg-gradient-to-r from-rose-400/20 to-amber-400/20 blur-3xl"
           />
           <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'dotPattern\' x=\'0\' y=\'0\' width=\'20\' height=\'20\' patternUnits=\'userSpaceOnUse\'%3E%3Ccircle fill=\'rgba(255,255,255,0.02)\' cx=\'2\' cy=\'2\' r=\'1.5\'%3E%3C/circle%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100%25\' height=\'100%25\' fill=\'url(%23dotPattern)\'%3E%3C/rect%3E%3C/svg%3E')] opacity-30" />
         </div>
 
         {/* Removed max-w restriction and padded the edges for edge-to-edge view */}
-        <div className="relative mx-auto flex h-24 w-full min-w-0 items-center gap-3 overflow-hidden px-3 sm:px-5 lg:px-6 xl:px-10">
+        <div className="relative mx-auto flex h-24 w-full min-w-0 items-center gap-3 overflow-visible px-3 sm:px-5 lg:px-6 xl:px-10">
           {/* Left Section: Mobile Menu + Logo */}
           <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3 lg:flex-[0_1_auto]">
             {/* Mobile Menu Toggle */}
@@ -260,6 +326,48 @@ const Navbar = () => {
                 <p className="text-[10px] tracking-wide text-slate-400 sm:text-xs md:text-sm">
                   Mr. Rethish Mudaliar
                 </p>
+                <div
+                  ref={mobileScienceMenuRef}
+                  onClick={(event) => event.stopPropagation()}
+                  className="relative z-[110] mt-0.5 lg:hidden"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setIsScienceMenuOpen((current) => !current)}
+                    className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold text-slate-300 backdrop-blur-sm transition hover:bg-white/10 hover:text-white sm:text-[10px]"
+                    aria-expanded={isScienceMenuOpen}
+                    aria-haspopup="menu"
+                  >
+                    {selectedScience}
+                    <ChevronDown className={`h-3 w-3 transition-transform ${isScienceMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  <AnimatePresence>
+                    {isScienceMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                        className="absolute left-0 top-[calc(100%+0.35rem)] z-[120] w-24 rounded-xl border border-white/10 bg-[#101426] p-1 shadow-2xl backdrop-blur-xl"
+                        role="menu"
+                      >
+                        {['Science 1', 'Science 2'].map((science) => (
+                          <button
+                            key={science}
+                            type="button"
+                            onClick={() => {
+                              setSelectedScience(science);
+                              setIsScienceMenuOpen(false);
+                            }}
+                            className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left text-[10px] font-semibold transition ${selectedScience === science ? 'bg-teal-500/20 text-teal-300' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+                            role="menuitem"
+                          >
+                            {science}
+                          </button>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             </NavLink>
           </div>
@@ -294,7 +402,7 @@ const Navbar = () => {
               ) : !auth ? (
                 <LogIn className="h-5 w-5" />
               ) : (
-                <User className="h-5 w-5" />
+                <span className="text-base font-black text-white">{profileInitial}</span>
               )}
             </motion.button>
 
@@ -305,18 +413,23 @@ const Navbar = () => {
               animate="visible"
               className="hidden min-w-0 flex-1 items-center justify-start gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden lg:flex lg:gap-1.5 xl:justify-end xl:gap-2"
             >
-              {desktopNavItems.map((item) => (
+              {primaryDesktopNavItems.map((item) => (
                 <motion.div key={item.name} variants={itemVariants} className="shrink-0">
                   <NavLink to={item.path}>
-                    {({ isActive }) => (
-                      <motion.div
+                    {({ isActive }) => {
+                      const isBattleMode = item.name === 'Battle Mode'
+
+                      return (
+                        <motion.div
                         whileHover={{
                           y: -3,
                           transition: { type: 'spring', stiffness: 300 },
                         }}
                         whileTap={{ scale: 0.95 }}
                         className={`group relative flex shrink-0 whitespace-nowrap overflow-hidden rounded-2xl px-2.5 py-2 text-xs transition-all duration-300 sm:px-3 sm:py-2.5 sm:text-sm xl:px-4 ${
-                          isActive
+                          isBattleMode
+                            ? 'desktop-battle-pill'
+                            : isActive
                             ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_25px_rgba(20,184,166,0.5)]'
                             : 'bg-white/5 text-slate-300 backdrop-blur-sm hover:bg-white/10 hover:text-white'
                         }`}
@@ -324,7 +437,7 @@ const Navbar = () => {
                         <div className="absolute inset-0 overflow-hidden rounded-2xl">
                           <div className="absolute left-[-120%] top-0 h-full w-[60%] rotate-12 bg-gradient-to-r from-transparent via-white/20 to-transparent transition-all duration-700 group-hover:left-[120%]" />
                         </div>
-                        {isActive && (
+                        {isActive && !isBattleMode && (
                           <motion.div
                             layoutId="activeNavIndicator"
                             className="absolute inset-x-4 bottom-0 h-0.5 bg-gradient-to-r from-teal-300 to-cyan-300 rounded-full"
@@ -332,15 +445,108 @@ const Navbar = () => {
                           />
                         )}
                         <div className="relative flex items-center gap-2 font-semibold whitespace-nowrap">
-                          {item.icon}
-                          {item.name}
+                          {isBattleMode ? (
+                            <>
+                              <Flame className="h-[18px] w-[18px]" strokeWidth={2.4} />
+                              <span>Battle Mode</span>
+                              <Swords className="h-[18px] w-[18px]" strokeWidth={2.2} />
+                            </>
+                          ) : (
+                            <>
+                              {item.icon}
+                              {item.name}
+                            </>
+                          )}
                         </div>
                       </motion.div>
-                    )}
+                      )
+                    }}
                   </NavLink>
                 </motion.div>
               ))}
             </motion.div>
+
+            <div className="hidden shrink-0 items-center gap-2 lg:flex">
+              <div
+                ref={scienceMenuRef}
+                onClick={(event) => event.stopPropagation()}
+                className="relative order-2"
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsScienceMenuOpen((current) => !current)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-white/5 px-3 py-2.5 text-sm font-semibold text-slate-300 backdrop-blur-sm transition hover:bg-white/10 hover:text-white xl:px-4"
+                  aria-expanded={isScienceMenuOpen}
+                  aria-haspopup="menu"
+                >
+                  {selectedScience}
+                  <ChevronDown className={`h-4 w-4 transition-transform ${isScienceMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+                <AnimatePresence>
+                  {isScienceMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                      className="absolute right-0 top-[calc(100%+0.75rem)] z-[70] w-36 rounded-2xl border border-white/10 bg-[#151827]/95 p-2 shadow-2xl backdrop-blur-xl"
+                      role="menu"
+                    >
+                      {['Science 1', 'Science 2'].map((science) => (
+                        <button
+                          key={science}
+                          type="button"
+                          onClick={() => {
+                            setSelectedScience(science);
+                            setIsScienceMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${selectedScience === science ? 'bg-teal-500/20 text-teal-300' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+                          role="menuitem"
+                        >
+                          {science}
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div ref={moreMenuRef} className="relative order-1">
+              <button
+                type="button"
+                onClick={() => setIsMoreOpen((current) => !current)}
+                className="inline-flex items-center gap-2 rounded-2xl bg-white/5 px-3 py-2.5 text-sm font-semibold text-slate-300 backdrop-blur-sm transition hover:bg-white/10 hover:text-white xl:px-4"
+                aria-expanded={isMoreOpen}
+                aria-haspopup="menu"
+              >
+                <MoreHorizontal className="h-5 w-5" />
+                More
+              </button>
+              <AnimatePresence>
+                {isMoreOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                    className="absolute right-0 top-[calc(100%+0.75rem)] z-[70] w-56 rounded-2xl border border-white/10 bg-[#151827]/95 p-2 shadow-2xl backdrop-blur-xl"
+                    role="menu"
+                  >
+                    {moreDesktopNavItems.map((item) => (
+                      <NavLink
+                        key={item.name}
+                        to={item.path}
+                        onClick={() => setIsMoreOpen(false)}
+                        className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${isActive ? 'bg-teal-500/20 text-teal-300' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+                        role="menuitem"
+                      >
+                        {item.icon}
+                        {item.name}
+                      </NavLink>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              </div>
+            </div>
 
             {hasClassButton && (
               <NavLink to={classButtonPath} aria-label={`Open ${classButtonLabel}`}>
@@ -415,19 +621,9 @@ const Navbar = () => {
                           className="relative z-10 h-full w-full rounded-full object-cover"
                         />
                       ) : (
-                        <motion.div
-                          animate={{
-                            y: [0, -2, 0],
-                          }}
-                          transition={{
-                            repeat: Infinity,
-                            duration: 2.5,
-                            ease: 'easeInOut',
-                          }}
-                          className="relative z-10"
-                        >
-                          <User className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6" />
-                        </motion.div>
+                        <span className="relative z-10 text-lg font-black text-white sm:text-xl md:text-2xl">
+                          {profileInitial}
+                        </span>
                       )}
                       {isActive && (
                         <motion.div
@@ -465,18 +661,18 @@ const Navbar = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.22, ease: 'easeOut' }}
+              transition={{ duration: 0.16, ease: 'linear' }}
               onClick={() => setIsMenuOpen(false)}
-              className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md"
+              className="mobile-menu-backdrop fixed inset-0 z-50 bg-black/60 backdrop-blur-md"
             />
 
             {/* Drawer */}
             <motion.div
-              initial={{ x: -32, opacity: 0, scale: 0.98 }}
-              animate={{ x: 0, opacity: 1, scale: 1 }}
-              exit={{ x: -32, opacity: 0, scale: 0.98 }}
-              transition={{ type: 'spring', stiffness: 280, damping: 28, mass: 0.9 }}
-              className="fixed top-0 left-0 z-50 flex h-[100dvh] w-[min(22rem,100vw)] origin-left transform-gpu flex-col overflow-hidden border-r border-teal-500/20 bg-gradient-to-b from-[#0a0c1a] to-[#0f1225] shadow-2xl shadow-black/30 backdrop-blur-xl"
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              transition={{ type: 'tween', duration: 0.18, ease: 'ease-out' }}
+              className="mobile-drawer fixed inset-0 z-50 m-auto flex h-[min(42rem,calc(100dvh-1.5rem))] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[2rem] border border-teal-500/20 bg-gradient-to-b from-[#0a0c1a] to-[#0f1225] shadow-2xl shadow-black/40 backdrop-blur-xl"
             >
               {/* Drawer Header */}
               <div className="flex shrink-0 items-center justify-between border-b border-white/10 p-5">
@@ -499,19 +695,19 @@ const Navbar = () => {
 
               {/* Drawer Navigation Items */}
               <motion.div
-                variants={containerVariants}
+                variants={drawerVariants}
                 initial="hidden"
                 animate="visible"
                 className="flex-1 overflow-y-auto px-5 py-5"
               >
                 <div className="flex flex-col gap-3">
                   {mobileNavItems.map((item) => (
-                    <motion.div key={item.name} variants={itemVariants}>
+                    <motion.div key={item.name} variants={drawerItemVariants}>
                       <NavLink to={item.path} onClick={() => setIsMenuOpen(false)}>
                         {({ isActive }) => {
                           const isBattleMode = item.name === 'Battle Mode'
                           const baseClasses = isBattleMode
-                            ? 'relative overflow-hidden border border-amber-400/30 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-amber-100 shadow-[0_0_22px_rgba(251,146,60,0.28)]'
+                            ? 'mobile-battle-pill relative overflow-hidden text-white'
                             : isActive
                               ? 'bg-gradient-to-r from-teal-500/20 to-cyan-500/20 text-teal-300 border-l-4 border-teal-400'
                               : 'text-slate-300 hover:bg-white/5 hover:text-white'
@@ -525,30 +721,19 @@ const Navbar = () => {
                                   aria-hidden="true"
                                   animate={{ x: ['-30%', '130%'] }}
                                   transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
-                                  className="absolute inset-y-0 left-0 w-1/2 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.18),transparent)]"
+                                  className="mobile-menu-live-effect absolute inset-y-0 left-0 w-1/2 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.18),transparent)]"
                                 />
                               )}
-                              <div className={`relative ${isBattleMode ? 'text-amber-200' : 'text-teal-400'}`}>
+                              <div className={`relative ${isBattleMode ? 'text-white' : 'text-teal-400'}`}>
                                 {isBattleMode ? (
-                                  <motion.div
-                                    animate={{ y: [0, -2, 0], rotate: [-6, 8, -6], scale: [1, 1.05, 1] }}
-                                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                                  >
-                                    <Flame size={18} />
-                                  </motion.div>
+                                  <Flame size={18} strokeWidth={2.4} />
                                 ) : (
                                   item.icon
                                 )}
                               </div>
                               <span className="relative flex-1">{item.name}</span>
                               {isBattleMode && (
-                                <motion.span
-                                  animate={{ scale: [1, 1.08, 1], opacity: [0.7, 1, 0.7] }}
-                                  transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
-                                  className="relative rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.2em] text-amber-100"
-                                >
-                                  Hot
-                                </motion.span>
+                                <Swords className="relative h-[18px] w-[18px] text-white" strokeWidth={2.2} />
                               )}
                             </div>
                           )
@@ -612,7 +797,9 @@ const Navbar = () => {
                                 className="h-8 w-8 rounded-full object-cover"
                               />
                             ) : (
-                              <User size={20} className="text-teal-400" />
+                              <span className="grid h-8 w-8 place-items-center rounded-full bg-teal-500/20 text-sm font-black text-teal-300">
+                                {profileInitial}
+                              </span>
                             )}
                             Profile
                           </div>

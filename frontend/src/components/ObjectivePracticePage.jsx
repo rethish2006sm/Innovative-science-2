@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Edit3, Flag, Plus, Sparkles, Trash2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Edit3, Flag, Play, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 import StarFeedbackModal from './StarFeedbackModal'
@@ -19,6 +19,7 @@ const emptyQuestionForm = {
   removeImage: false,
   answerImageFile: null,
   removeAnswerImage: false,
+  isBoardQuestion: false,
 }
 
 const trueFalseOptions = ['True', 'False']
@@ -66,16 +67,15 @@ const shuffleMatchOptions = (options) => {
 }
 
 const preparePracticeQuestions = (questions, isAdmin, objectiveType = '') => {
-  const preparedQuestions = questions.map((question) => ({
-    ...question,
-    displayOptions: isAdmin
-      ? question.options.map((option, index) => ({ text: option, originalIndex: index }))
-      : objectiveType === 'match-the-following'
-        ? shuffleMatchOptions(question.options)
-        : shuffleArray(question.options.map((option, index) => ({ text: option, originalIndex: index }))),
-  }))
+  return questions.map((question) => {
+    const options = Array.isArray(question.options) ? question.options : []
 
-  return isAdmin ? preparedQuestions : shuffleArray(preparedQuestions)
+    return {
+      ...question,
+      options,
+      displayOptions: options.map((option, index) => ({ text: option, originalIndex: index })),
+    }
+  })
 }
 
 const shuffleDraftOptions = (draft) => {
@@ -157,6 +157,7 @@ const translatePracticeQuestions = async (questions = []) => questions
 
 const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions }) => {
   const { chapterNumber, topicId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const [topic, setTopic] = useState(null)
   const [chapter, setChapter] = useState(null)
@@ -164,8 +165,11 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [questions, setQuestions] = useState([])
   const [bestScore, setBestScore] = useState(null)
   const [answers, setAnswers] = useState({})
+  const [submittedQuestions, setSubmittedQuestions] = useState({})
+  const [correctAnswersByQuestion, setCorrectAnswersByQuestion] = useState({})
   const [markedLater, setMarkedLater] = useState({})
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
+  const [isSingleQuestionFlow, setIsSingleQuestionFlow] = useState(false)
   const [result, setResult] = useState(null)
   const [mode, setMode] = useState('dashboard')
   const [isDashboardOpen, setIsDashboardOpen] = useState(false)
@@ -193,19 +197,27 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
+  const practiceHistoryEntry = useRef(false)
   const [pendingResult, setPendingResult] = useState(null)
   const [feedbackPromptStage, setFeedbackPromptStage] = useState('')
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const isSignedIn = Boolean(auth?.token)
+  const boardOnly = searchParams.get('boardOnly') === '1' || searchParams.get('boardOnly') === 'true'
   const isTrueFalse = objectiveType === 'true-or-false'
   const isCorrelation = objectiveType === 'correlation'
   const isMatching = objectiveType === 'match-the-following'
   const isCompleteTable = objectiveType === 'complete-the-tables'
   const isDiagram = objectiveType === 'diagram-based-question'
   const isIdentifySymbol = objectiveType === 'identify-symbol'
+  const supportsQuestionImage = isCompleteTable || isDiagram || isIdentifySymbol
   const supportsAiDrafts = !isCompleteTable && !isDiagram && !isIdentifySymbol
-  const isDoneOnlyDone = (isCompleteTable || isDiagram) && Boolean(bestScore?.isDone)
+  const savedQuestionTotal = Number(bestScore?.totalQuestions || 0)
+  const savedAttemptedQuestions = Number(bestScore?.attemptedQuestions ?? (bestScore?.isDone && savedQuestionTotal >= questions.length ? questions.length : 0))
+  const isDoneOnlyDone = (isCompleteTable || isDiagram)
+    && Boolean(bestScore?.isDone)
+    && savedQuestionTotal >= questions.length
+    && savedAttemptedQuestions >= questions.length
 
   const isQuestionAnswered = (question) => {
     const answer = answers[question._id]
@@ -219,22 +231,25 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       return Boolean(doneStates[question._id])
     }
 
-    return answer !== undefined
+    return Boolean(submittedQuestions[question._id] || (!isSingleQuestionFlow && answer !== undefined))
   }
 
   const answeredCount = questions.filter(isQuestionAnswered).length
   const markedLaterCount = useMemo(() => Object.keys(markedLater).length, [markedLater])
   const remainingCount = Math.max(questions.length - answeredCount, 0)
   const currentQuestion = questions[currentQuestionIndex]
+  const currentQuestionSubmitted = Boolean(currentQuestion && submittedQuestions[currentQuestion._id])
+  const currentCorrectAnswer = currentQuestion ? correctAnswersByQuestion[currentQuestion._id] : null
   const topicParagraph = topic?.studyText || topic?.description || ''
   const progressPercent = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0
   const totalQuestionCount = questions.length
-  const practiceCount = Number(bestScore?.attemptCount || 0)
   const isCompleteTableDone = isCompleteTable && isDoneOnlyDone
-  const topScore = Number(bestScore?.bestScore || 0)
-  const lowScore = practiceCount ? Number(bestScore?.lowScore ?? topScore) : 0
-  const topScorePercent = totalQuestionCount ? Math.round((topScore / totalQuestionCount) * 100) : 0
-  const lowScorePercent = totalQuestionCount ? Math.round((lowScore / totalQuestionCount) * 100) : 0
+  const practicedQuestionIds = new Set([
+    ...(bestScore?.attemptedQuestionIds || []).map(String),
+    ...Object.keys(submittedQuestions),
+  ])
+  const isPracticeCompleted = questions.length > 0
+    && questions.every((question) => practicedQuestionIds.has(String(question._id)))
   const dashboardFilters = [
     { id: 'all', label: 'All', count: questions.length },
     { id: 'attempted', label: 'Attempted', count: answeredCount },
@@ -259,7 +274,8 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setError('')
 
     try {
-      const data = await apiRequest(`/api/topics/${topicId}/objective-types/${objectiveType}/practice`)
+      const boardQuery = boardOnly ? '?boardOnly=true' : ''
+      const data = await apiRequest(`/api/topics/${topicId}/objective-types/${objectiveType}/practice${boardQuery}`)
       const nextTopic = {
         ...(data.topic || {}),
         sourceName: data.topic?.name || '',
@@ -303,7 +319,20 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
   useEffect(() => {
     loadPractice()
-  }, [topicId, objectiveType])
+  }, [topicId, objectiveType, boardOnly])
+
+  useEffect(() => {
+    const handleBrowserBack = () => {
+      if (mode !== 'practice' && mode !== 'result') return
+
+      practiceHistoryEntry.current = false
+      setMode('dashboard')
+      setIsDashboardOpen(false)
+    }
+
+    window.addEventListener('popstate', handleBrowserBack)
+    return () => window.removeEventListener('popstate', handleBrowserBack)
+  }, [mode])
 
   const updateOption = (index, value) => {
     const nextOptions = [...form.options]
@@ -356,23 +385,25 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
   const startEditQuestion = (question) => {
     if (isMatching) {
+      const questionOptions = Array.isArray(question.options) ? question.options : []
       const nextPairs = question.pairs?.length
         ? question.pairs.map((pair, index) => ({
           left: pair.left,
-          right: pair.right || question.options?.[question.correctOptions?.[index] ?? index] || '',
+          right: pair.right || questionOptions[question.correctOptions?.[index] ?? index] || '',
         }))
-        : question.options.map((option, index) => ({ left: `Item ${index + 1}`, right: option }))
+        : questionOptions.map((option, index) => ({ left: `Item ${index + 1}`, right: option }))
 
       setEditingQuestion(question)
       setForm({
         question: question.question,
-        options: question.options,
+        options: questionOptions,
         pairs: nextPairs,
         correctOption: '0',
         imageFile: null,
         removeImage: false,
         answerImageFile: null,
         removeAnswerImage: false,
+        isBoardQuestion: Boolean(question.isBoardQuestion),
       })
       return
     }
@@ -382,16 +413,20 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       setForm({
         question: question.question,
         options: ['Done', 'Show answer'],
+        pairs: emptyQuestionForm.pairs,
         correctOption: '0',
         imageFile: null,
         removeImage: false,
         answerImageFile: null,
         removeAnswerImage: false,
+        isBoardQuestion: Boolean(question.isBoardQuestion),
       })
       return
     }
 
-    const nextOptions = isTrueFalse ? trueFalseOptions : [...question.options]
+    const nextOptions = isTrueFalse
+      ? trueFalseOptions
+      : Array.isArray(question.options) ? [...question.options] : []
 
     if (!isTrueFalse) {
       while (nextOptions.length < 4) {
@@ -403,11 +438,13 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setForm({
       question: question.question,
       options: nextOptions,
+      pairs: emptyQuestionForm.pairs,
       correctOption: String(question.correctOption),
       imageFile: null,
       removeImage: false,
       answerImageFile: null,
       removeAnswerImage: false,
+      isBoardQuestion: Boolean(question.isBoardQuestion),
     })
   }
 
@@ -421,6 +458,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       removeImage: false,
       answerImageFile: null,
       removeAnswerImage: false,
+      isBoardQuestion: false,
     })
   }
 
@@ -583,7 +621,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     try {
       if (isIdentifySymbol) {
         const hasExistingImage = Boolean(editingQuestion?.imageUrl && !form.removeImage)
-        const optionCount = form.options.map((option) => String(option || '').trim()).filter(Boolean).length
+        const optionCount = (form.options || []).map((option) => String(option || '').trim()).filter(Boolean).length
 
         if (!form.imageFile && !hasExistingImage) {
           throw new Error('Please upload a symbol image.')
@@ -598,14 +636,14 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
         throw new Error('Please select the correct answer.')
       }
 
-      if (isCorrelation && form.options.map((option) => option.trim()).filter(Boolean).length !== 4) {
+      if (isCorrelation && (form.options || []).map((option) => option.trim()).filter(Boolean).length !== 4) {
         throw new Error('Correlation questions must have exactly four options.')
       }
 
-      const cleanedPairs = form.pairs
+      const cleanedPairs = (form.pairs || [])
         .map((pair) => ({
-          left: pair.left.trim(),
-          right: pair.right.trim(),
+          left: String(pair.left || '').trim(),
+          right: String(pair.right || '').trim(),
         }))
         .filter((pair) => pair.left || pair.right)
 
@@ -624,12 +662,14 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           options: cleanedPairs.map((pair) => pair.right),
           correctOptions: cleanedPairs.map((_, index) => index),
           imageFile: form.imageFile,
+          isBoardQuestion: form.isBoardQuestion,
           removeImage: form.removeImage,
         } : isTrueFalse ? {
           question: form.question,
           options: trueFalseOptions,
           correctOption: form.correctOption,
           imageFile: form.imageFile,
+          isBoardQuestion: form.isBoardQuestion,
           removeImage: form.removeImage,
           answerImageFile: form.answerImageFile,
           removeAnswerImage: form.removeAnswerImage,
@@ -638,6 +678,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           options: ['Done', 'View answer'],
           correctOption: 0,
           imageFile: form.imageFile,
+          isBoardQuestion: form.isBoardQuestion,
           removeImage: form.removeImage,
           answerImageFile: form.answerImageFile,
           removeAnswerImage: form.removeAnswerImage,
@@ -646,14 +687,16 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           options: ['Done', 'Show answer'],
           correctOption: 0,
           imageFile: form.imageFile,
+          isBoardQuestion: form.isBoardQuestion,
           removeImage: form.removeImage,
           answerImageFile: form.answerImageFile,
           removeAnswerImage: form.removeAnswerImage,
         } : isIdentifySymbol ? {
           question: form.question,
-          options: form.options.map((option) => String(option || '').trim()).filter(Boolean),
+          options: (form.options || []).map((option) => String(option || '').trim()).filter(Boolean),
           correctOption: form.correctOption,
           imageFile: form.imageFile,
+          isBoardQuestion: form.isBoardQuestion,
           removeImage: form.removeImage,
         } : form
 
@@ -804,9 +847,37 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     }
   }
 
-  const startPractice = () => {
-    setQuestions((currentQuestions) => preparePracticeQuestions(currentQuestions, isAdmin, objectiveType))
+  const toggleBoardQuestion = async (question) => {
+    setIsSaving(true)
+    setError('')
+
+    try {
+      await apiRequest(`/api/objective-questions/${question._id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isBoardQuestion: !question.isBoardQuestion }),
+      })
+      await loadPractice()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const startPractice = (singleQuestionFlow = false) => {
+    if (!practiceHistoryEntry.current) {
+      window.history.pushState(
+        { ...(window.history.state || {}), objectivePracticeMode: true },
+        '',
+        window.location.href,
+      )
+      practiceHistoryEntry.current = true
+    }
+
     setAnswers({})
+    setSubmittedQuestions({})
+    setCorrectAnswersByQuestion({})
+    setIsSingleQuestionFlow(singleQuestionFlow)
     setMarkedLater({})
     setRevealedAnswers({})
     setDoneStates({})
@@ -817,6 +888,17 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setDashboardFilter('all')
     setIsDashboardOpen(false)
     setMode('practice')
+  }
+
+  const returnToQuestionList = () => {
+    if (practiceHistoryEntry.current) {
+      practiceHistoryEntry.current = false
+      window.history.back()
+      return
+    }
+
+    setMode('dashboard')
+    setIsDashboardOpen(false)
   }
 
   const selectAnswer = (questionId, optionIndex) => {
@@ -916,6 +998,11 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setIsDashboardOpen(false)
   }
 
+  const openQuestionFromDashboard = (index) => {
+    startPractice(true)
+    setCurrentQuestionIndex(index)
+  }
+
   const submitPractice = async () => {
     if (isCompleteTable) {
       return
@@ -962,6 +1049,49 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           setFeedbackPromptStage('before')
         }
       }
+      window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const submitCurrentQuestion = async () => {
+    if (!currentQuestion || isCompleteTable || isDiagram) return
+
+    const selectedOption = answers[currentQuestion._id]
+    const hasAnswer = isMatching
+      ? Array.isArray(selectedOption) && selectedOption.length > 0
+      : selectedOption !== undefined
+
+    if (!hasAnswer) {
+      setError('Select an answer before submitting this question.')
+      return
+    }
+
+    if (!isSignedIn) {
+      setError('Please sign in to submit this question and save your progress.')
+      return
+    }
+
+    setIsSaving(true)
+    setError('')
+
+    try {
+      const data = await apiRequest(`/api/objective-types/${objective._id}/submit`, {
+        method: 'POST',
+        body: JSON.stringify({
+          answers: [{
+            questionId: currentQuestion._id,
+            selectedOption,
+          }],
+        }),
+      })
+      const correctAnswer = (data.correctAnswers || []).find((item) => String(item.questionId) === String(currentQuestion._id))
+      setCorrectAnswersByQuestion((current) => ({ ...current, [currentQuestion._id]: correctAnswer }))
+      setSubmittedQuestions((current) => ({ ...current, [currentQuestion._id]: true }))
+      setBestScore(data.bestScore)
       window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
     } catch (err) {
       setError(err.message)
@@ -1018,33 +1148,62 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   }
 
   return (
-    <section className={`min-h-screen bg-[#fbfbfa] text-stone-800 ${mode === 'practice' ? 'px-2 py-3 sm:px-3 lg:px-4' : 'px-4 py-8 sm:px-6 lg:px-10'}`}>
-      <div className={`mx-auto ${mode === 'practice' || mode === 'dashboard' ? 'w-full max-w-none' : 'max-w-6xl'}`}>
-        <Link to={`/chapters/${chapterNumber}/topics/${topicId}/objectives`} className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-stone-500 transition hover:text-stone-900">
-          <ArrowLeft className="h-4 w-4" />
-          Back to objective types
-        </Link>
-
-        <div className={`${mode === 'practice' ? 'mt-3 flex flex-wrap items-end justify-between gap-3 border-b border-stone-200 pb-3' : 'mt-6 border-b border-stone-200 pb-8'}`}>
-          <div className={`${mode === 'practice' ? 'hidden' : 'grid'} h-14 w-14 place-items-center rounded-2xl bg-stone-900 text-white`}>
-            <ClipboardList className="h-6 w-6" />
+    <section className={`min-h-screen bg-[#fbfbfa] text-stone-800 ${mode === 'practice' ? 'px-2 py-1 sm:px-3 lg:px-4' : 'px-3 py-2 sm:px-5 sm:py-3 lg:px-6'}`}>
+      <div className={`mx-auto w-full ${mode === 'practice' || mode === 'dashboard' ? 'max-w-[1180px]' : 'max-w-6xl'}`}>
+        {mode === 'dashboard' ? (
+          <Link
+            to={`/chapters/${chapterNumber}/topics/${topicId}/objectives`}
+            className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
+          >
+            <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
+            <span>Back</span>
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={returnToQuestionList}
+            className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
+          >
+            <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
+            <span>Back</span>
+          </button>
+        )}
+        <div className={`${mode === 'practice' ? 'mt-3' : 'mt-4 sm:mt-5'} flex items-center gap-3 border-b border-stone-200 pb-3 sm:gap-4 sm:pb-4`}>
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-stone-900 text-white sm:h-14 sm:w-14">
+            <ClipboardList className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
           <div>
-            <p className={`${mode === 'practice' ? 'mt-0' : 'mt-5'} font-mono text-xs uppercase tracking-widest text-stone-400`}>
+            <p className="font-mono text-[10px] uppercase tracking-widest text-stone-400 sm:text-xs">
               Chapter {chapter?.number?.toString().padStart(2, '0')} / Topic {topic?.number?.toString().padStart(2, '0')}
             </p>
-            <h1 className={`${mode === 'practice' ? 'mt-1 text-3xl sm:text-4xl' : 'mt-2 text-4xl sm:text-5xl'} font-serif tracking-tight text-stone-950`}>
+            <h1 className="mt-1 text-3xl font-serif tracking-tight text-stone-950 sm:text-4xl">
               {title}
             </h1>
-            <p className={`${mode === 'practice' ? 'mt-1 max-w-xl text-xs sm:text-sm' : 'mt-4 max-w-2xl text-sm sm:text-base'} leading-6 text-stone-500`}>
-              {subtitle}
-            </p>
           </div>
           {error && (
             <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-bold text-red-500">
               {error}
             </p>
           )}
+        </div>
+
+        <div className="mt-4 inline-flex w-fit rounded-full border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(15,23,42,0.12)]">
+          {[
+            { id: 'all', label: 'All' },
+            { id: 'board', label: 'Board question' },
+          ].map((filter) => {
+            const selected = filter.id === 'board' ? boardOnly : !boardOnly
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => setSearchParams(filter.id === 'board' ? { boardOnly: '1' } : {})}
+                className={`whitespace-nowrap rounded-full px-4 py-2 text-xs font-black transition sm:text-sm ${selected ? 'bg-gradient-to-r from-orange-500 via-pink-500 to-amber-400 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                {filter.label}
+              </button>
+            )
+          })}
         </div>
 
         {isAdmin ? (
@@ -1089,6 +1248,15 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                       </button>
                       <button
                         type="button"
+                        onClick={() => toggleBoardQuestion(question)}
+                        disabled={isSaving}
+                        className={`rounded-full border px-3 text-[10px] font-black uppercase tracking-wide transition disabled:cursor-not-allowed disabled:opacity-50 ${question.isBoardQuestion ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-stone-200 bg-white text-stone-500 hover:bg-stone-100 hover:text-stone-900'}`}
+                        aria-label={question.isBoardQuestion ? 'Remove board question status' : 'Mark as board question'}
+                      >
+                        {question.isBoardQuestion ? 'Board' : 'Make board'}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => deleteQuestion(question._id)}
                         className="grid h-10 w-10 place-items-center rounded-full border border-red-100 bg-white text-red-500 transition hover:bg-red-50"
                         aria-label="Delete question"
@@ -1107,7 +1275,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                       <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-semibold text-stone-600">
                         Diagram question with answer image.
                       </div>
-                    ) : question.options.map((option, optionIndex) => (
+                    ) : (question.options || []).map((option, optionIndex) => (
                       <div key={option} className={`rounded-xl border px-4 py-3 text-sm font-semibold ${question.correctOption === optionIndex ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-stone-200 bg-stone-50 text-stone-600'}`}>
                         {String.fromCharCode(65 + optionIndex)}. {option}
                       </div>
@@ -1149,30 +1317,34 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                     className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-stone-900 outline-none transition focus:border-stone-500 focus:bg-white"
                   />
                 </label>
-                <label className="mt-4 grid gap-2 text-sm font-bold text-stone-600">
-                  Question photo
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) => setForm({ ...form, imageFile: event.target.files?.[0] || null, removeImage: false })}
-                    className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700 file:mr-4 file:rounded-xl file:border-0 file:bg-stone-900 file:px-4 file:py-2 file:text-sm file:font-bold file:text-white"
-                  />
-                </label>
-                {editingQuestion?.imageUrl && !form.removeImage && !form.imageFile && (
-                  <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50 p-3">
-                    <img
-                      src={assetUrl(editingQuestion.imageUrl)}
-                      alt=""
-                      className="max-h-48 w-full rounded-xl object-contain"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, removeImage: true })}
-                      className="mt-3 h-10 w-full rounded-xl border border-red-100 bg-white text-sm font-bold text-red-500 transition hover:bg-red-50"
-                    >
-                      Remove photo
-                    </button>
-                  </div>
+                {supportsQuestionImage && (
+                  <>
+                    <label className="mt-4 grid gap-2 text-sm font-bold text-stone-600">
+                      Question photo
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) => setForm({ ...form, imageFile: event.target.files?.[0] || null, removeImage: false })}
+                        className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700 file:mr-4 file:rounded-xl file:border-0 file:bg-stone-900 file:px-4 file:py-2 file:text-sm file:font-bold file:text-white"
+                      />
+                    </label>
+                    {editingQuestion?.imageUrl && !form.removeImage && !form.imageFile && (
+                      <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                        <img
+                          src={assetUrl(editingQuestion.imageUrl)}
+                          alt=""
+                          className="max-h-48 w-full rounded-xl object-contain"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, removeImage: true })}
+                          className="mt-3 h-10 w-full rounded-xl border border-red-100 bg-white text-sm font-bold text-red-500 transition hover:bg-red-50"
+                        >
+                          Remove photo
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
                 {(isCompleteTable || isDiagram) && (
                   <>
@@ -1210,7 +1382,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                       <span>Answer side</span>
                       <span />
                     </div>
-                    {form.pairs.map((pair, index) => (
+                    {(form.pairs || []).map((pair, index) => (
                       <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
                         <input
                           required={index < 2}
@@ -1263,7 +1435,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                   </div>
                 ) : (
                   <div className="mt-4 grid gap-3">
-                    {form.options.map((option, index) => (
+                    {(form.options || []).map((option, index) => (
                       <label key={index} className="grid gap-2 text-sm font-bold text-stone-600">
                         Option {String.fromCharCode(65 + index)}
                         <div className="flex gap-2">
@@ -1285,6 +1457,15 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                     ))}
                   </div>
                 )}
+                <label className="mt-5 flex cursor-pointer items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.isBoardQuestion)}
+                    onChange={(event) => setForm({ ...form, isBoardQuestion: event.target.checked })}
+                    className="h-4 w-4 accent-amber-600"
+                  />
+                  <span>Board question</span>
+                </label>
                 <button type="submit" disabled={isSaving} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-stone-900 font-bold text-white transition hover:bg-black disabled:opacity-60">
                   <Plus className="h-4 w-4" />
                   {isSaving ? 'Saving...' : editingQuestion ? 'Update question' : 'Add question'}
@@ -1419,7 +1600,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                           </div>
                         ) : (
                           <div className="mt-3 grid gap-2">
-                            {draft.options.map((option, optionIndex) => (
+                            {(draft.options || []).map((option, optionIndex) => (
                               <div key={optionIndex} className="flex gap-2">
                                 <input
                                   value={option}
@@ -1445,93 +1626,74 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
             </div>
           </div>
         ) : (
-          <div className={mode === 'practice' ? 'mt-3' : 'mt-8'}>
+          <div className={mode === 'practice' ? 'mt-3' : 'mt-4 sm:mt-5'}>
             {mode === 'dashboard' && (
-              <div className="grid gap-4">
-                <div className="grid gap-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-                  <div>
-                    <h2 className="font-serif text-3xl text-stone-950">
-                      {isCompleteTable ? 'Completion Dashboard' : 'Practice Dashboard'}
-                    </h2>
-                    <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-500">
-                      {isCompleteTable
-                        ? 'View the table question and answer, then mark the section done.'
-                        : 'Start a fresh attempt, submit once, and your practice history will update automatically.'}
-                    </p>
-                    {!isSignedIn && (
-                      <p className="mt-3 text-sm font-semibold text-red-500">
-                        {isCompleteTable ? 'Please sign in to mark this section done.' : 'Please sign in to start practice and save marks.'}
-                      </p>
-                    )}
-                    {isDoneOnlyDone && (
-                      <p className="mt-3 inline-flex rounded-xl bg-emerald-50 px-3 py-2 text-sm font-black uppercase tracking-wide text-emerald-700">
-                        Done
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={startPractice}
-                    disabled={!questions.length || !isSignedIn}
-                    className="h-12 rounded-2xl bg-stone-900 px-7 font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                  >
+              <div className="grid gap-3">
+                <button
+                  type="button"
+                  onClick={() => startPractice(false)}
+                  disabled={!questions.length || !isSignedIn}
+                  className={`group relative mx-auto flex w-full max-w-4xl cursor-pointer flex-row items-center gap-2 overflow-hidden rounded-[1.5rem] p-2 text-left text-white shadow-[0_12px_26px_rgba(8,47,73,0.28)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_16px_32px_rgba(8,47,73,0.36)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 sm:gap-4 sm:p-3 ${isPracticeCompleted ? 'bg-[#2f7541]' : 'bg-cyan-800'}`}
+                >
+                  <span className="relative z-10 flex min-w-0 items-center gap-2 sm:gap-4">
+                    <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-white/10 ring-4 ring-white/10 transition-transform duration-300 group-hover:scale-105 sm:h-16 sm:w-16 sm:ring-8">
+                      <Play className="ml-0.5 h-5 w-5 fill-white sm:h-7 sm:w-7" />
+                    </span>
+                    <span className="h-9 w-px shrink-0 bg-white/35 sm:h-12" />
+                    <span>
+                      <span className="block whitespace-nowrap text-[8px] font-black uppercase tracking-[0.14em] text-white/85 sm:text-[10px] sm:tracking-[0.2em]">Total Questions</span>
+                      <span className="mt-0.5 block text-2xl font-black leading-none sm:text-3xl">{totalQuestionCount}</span>
+                    </span>
+                  </span>
+                  <span className={`relative z-10 inline-flex min-h-12 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-sm font-black shadow-sm transition-transform duration-300 group-hover:scale-[1.02] sm:min-w-64 sm:px-6 sm:text-lg ${isPracticeCompleted ? 'text-[#2f7541]' : 'text-cyan-800'}`}>
                     Start Practice
-                  </button>
+                  </span>
+                </button>
+
+                <div className="grid gap-2">
+                  {questions.map((question, index) => {
+                    const isSubmitted = Boolean(submittedQuestions[question._id] || bestScore?.attemptedQuestionIds?.includes(String(question._id)) || bestScore?.isDone)
+                    const storedCorrectAnswer = correctAnswersByQuestion[question._id]
+                    const storedQuestionResult = bestScore?.questionResults?.find((item) => String(item.questionId) === String(question._id))
+                    const isCorrect = isSubmitted && (storedQuestionResult ? Boolean(storedQuestionResult.isCorrect) : storedCorrectAnswer && (
+                      isMatching
+                        ? Array.isArray(answers[question._id])
+                          && Array.isArray(storedCorrectAnswer.correctOptions)
+                          && answers[question._id].length === storedCorrectAnswer.correctOptions.length
+                          && answers[question._id].every((optionIndex, pairIndex) => optionIndex === storedCorrectAnswer.correctOptions[pairIndex])
+                        : answers[question._id] === storedCorrectAnswer.correctOption
+                    ))
+                    const hasStoredResult = Boolean(storedQuestionResult || storedCorrectAnswer)
+                    const questionStatusClass = isCorrect
+                      ? 'border-emerald-200 bg-emerald-100 text-emerald-950 hover:border-emerald-300 hover:bg-emerald-200'
+                      : isSubmitted && hasStoredResult
+                        ? 'border-red-200 bg-red-100 text-red-950 hover:border-red-300 hover:bg-red-200'
+                        : question.isBoardQuestion
+                          ? 'border-amber-300 bg-amber-50 text-stone-900 hover:border-amber-400 hover:bg-amber-100'
+                          : 'border-stone-200 bg-white text-stone-900 hover:border-cyan-300'
+
+                    return (
+                      <button
+                        key={question._id}
+                        type="button"
+                        onClick={() => openQuestionFromDashboard(index)}
+                        className={`group flex min-h-16 items-center gap-3 rounded-2xl border px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md sm:gap-4 sm:px-5 ${questionStatusClass}`}
+                      >
+                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-black ${isCorrect ? 'bg-emerald-200 text-emerald-800' : isSubmitted && hasStoredResult ? 'bg-red-200 text-red-800' : 'bg-cyan-50 text-cyan-700'}`}>
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <span className="min-w-0 flex-1 break-words text-sm font-bold leading-6 text-stone-900 sm:text-base">
+                          {question.question || 'Question'}
+                        </span>
+                        {question.isBoardQuestion && <span className="shrink-0 rounded-full bg-amber-200 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-amber-900">Board</span>}
+                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full transition ${isCorrect ? 'bg-emerald-200 text-emerald-800 group-hover:bg-emerald-300' : isSubmitted && hasStoredResult ? 'bg-red-200 text-red-800 group-hover:bg-red-300' : 'bg-cyan-50 text-cyan-700 group-hover:bg-cyan-600 group-hover:text-white'}`}>
+                          <Play className="ml-0.5 h-4 w-4 fill-current" />
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
 
-                {isCompleteTable ? (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                      <p className="font-mono text-xs uppercase tracking-widest text-stone-400">Total Questions</p>
-                      <p className="mt-2 font-serif text-4xl text-stone-950">{totalQuestionCount}</p>
-                    </div>
-                    <div className={`rounded-2xl border p-5 ${isDoneOnlyDone ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
-                      <p className={`font-mono text-xs uppercase tracking-widest ${isDoneOnlyDone ? 'text-emerald-700' : 'text-amber-700'}`}>
-                        Status
-                      </p>
-                      <p className={`mt-2 font-serif text-4xl ${isDoneOnlyDone ? 'text-emerald-950' : 'text-amber-950'}`}>
-                        {isDoneOnlyDone ? 'Done' : 'Pending'}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                    <p className="font-mono text-xs uppercase tracking-widest text-stone-400">Total Questions</p>
-                    <p className="mt-2 font-serif text-4xl text-stone-950">{totalQuestionCount}</p>
-                    <p className="mt-2 text-xs font-semibold text-stone-500">Available in this practice set</p>
-                  </div>
-                  <div className="rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
-                    <p className="font-mono text-xs uppercase tracking-widest text-cyan-700">Practiced</p>
-                    <p className="mt-2 font-serif text-4xl text-cyan-950">{practiceCount}</p>
-                    <p className="mt-2 text-xs font-semibold text-cyan-700">Total submitted attempt{practiceCount === 1 ? '' : 's'}</p>
-                  </div>
-                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-mono text-xs uppercase tracking-widest text-emerald-700">Top Score</p>
-                        <p className="mt-2 font-serif text-4xl text-emerald-950">{topScore}/{totalQuestionCount}</p>
-                      </div>
-                      <span className="rounded-xl bg-emerald-500 px-3 py-2 text-sm font-black text-white">{topScorePercent}%</span>
-                    </div>
-                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-emerald-100">
-                      <div className="h-full rounded-full bg-emerald-500" style={{ width: `${topScorePercent}%` }} />
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-mono text-xs uppercase tracking-widest text-amber-700">Low Score</p>
-                        <p className="mt-2 font-serif text-4xl text-amber-950">{lowScore}/{totalQuestionCount}</p>
-                      </div>
-                      <span className="rounded-xl bg-amber-400 px-3 py-2 text-sm font-black text-amber-950">{lowScorePercent}%</span>
-                    </div>
-                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-amber-100">
-                      <div className="h-full rounded-full bg-amber-400" style={{ width: `${lowScorePercent}%` }} />
-                    </div>
-                  </div>
-                </div>
-                )}
               </div>
             )}
 
@@ -1543,7 +1705,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                       <div className="min-w-0 flex-1">
                         <div className="mb-2 flex items-center justify-between text-xs font-bold uppercase tracking-widest text-stone-400">
                           <span>{isCompleteTable ? 'Status' : 'Progress'}</span>
-                          <span>{isDoneOnlyDone ? 'Done' : isCompleteTable ? 'Pending' : `${progressPercent}%`}</span>
+                          <span>{isCompleteTable ? (isDoneOnlyDone ? '100%' : '0%') : `${progressPercent}%`}</span>
                         </div>
                         <div className="h-2 overflow-hidden rounded-full bg-stone-100">
                           <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${isCompleteTable ? (isDoneOnlyDone ? 100 : 0) : progressPercent}%` }} />
@@ -1575,12 +1737,13 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                   </div>
 
                   {currentQuestion && (
-                    <article className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
+                    <article className={`rounded-2xl border p-4 shadow-sm sm:p-5 ${currentQuestion.isBoardQuestion ? 'border-amber-300 bg-amber-50/70' : 'border-stone-200 bg-white'}`}>
                       <div className="flex flex-col gap-3">
                         <div className="flex items-start justify-between gap-3">
                           <p className="font-mono text-xs font-bold uppercase tracking-widest text-stone-400">
                             Question {String(currentQuestionIndex + 1).padStart(2, '0')} of {questions.length}
                           </p>
+                          {currentQuestion.isBoardQuestion && <span className="whitespace-nowrap rounded-full bg-amber-200 px-2.5 py-1 text-[10px] font-black uppercase leading-none tracking-wide text-amber-900">Board question</span>}
                           <button
                             type="button"
                             onClick={() => toggleMarkLater(currentQuestion._id)}
@@ -1622,17 +1785,18 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                             })}
                           </div>
                           <div className="grid gap-2">
-                            {(currentQuestion.displayOptions || currentQuestion.options.map((option, index) => ({ text: option, originalIndex: index }))).map((option, optionIndex) => {
+                            {(currentQuestion.displayOptions || (currentQuestion.options || []).map((option, index) => ({ text: option, originalIndex: index }))).map((option, optionIndex) => {
                               const currentAnswer = Array.isArray(answers[currentQuestion._id]) ? answers[currentQuestion._id] : []
                               const selectedOrder = currentAnswer.indexOf(option.originalIndex)
+                              const isCorrectOption = currentQuestionSubmitted && currentCorrectAnswer?.correctOptions?.[selectedOrder] === option.originalIndex
 
                               return (
                                 <button
                                   key={`${currentQuestion._id}-${optionIndex}`}
                                   type="button"
                                   onClick={() => selectAnswer(currentQuestion._id, option.originalIndex)}
-                                  disabled={selectedOrder !== -1}
-                                  className={`min-h-12 rounded-xl border px-3 py-2 text-left text-xs font-bold leading-tight transition sm:min-h-14 sm:rounded-2xl sm:px-4 sm:py-3 sm:text-base ${selectedOrder !== -1 ? `${matchColors[selectedOrder % matchColors.length]} shadow-sm` : 'border-stone-200 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white'}`}
+                                  disabled={selectedOrder !== -1 || currentQuestionSubmitted}
+                                  className={`min-h-12 rounded-xl border px-3 py-2 text-left text-xs font-bold leading-tight transition sm:min-h-14 sm:rounded-2xl sm:px-4 sm:py-3 sm:text-base ${currentQuestionSubmitted && isCorrectOption ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm' : currentQuestionSubmitted && selectedOrder !== -1 ? 'border-red-500 bg-red-500 text-white shadow-sm' : selectedOrder !== -1 ? `${matchColors[selectedOrder % matchColors.length]} shadow-sm` : 'border-stone-200 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white'}`}
                                 >
                                   {option.text}
                                 </button>
@@ -1642,7 +1806,8 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                           <button
                             type="button"
                             onClick={() => clearAnswer(currentQuestion._id)}
-                            className="col-span-2 h-10 rounded-xl border border-stone-200 bg-white text-xs font-bold text-stone-600 transition hover:bg-stone-50 sm:h-11 sm:rounded-2xl sm:text-sm"
+                            disabled={currentQuestionSubmitted}
+                            className="col-span-2 h-10 rounded-xl border border-stone-200 bg-white text-xs font-bold text-stone-600 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:rounded-2xl sm:text-sm"
                           >
                             Clear option
                           </button>
@@ -1681,16 +1846,22 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                         </div>
                       ) : (
                         <div className="mt-4 grid gap-2">
-                          {(currentQuestion.displayOptions || currentQuestion.options.map((option, index) => ({ text: option, originalIndex: index }))).map((option, optionIndex) => (
-                            <button
-                              key={`${currentQuestion._id}-${optionIndex}`}
-                              type="button"
-                              onClick={() => selectAnswer(currentQuestion._id, option.originalIndex)}
-                              className={`min-h-12 rounded-2xl border px-4 py-2.5 text-left text-sm font-bold transition sm:text-base ${answers[currentQuestion._id] === option.originalIndex ? 'border-emerald-600 bg-emerald-500 text-white shadow-sm' : 'border-stone-200 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white'}`}
-                            >
-                              {String.fromCharCode(65 + optionIndex)}. {option.text}
-                            </button>
-                          ))}
+                          {(currentQuestion.displayOptions || (currentQuestion.options || []).map((option, index) => ({ text: option, originalIndex: index }))).map((option, optionIndex) => {
+                            const isSelected = answers[currentQuestion._id] === option.originalIndex
+                            const isCorrectOption = currentQuestionSubmitted && currentCorrectAnswer?.correctOption === option.originalIndex
+
+                            return (
+                              <button
+                                key={`${currentQuestion._id}-${optionIndex}`}
+                                type="button"
+                                onClick={() => selectAnswer(currentQuestion._id, option.originalIndex)}
+                                disabled={currentQuestionSubmitted}
+                                className={`min-h-12 rounded-2xl border px-4 py-2.5 text-left text-sm font-bold transition disabled:cursor-default sm:text-base ${currentQuestionSubmitted && isCorrectOption ? 'border-emerald-600 bg-emerald-500 text-white shadow-sm' : currentQuestionSubmitted && isSelected ? 'border-red-600 bg-red-500 text-white shadow-sm' : isSelected ? 'border-cyan-600 bg-cyan-500 text-white shadow-sm' : 'border-stone-200 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white'}`}
+                              >
+                                {String.fromCharCode(65 + optionIndex)}. {option.text}
+                              </button>
+                            )
+                          })}
                         </div>
                       )}
 
@@ -1704,7 +1875,17 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                           <ChevronLeft className="h-4 w-4" />
                           Previous
                         </button>
-                        {!isCompleteTable && !isDiagram && (
+                        {isSingleQuestionFlow && !isCompleteTable && !isDiagram && (
+                          <button
+                            type="button"
+                            onClick={submitCurrentQuestion}
+                            disabled={isSaving || currentQuestionSubmitted}
+                            className="order-3 col-span-2 h-11 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 sm:order-none sm:col-span-1 sm:rounded-2xl sm:text-base"
+                          >
+                            {isSaving ? 'Submitting...' : currentQuestionSubmitted ? 'Submitted' : 'Submit'}
+                          </button>
+                        )}
+                        {!isSingleQuestionFlow && !isCompleteTable && !isDiagram && currentQuestionIndex === questions.length - 1 && (
                           <button
                             type="button"
                             onClick={submitPractice}
@@ -1864,7 +2045,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                     </div>
                     <button
                       type="button"
-                      onClick={startPractice}
+                      onClick={() => startPractice(false)}
                       className="h-12 rounded-2xl bg-stone-900 px-6 font-bold text-white transition hover:bg-black"
                     >
                       Practice Again
@@ -2023,7 +2204,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                                   {!rowCorrect && `  - Correct: ${question.options[correctIndex]}`}
                                 </div>
                               )
-                            }) : (question.displayOptions || question.options.map((option, index) => ({ text: option, originalIndex: index }))).map((option, optionIndex) => {
+                            }) : (question.displayOptions || (question.options || []).map((option, index) => ({ text: option, originalIndex: index }))).map((option, optionIndex) => {
                               const isSelected = selectedOption === option.originalIndex
                               const isRight = correctAnswer?.correctOption === option.originalIndex
 
@@ -2050,29 +2231,14 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
       <button
         type="button"
-        onClick={() => {
-          if (isTutorOpen) {
-            setIsTutorOpen(false)
-            return
-          }
-
-          openTutorTeacher()
-        }}
-        className="fixed bottom-5 right-5 z-[80] grid h-14 w-14 place-items-center rounded-full bg-stone-950 text-white shadow-2xl shadow-stone-950/30 transition hover:scale-105 hover:bg-black"
-        aria-label="Open AI teacher"
-      >
-        <Sparkles className="h-6 w-6" />
-      </button>
-
-      <button
-        type="button"
         onClick={() => openReportDialog(currentQuestion)}
         disabled={!currentQuestion || !isSignedIn}
-        className="fixed right-5 top-5 z-[80] inline-flex h-10 items-center justify-center rounded-full border border-rose-200 bg-white px-4 text-xs font-black uppercase tracking-widest text-rose-600 shadow-lg shadow-rose-950/10 transition hover:scale-105 hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:px-5"
+        className="fixed right-4 top-4 z-[80] flex h-14 w-14 flex-col items-center justify-center gap-0.5 rounded-full border-2 border-rose-500 bg-rose-500 text-white shadow-lg shadow-rose-950/20 transition hover:scale-105 hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-50 sm:right-5 sm:top-5 sm:h-16 sm:w-16"
         aria-label="Report question mistake"
         title="Report this question"
       >
-        Report mistake
+        <span className="text-xl font-black leading-none">!</span>
+        <span className="text-[7px] font-black uppercase leading-[8px] tracking-wider">Report mistake</span>
       </button>
 
       {isTutorOpen && (

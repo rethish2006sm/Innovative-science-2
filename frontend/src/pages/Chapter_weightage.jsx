@@ -174,27 +174,17 @@ const Chapter_weightage = () => {
     <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-slate-50 via-white to-gray-50 px-4 py-8 md:py-12 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
         {/* Header */}
-        <div className="relative mb-10 md:mb-16 text-center animate-fadeInUp">
+        <div className="relative mb-4 md:mb-16 text-center animate-fadeInUp">
           <div className="absolute inset-0 flex items-center justify-center opacity-10">
             <div className="h-48 w-48 sm:h-64 sm:w-64 rounded-full bg-gradient-to-r from-rose-200 to-amber-200 blur-3xl" />
           </div>
 
           <div className="relative">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/80 backdrop-blur-sm px-3 py-1.5 sm:px-4 sm:py-2 shadow-sm border border-gray-100">
-              <Sparkles className="h-3 w-3 sm:h-4 sm:w-4 text-amber-400" />
-              <span className="text-[10px] sm:text-xs font-medium text-gray-600 tracking-wide">
-                Interactive Analytics
-              </span>
-            </div>
+            
 
-            <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent mb-3 sm:mb-4">
+            <h1 className="whitespace-nowrap font-serif text-3xl sm:text-5xl md:text-6xl lg:text-7xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent mb-3 sm:mb-4">
               Chapter Weightage
             </h1>
-
-            <p className="max-w-2xl mx-auto text-gray-500 text-base sm:text-lg leading-relaxed px-2">
-              Discover your optimal study path with intelligent priority mapping
-              and detailed mark distribution insights
-            </p>
           </div>
         </div>
 
@@ -273,13 +263,10 @@ const Chapter_weightage = () => {
 
         {/* Distribution Toggle */}
         {!isLoading && !error && chapters.length > 0 && (
-          <div className="mb-6 sm:mb-8 flex flex-col gap-4 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+          <div className="mb-4 sm:mb-8 flex flex-col gap-2 rounded-2xl border border-gray-100 bg-white p-3 shadow-sm md:flex-row md:items-center md:justify-between md:gap-4 md:p-4">
             <div className="text-center md:text-left">
               <p className="text-sm font-semibold text-gray-900">
                 Distribution of marks
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Switch between weightage with option and without option.
               </p>
             </div>
 
@@ -340,36 +327,6 @@ const Chapter_weightage = () => {
           </div>
         ) : chapters.length > 0 ? (
           <div className="animate-fadeInUp animation-delay-400">
-            {/* Header */}
-            <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                  Chapter Analysis
-                </h2>
-                <p className="text-xs sm:text-sm text-gray-500 mt-1">
-                  Sorted by chapter sequence
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] sm:text-xs text-gray-400">Priority:</span>
-
-                <div className="flex gap-1.5 sm:gap-2">
-                  <span className="text-[10px] sm:text-xs px-2 py-1 rounded bg-rose-50 text-rose-600">
-                    High
-                  </span>
-
-                  <span className="text-[10px] sm:text-xs px-2 py-1 rounded bg-amber-50 text-amber-600">
-                    Medium
-                  </span>
-
-                  <span className="text-[10px] sm:text-xs px-2 py-1 rounded bg-emerald-50 text-emerald-600">
-                    Low
-                  </span>
-                </div>
-              </div>
-            </div>
-
             {/* Chapters */}
             <div className="grid gap-3 sm:gap-4">
               {sortedChapters.map((chapter, index) => {
@@ -536,37 +493,7 @@ const Chapter_weightage = () => {
                 );
               })}
             </div>
-
-            {/* Footer */}
-            <div className="mt-8 sm:mt-12 rounded-2xl bg-gradient-to-r from-rose-50 via-amber-50 to-emerald-50 p-5 sm:p-6 border border-gray-100 animate-fadeInUp animation-delay-600">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                <div className="flex-shrink-0 hidden sm:block">
-                  <div className="rounded-full bg-white p-3 shadow-sm">
-                    <TrendingUp className="h-6 w-6 text-rose-500" />
-                  </div>
-                </div>
-
-                <div className="flex-1">
-                  <h4 className="font-semibold text-gray-900 mb-1 text-base sm:text-lg">
-                    Study Suggestion
-                  </h4>
-
-                  <p className="text-xs sm:text-sm text-gray-600">
-                    Focus on the top {Math.ceil(chapters.length * 0.3)}{' '}
-                    high-priority chapters covering {highPriorityPercentage}% of
-                    total marks.
-                  </p>
-                </div>
-
-                <Link
-                  to="/chapters"
-                  className="group inline-flex items-center justify-center w-full sm:w-auto gap-2 px-5 py-2.5 bg-white text-gray-700 rounded-xl text-sm font-medium shadow-sm hover:shadow-md transition-all duration-300 border border-gray-200 hover:border-gray-300 mt-2 sm:mt-0"
-                >
-                  Manage Chapters
-                  <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                </Link>
-              </div>
-            </div>
+            
           </div>
         ) : (
           <div className="text-center py-16 sm:py-20 animate-fadeIn">

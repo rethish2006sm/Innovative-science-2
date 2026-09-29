@@ -721,22 +721,6 @@ const Homepage = () => {
         </motion.div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => {
-          if (isAiTeacherOpen) {
-            setIsAiTeacherOpen(false)
-            return
-          }
-
-          openAiTeacher()
-        }}
-        className="fixed bottom-5 right-5 z-[110] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-cyan-600 via-sky-500 to-emerald-500 text-white shadow-2xl shadow-cyan-950/25 transition hover:scale-105 hover:shadow-cyan-950/35"
-        aria-label="Open AI teacher"
-      >
-        <Sparkles className="h-6 w-6" />
-      </button>
-
       {isAiTeacherOpen && (
         <div
           className="fixed inset-0 z-[120] flex items-end justify-end bg-slate-950/40 p-3 sm:items-center sm:p-5"
