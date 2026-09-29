@@ -234,10 +234,10 @@ const Navbar = () => {
           duration: 0.8,
           ease: [0.22, 1, 0.36, 1],
         }}
-        className="fixed top-0 left-0 z-[100] w-full border-b border-teal-500/10 bg-[#0a0c1a]/70 backdrop-blur-2xl"
+        className="fixed top-0 left-0 z-[100] w-full overflow-visible border-b border-teal-500/10 bg-[#0a0c1a]/70 backdrop-blur-2xl"
       >
         {/* Animated Gradient Background */}
-        <div className="absolute inset-0 overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
           <motion.div
             animate={{
               x: ['0%', '100%', '0%'],
@@ -266,7 +266,7 @@ const Navbar = () => {
         </div>
 
         {/* Removed max-w restriction and padded the edges for edge-to-edge view */}
-        <div className="relative mx-auto flex h-24 w-full min-w-0 items-center gap-3 overflow-visible px-3 sm:px-5 lg:px-6 xl:px-10">
+        <div className="relative z-10 mx-auto flex h-24 w-full min-w-0 items-center gap-3 overflow-visible px-3 sm:px-5 lg:px-6 xl:px-10">
           {/* Left Section: Mobile Menu + Logo */}
           <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3 lg:flex-[0_1_auto]">
             {/* Mobile Menu Toggle */}
@@ -328,12 +328,19 @@ const Navbar = () => {
                 </p>
                 <div
                   ref={mobileScienceMenuRef}
-                  onClick={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                  }}
                   className="relative z-[110] mt-0.5 lg:hidden"
                 >
                   <button
                     type="button"
-                    onClick={() => setIsScienceMenuOpen((current) => !current)}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setIsScienceMenuOpen((current) => !current)
+                    }}
                     className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold text-slate-300 backdrop-blur-sm transition hover:bg-white/10 hover:text-white sm:text-[10px]"
                     aria-expanded={isScienceMenuOpen}
                     aria-haspopup="menu"
@@ -663,7 +670,7 @@ const Navbar = () => {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.16, ease: 'linear' }}
               onClick={() => setIsMenuOpen(false)}
-              className="mobile-menu-backdrop fixed inset-0 z-50 bg-black/60 backdrop-blur-md"
+              className="mobile-menu-backdrop fixed inset-0 z-[190] bg-black/60 backdrop-blur-md"
             />
 
             {/* Drawer */}
@@ -672,7 +679,7 @@ const Navbar = () => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.94 }}
               transition={{ type: 'tween', duration: 0.18, ease: 'ease-out' }}
-              className="mobile-drawer fixed inset-0 z-50 m-auto flex h-[min(42rem,calc(100dvh-1.5rem))] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[2rem] border border-teal-500/20 bg-gradient-to-b from-[#0a0c1a] to-[#0f1225] shadow-2xl shadow-black/40 backdrop-blur-xl"
+              className="mobile-drawer fixed inset-0 z-[200] m-auto flex h-[min(42rem,calc(100dvh-1.5rem))] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[2rem] border border-teal-500/20 bg-gradient-to-b from-[#0a0c1a] to-[#0f1225] shadow-2xl shadow-black/40 backdrop-blur-xl"
             >
               {/* Drawer Header */}
               <div className="flex shrink-0 items-center justify-between border-b border-white/10 p-5">
