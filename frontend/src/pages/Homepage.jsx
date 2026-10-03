@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, BookOpen, Brain, CalendarDays, CheckCircle2, Flame, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
+import { ArrowRight, BookOpen, Brain, CalendarDays, CheckCircle2, Flame, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
