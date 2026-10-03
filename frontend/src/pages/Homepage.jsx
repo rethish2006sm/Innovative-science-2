@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, BookOpen, Brain, CalendarDays, CheckCircle2, Flame, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
+import { ArrowRight, BookOpen, Brain, CalendarDays, Check, CheckCircle2, Flame, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
@@ -199,6 +199,7 @@ const staggerContainer = {
 }
 
 const AnimatedBattleModeLink = motion.create(Link)
+const AnimatedActionLink = motion.create(Link)
 
 const Homepage = () => {
   const navigate = useNavigate()
@@ -601,8 +602,8 @@ const Homepage = () => {
                   {streakCalendar.map((day) => (
                     <div key={day.key} className="text-center">
                       <p className="text-[9px] font-bold uppercase text-slate-400">{day.label}</p>
-                      <div className={`mx-auto mt-1 grid h-7 w-7 place-items-center rounded-full text-[11px] font-black ${day.completed ? 'bg-orange-500 text-white' : day.isToday ? 'border-2 border-orange-400 bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-400'}`}>
-                        {day.completed ? '✓' : day.day}
+                      <div className={`mx-auto mt-1 grid h-7 w-7 place-items-center rounded-full text-[11px] font-black ${day.completed ? 'bg-emerald-500 text-white' : day.isToday ? 'border-2 border-orange-400 bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-400'}`}>
+                        {day.completed ? <Check className="h-4 w-4 text-white" aria-label="Completed" /> : day.day}
                       </div>
                     </div>
                   ))}
@@ -635,16 +636,33 @@ const Homepage = () => {
                 />
                 <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.3),_transparent_40%)] opacity-70" />
               </AnimatedBattleModeLink>
-              <Link to="/test-builder" className="group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-2.5 py-2.5 text-xs font-bold text-white transition-all hover:bg-slate-800 active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              <AnimatedActionLink
+                to="/questions"
+                whileHover={{ scale: 1.035, y: -2 }}
+                whileTap={{ scale: 0.98 }}
+                className="question-bank-link group relative inline-flex min-h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-cyan-300/80 px-2.5 py-2.5 text-xs font-black text-cyan-950 shadow-[0_8px_24px_rgba(6,182,212,0.14)] transition-shadow min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm"
+              >
+                <span aria-hidden="true" className="question-bank-orbit"><span /></span>
+                <span className="question-bank-icon relative z-10 grid h-5 w-5 place-items-center rounded-full bg-white/75 text-cyan-600 shadow-sm">
+                  <BookOpen className="h-3.5 w-3.5" />
+                </span>
+                <span className="relative z-10">Question Bank</span>
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </AnimatedActionLink>
+              <AnimatedActionLink to="/chapters" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-neutral group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+                Browse chapters
+              </AnimatedActionLink>
+              <AnimatedActionLink to="/test-builder" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-dark group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl px-2.5 py-2.5 text-xs font-bold text-white transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Create test
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-              </Link>
-              <Link to="/chapters" className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white/90 px-2.5 py-2.5 text-xs font-bold text-slate-700 transition-all hover:bg-slate-50 hover:shadow-md active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
-                Browse chapters
-              </Link>
-              <Link to="/leaderboard" className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/90 px-2.5 py-2.5 text-xs font-bold text-emerald-700 transition-all hover:bg-emerald-100 hover:shadow-md active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              </AnimatedActionLink>
+              <AnimatedActionLink to="/profile/performance" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-violet group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+                Performance
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </AnimatedActionLink>
+              <AnimatedActionLink to="/leaderboard" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-emerald group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Leaderboard
-              </Link>
+              </AnimatedActionLink>
             </motion.div>
 
             <motion.div variants={staggerContainer} className="mt-4 grid grid-cols-3 gap-2 sm:mt-7 sm:gap-3">
@@ -778,36 +796,6 @@ const Homepage = () => {
 
           </div>
         </div>
-
-        <motion.div
-          id="chapter-weightage"
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: '-80px' }}
-          transition={{ duration: 0.5, delay: 0.15 }}
-          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:mt-6 sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8"
-        >
-          
-
-          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50 p-2 sm:mt-5 sm:rounded-2xl sm:p-4">
-            {chaptersLoading ? (
-              <div className="grid gap-3 rounded-[1.25rem] border border-dashed border-slate-200 bg-white/80 p-5 sm:grid-cols-[auto_1fr] sm:items-center sm:p-6">
-                <div className="mx-auto h-24 w-24 animate-pulse rounded-full bg-slate-200/80 sm:h-32 sm:w-32" />
-                <div className="grid gap-2">
-                  <div className="h-4 w-40 rounded-full bg-slate-200/80" />
-                  <div className="h-3 w-56 rounded-full bg-slate-200/80" />
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="h-16 rounded-2xl bg-slate-100" />
-                    <div className="h-16 rounded-2xl bg-slate-100" />
-                    <div className="h-16 rounded-2xl bg-slate-100" />
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <ChapterWeightageInline chapters={chapters} animateIntro={false} />
-            )}
-          </div>
-        </motion.div>
 
         <motion.div
           id="home-feedback"

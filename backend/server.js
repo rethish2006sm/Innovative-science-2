@@ -1162,6 +1162,29 @@ const siteNoticeSchema = new mongoose.Schema(
   { timestamps: true },
 )
 const Science2SiteNotice = mongoose.model('SiteNotice', siteNoticeSchema)
+const giftSchema = new mongoose.Schema(
+  {
+    classId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Class',
+      required: true,
+      unique: true,
+    },
+    image: {
+      data: Buffer,
+      contentType: String,
+      originalName: String,
+      updatedAt: Date,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  { timestamps: true },
+)
+const Science2Gift = mongoose.model('Gift', giftSchema)
 
 const auditSnapshot = (value) => {
   if (!value) return null
@@ -1678,6 +1701,7 @@ const science2Models = {
   Message: Science2Message,
   Pyq: Science2Pyq,
   SiteNotice: Science2SiteNotice,
+  Gift: Science2Gift,
   ContactMessage: Science2ContactMessage,
   Feedback: Science2Feedback,
 }
@@ -1740,6 +1764,7 @@ const Report = scienceModel('Report')
 const Message = scienceModel('Message')
 const Pyq = scienceModel('Pyq')
 const SiteNotice = scienceModel('SiteNotice')
+const Gift = scienceModel('Gift')
 const ContactMessage = scienceModel('ContactMessage')
 const Feedback = scienceModel('Feedback')
 
@@ -1886,6 +1911,28 @@ const publicSiteNotice = (notice) => {
     message: String(notice.message || ''),
     color: String(notice.color || 'amber'),
     updatedAt: notice.updatedAt,
+  }
+}
+
+const publicGift = (gift) => {
+  if (!gift?.image?.data) return null
+  const imageData = Buffer.isBuffer(gift.image.data)
+    ? gift.image.data
+    : gift.image.data.buffer
+      ? Buffer.from(gift.image.data.buffer)
+      : typeof gift.image.data.value === 'function'
+        ? Buffer.from(gift.image.data.value(true))
+        : Buffer.from(gift.image.data)
+  const contentType = String(gift.image.contentType || 'image/webp')
+
+  return {
+    id: String(gift._id),
+    classId: String(gift.classId?._id || gift.classId || ''),
+    className: String(gift.classId?.name || ''),
+    originalName: String(gift.image.originalName || 'gift-image'),
+    contentType,
+    imageData: `data:${contentType};base64,${imageData.toString('base64')}`,
+    updatedAt: gift.updatedAt,
   }
 }
 
@@ -3294,6 +3341,13 @@ const previousLocalDate = (localDate) => {
   return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10)
 }
 
+const nextLocalMonth = (localDate) => {
+  const [year, month] = String(localDate).split('-').map(Number)
+  return month === 12
+    ? `${year + 1}-01-01`
+    : `${year}-${String(month + 1).padStart(2, '0')}-01`
+}
+
 const shuffle = (items) => {
   const result = [...items]
   for (let index = result.length - 1; index > 0; index -= 1) {
@@ -3317,6 +3371,7 @@ const dailyQuestionView = (question, challenge) => {
     answerImageUrl: '',
     solution: answer ? (question.solution || '') : '',
     type: objectiveType.type || '',
+    isBoardQuestion: Boolean(question.isBoardQuestion),
     topicName: topic.name || '',
     chapterId: chapter._id,
     chapterNumber: chapter.number,
@@ -3328,39 +3383,104 @@ const dailyQuestionView = (question, challenge) => {
   }
 }
 
-const dailyChallengePayload = (challenge, questions, streak) => ({
-  challenge: {
-    id: challenge._id,
-    localDate: challenge.localDate,
-    timezone: challenge.timezone,
-    questionCount: challenge.questionIds.length,
-    questions: questions.map((question) => dailyQuestionView(question, challenge)),
-    attemptedCount: challenge.attemptedCount,
-    correctCount: challenge.correctCount,
-    score: challenge.score,
-    accuracy: challenge.attemptedCount ? Math.round((challenge.correctCount / challenge.attemptedCount) * 100) : 0,
-    status: challenge.status,
-    completedAt: challenge.completedAt,
-    eligibleChapterIds: challenge.eligibleChapterIds,
-  },
-  streak: streak || { currentStreak: 0, longestStreak: 0, lastCreditedDate: null },
-})
+const streakExcludedObjectiveTypes = new Set(['complete-the-tables', 'diagram-based-question'])
 
-const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
-  const attempts = await PracticeAttempt.find({ user: userId, attemptType: 'practice' }).select('questionBreakdown').lean()
-  const eligibleChapterIds = [...new Set(attempts.flatMap((attempt) => (attempt.questionBreakdown || [])
-    .filter((item) => item.questionId && item.status !== 'skipped' && item.chapterId)
-    .map((item) => String(item.chapterId))))]
+const countStreakEligibleCorrectAnswers = (challenge, questions) => {
+  const typeByQuestionId = new Map(
+    questions.map((question) => [String(question._id), question.objectiveType?.type || ''])
+  )
+
+  return (challenge.answers || []).filter((answer) => (
+    answer.isCorrect && !streakExcludedObjectiveTypes.has(typeByQuestionId.get(String(answer.questionId)))
+  )).length
+}
+
+const dailyChallengePayload = (challenge, questions, streak) => {
+  const streakEligibleCorrectCount = countStreakEligibleCorrectAnswers(challenge, questions)
+
+  return {
+    challenge: {
+      id: challenge._id,
+      localDate: challenge.localDate,
+      timezone: challenge.timezone,
+      questionCount: challenge.questionIds.length,
+      questions: questions.map((question) => dailyQuestionView(question, challenge)),
+      attemptedCount: challenge.attemptedCount,
+      correctCount: challenge.correctCount,
+      score: challenge.score,
+      accuracy: challenge.attemptedCount ? Math.round((challenge.correctCount / challenge.attemptedCount) * 100) : 0,
+      status: challenge.status,
+      completedAt: challenge.completedAt,
+      eligibleChapterIds: challenge.eligibleChapterIds,
+      streakEligibleCorrectCount,
+      streakQualified: streakEligibleCorrectCount >= 10,
+    },
+    streak: streak || { currentStreak: 0, longestStreak: 0, lastCreditedDate: null },
+  }
+}
+
+const getEligibleDailyChapterIds = async (userId) => {
+  const attempts = await PracticeAttempt.find({ user: userId, attemptType: 'practice' })
+    .select('createdAt questionBreakdown')
+    .sort({ createdAt: -1 })
+    .lean()
+  const latestAttemptByChapter = new Map()
+
+  attempts.forEach((attempt) => {
+    ;(attempt.questionBreakdown || []).forEach((item) => {
+      // Only answered regular-practice questions unlock a chapter. A skipped
+      // question must never make its chapter eligible for the daily challenge.
+      if (!item.questionId || !['correct', 'wrong'].includes(item.status) || !item.chapterId) return
+      const chapterId = String(item.chapterId)
+      if (!latestAttemptByChapter.has(chapterId)) latestAttemptByChapter.set(chapterId, attempt.createdAt)
+    })
+  })
+
+  // Newer practised chapters are considered first by the daily selector.
+  return [...latestAttemptByChapter.entries()]
+    .sort(([, firstDate], [, secondDate]) => new Date(secondDate) - new Date(firstDate))
+    .map(([chapterId]) => chapterId)
+}
+
+const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
+  const monthStart = `${String(localDate).slice(0, 7)}-01`
+  const previousChallenges = await DailyChallenge.find({
+    user: userId,
+    subject: getActiveScience(),
+    localDate: { $gte: monthStart, $lt: nextLocalMonth(localDate) },
+  }).select('questionIds').lean()
+  const usedQuestionIds = new Set()
+  previousChallenges.forEach((challenge) => {
+    ;(challenge.questionIds || []).forEach((questionId) => {
+      usedQuestionIds.add(String(questionId))
+    })
+  })
+
   const candidates = eligibleChapterIds.length
     ? await ObjectiveQuestion.find({}).populate({
       path: 'objectiveType',
       populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } },
     }).lean()
     : []
-  const filtered = candidates.filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
+  const chapterRank = new Map(eligibleChapterIds.map((chapterId, index) => [chapterId, index]))
+  const filtered = candidates
+    .filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
+    // Do not repeat a question within the same calendar month. Questions
+    // become eligible again automatically when the next month starts.
+    .filter((question) => !usedQuestionIds.has(String(question._id)))
   const byType = new Map()
   const byChapter = new Map()
-  shuffle(filtered).forEach((question) => {
+  const rankQuestion = (question) => {
+    const chapter = String(question.objectiveType?.topic?.chapter?._id || '')
+    return {
+      question,
+      chapterRank: chapterRank.get(chapter) ?? eligibleChapterIds.length,
+    }
+  }
+  const ranked = shuffle(filtered).map(rankQuestion).sort((first, second) => (
+    first.chapterRank - second.chapterRank
+  ))
+  ranked.forEach(({ question }) => {
     const type = question.objectiveType?.type || 'other'
     const chapter = String(question.objectiveType?.topic?.chapter?._id || '')
     if (!byType.has(type)) byType.set(type, [])
@@ -3380,8 +3500,30 @@ const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
     used.add(String(question._id)); selected.push(question); counts.set(type, count + 1)
     return true
   }
-  // Round-robin chapters first, then fill from the remaining bank. This keeps
-  // a student's challenge broad without sacrificing the exact daily count.
+  const takeMixed = (pool, limit) => {
+    const queues = [...pool.reduce((groups, question) => {
+      const type = question.objectiveType?.type || 'other'
+      if (!groups.has(type)) groups.set(type, [])
+      groups.get(type).push(question)
+      return groups
+    }, new Map()).values()]
+    let cursor = 0
+    while (selected.length < limit && queues.some((queue) => queue.length)) {
+      const queue = queues[cursor % queues.length]
+      cursor += 1
+      if (queue?.length) take(queue.shift())
+    }
+  }
+
+  const boardQuestions = ranked.filter(({ question }) => question.isBoardQuestion).map(({ question }) => question)
+  const regularQuestions = ranked.filter(({ question }) => !question.isBoardQuestion).map(({ question }) => question)
+  // Prefer board questions, but retain a mixed set and use regular questions
+  // to complete the challenge when the board bank is smaller.
+  takeMixed(boardQuestions, Math.min(14, boardQuestions.length))
+  takeMixed(regularQuestions, 20)
+  takeMixed(boardQuestions, 20)
+
+  /* Keep chapter coverage broad when the preferred pools contain enough data. */
   const chapterQueues = [...byChapter.values()].map((queue) => shuffle(queue))
   let cursor = 0
   while (selected.length < 20 && chapterQueues.some((queue) => queue.length)) {
@@ -3390,6 +3532,12 @@ const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
     if (queue?.length) take(queue.shift())
   }
   if (selected.length < 20) shuffle(filtered).forEach((question) => { if (selected.length < 20) take(question) })
+  return selected
+}
+
+const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
+  const eligibleChapterIds = await getEligibleDailyChapterIds(userId)
+  const selected = await selectDailyQuestions(userId, eligibleChapterIds, localDate)
   const challenge = await DailyChallenge.create({
     user: userId,
     subject: getActiveScience(),
@@ -3412,6 +3560,22 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
       challenge = await DailyChallenge.findOne({ user: userId, subject: getActiveScience(), localDate })
     }
   }
+
+  // A student may practise after first opening the daily-streak page. Refresh
+  // an untouched challenge so the newly unlocked chapter is usable today.
+  if (challenge && challenge.status !== 'completed' && !challenge.answers?.length) {
+    const eligibleChapterIds = await getEligibleDailyChapterIds(userId)
+    const storedChapterIds = (challenge.eligibleChapterIds || []).map((id) => String(id)).sort()
+    const currentChapterIds = [...eligibleChapterIds].sort()
+    if (JSON.stringify(storedChapterIds) !== JSON.stringify(currentChapterIds)) {
+      const selected = await selectDailyQuestions(userId, eligibleChapterIds, localDate)
+      challenge.questionIds = selected.map((question) => question._id)
+      challenge.eligibleChapterIds = eligibleChapterIds
+      challenge.status = selected.length < 20 ? 'bank_insufficient' : 'in_progress'
+      await challenge.save()
+    }
+  }
+
   const questions = challenge?.questionIds?.length
     ? await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds } }).populate({ path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } } }).lean()
     : []
@@ -3473,16 +3637,23 @@ app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => 
     const challenge = await DailyChallenge.findOne({ _id: req.params.id, user: req.user._id, subject: getActiveScience() })
     if (!challenge) return res.status(404).json({ message: 'Daily challenge not found.' })
     if (challenge.status === 'completed') return res.json(await getDailyChallenge(req.user._id, challenge.localDate, challenge.timezone))
-    // Streak credit is based on attempting the complete daily set. Correctness
-    // affects the score only; students do not need a perfect score.
-    if (challenge.attemptedCount < challenge.questionIds.length) return res.status(400).json({ message: 'Attempt every question before completing the challenge. Correctness does not affect streak credit.' })
+    if (challenge.attemptedCount < challenge.questionIds.length) return res.status(400).json({ message: 'Attempt every question before completing the challenge.' })
+    const challengeQuestions = await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds } })
+      .populate({ path: 'objectiveType', select: 'type' })
+      .select('_id objectiveType')
+      .lean()
+    const streakEligibleCorrectCount = countStreakEligibleCorrectAnswers(challenge, challengeQuestions)
     challenge.status = 'completed'; challenge.completedAt = new Date(); await challenge.save()
     let streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
+    const qualifiesForStreak = streakEligibleCorrectCount >= 10
     if (!streak) streak = await StudentStreak.create({ user: req.user._id, subject: getActiveScience() })
-    if (challenge.questionIds.length > 0 && streak.lastCreditedDate !== challenge.localDate) {
+    if (qualifiesForStreak && streak.lastCreditedDate !== challenge.localDate) {
       streak.currentStreak = streak.lastCreditedDate === previousLocalDate(challenge.localDate) ? streak.currentStreak + 1 : 1
       streak.longestStreak = Math.max(streak.longestStreak, streak.currentStreak)
       streak.lastCreditedDate = challenge.localDate
+      await streak.save()
+    } else if (!qualifiesForStreak && streak.currentStreak !== 0) {
+      streak.currentStreak = 0
       await streak.save()
     }
     res.json(await getDailyChallenge(req.user._id, challenge.localDate, challenge.timezone))
@@ -5768,6 +5939,178 @@ app.get('/api/admin/students', authRequired, adminRequired, async (req, res) => 
   }
 })
 
+app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim()
+    const classId = String(req.query.classId || '').trim()
+    const query = await buildAdminStudentQuery({ search, classId })
+    const users = await User.find(query)
+      .select('name email classId totalBrainCells totalMarks totalCorrect totalAttempts lastLoginAt createdAt')
+      .populate('classId', 'name grade')
+      .sort({ name: 1, _id: 1 })
+      .limit(5000)
+      .lean()
+
+    const userIds = users.map((user) => user._id)
+    const [streaks, dailyStats] = await Promise.all([
+      StudentStreak.find({ user: { $in: userIds }, subject: getActiveScience() })
+        .select('user currentStreak longestStreak lastCreditedDate')
+        .lean(),
+      DailyChallenge.aggregate([
+        { $match: { user: { $in: userIds }, subject: getActiveScience() } },
+        {
+          $group: {
+            _id: '$user',
+            completedDays: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            dailyAttempts: { $sum: '$attemptedCount' },
+            dailyCorrect: { $sum: '$correctCount' },
+            lastDailyDate: { $max: '$localDate' },
+          },
+        },
+      ]),
+    ])
+
+    const streakMap = new Map(streaks.map((streak) => [String(streak.user), streak]))
+    const dailyMap = new Map(dailyStats.map((item) => [String(item._id), item]))
+    const onlineCutoff = Date.now() - (15 * 60 * 1000)
+    const students = users.map((user) => {
+      const row = buildAdminStudentRow(user)
+      const streak = streakMap.get(String(user._id)) || {}
+      const daily = dailyMap.get(String(user._id)) || {}
+      const lastLoginAt = user.lastLoginAt || null
+
+      return {
+        ...row,
+        email: String(user.email || '').trim(),
+        lastLoginAt,
+        createdAt: user.createdAt || null,
+        online: Boolean(lastLoginAt && new Date(lastLoginAt).getTime() >= onlineCutoff),
+        currentStreak: Number(streak.currentStreak || 0),
+        longestStreak: Number(streak.longestStreak || 0),
+        lastCreditedDate: streak.lastCreditedDate || null,
+        completedDailyChallenges: Number(daily.completedDays || 0),
+        dailyAttempts: Number(daily.dailyAttempts || 0),
+        dailyCorrect: Number(daily.dailyCorrect || 0),
+        lastDailyDate: daily.lastDailyDate || null,
+      }
+    })
+
+    const totalBrainCells = students.reduce((sum, student) => sum + Number(student.totalBrainCells || 0), 0)
+    const totalAttempts = students.reduce((sum, student) => sum + Number(student.attemptCount || 0), 0)
+    const averagePercent = students.length
+      ? Math.round(students.reduce((sum, student) => sum + Number(student.averagePercent || 0), 0) / students.length)
+      : 0
+
+    res.set('Cache-Control', 'no-store')
+    res.json({
+      students,
+      summary: {
+        totalStudents: students.length,
+        onlineStudents: students.filter((student) => student.online).length,
+        totalBrainCells,
+        totalAttempts,
+        averagePercent,
+      },
+      search,
+      classId,
+      onlineWindowMinutes: 15,
+    })
+  } catch (error) {
+    console.error('Could not load admin analysis:', error)
+    res.status(500).json({ message: 'Could not load admin analysis.' })
+  }
+})
+
+app.get('/api/questions', optionalAuth, async (req, res) => {
+  try {
+    const isAdmin = Boolean(req.user?.isAdmin)
+    const search = String(req.query.search || '').trim()
+    const chapterId = String(req.query.chapterId || '').trim()
+    const objectiveTypeFilter = String(req.query.objectiveType || '').trim()
+    const boardQuestionFilter = String(req.query.boardQuestion || '').trim().toLowerCase()
+    const rawLimit = String(req.query.limit || '').trim().toLowerCase()
+    const loadAll = rawLimit === 'all' || req.query.all === '1'
+    const limit = loadAll ? null : Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
+    const page = Math.max(Number(req.query.page) || 1, 1)
+    const objectiveTypes = await ObjectiveType.find(objectiveTypeFilter ? { type: objectiveTypeFilter } : {})
+      .populate({ path: 'topic', select: 'name number chapter', populate: { path: 'chapter', select: 'name number' } })
+      .sort({ 'topic.chapter.number': 1, 'topic.number': 1, type: 1 })
+      .lean()
+
+    const matchingTypes = objectiveTypes.filter((item) => !chapterId || String(item.topic?.chapter?._id || '') === chapterId)
+    const objectiveTypeIds = matchingTypes.map((item) => item._id)
+    const questionQuery = {
+      objectiveType: { $in: objectiveTypeIds },
+      ...(search ? { question: { $regex: escapeRegex(search), $options: 'i' } } : {}),
+      ...(boardQuestionFilter === 'yes' ? { isBoardQuestion: true } : {}),
+      ...(boardQuestionFilter === 'no' ? { isBoardQuestion: { $ne: true } } : {}),
+    }
+    const totalQuestions = await ObjectiveQuestion.countDocuments(questionQuery)
+    const totalPages = loadAll
+      ? (totalQuestions ? 1 : 0)
+      : (totalQuestions ? Math.ceil(totalQuestions / limit) : 0)
+    const safePage = totalPages ? Math.min(page, totalPages) : 1
+    let questionQueryBuilder = ObjectiveQuestion.find(questionQuery)
+      .select('_id objectiveType question solution options pairs correctOption correctOptions isBoardQuestion questionImage answerImage createdAt')
+      .populate({ path: 'objectiveType', select: 'type topic', populate: { path: 'topic', select: 'name number chapter', populate: { path: 'chapter', select: 'name number' } } })
+      .sort({ createdAt: 1, _id: 1 })
+
+    if (!loadAll) {
+      questionQueryBuilder = questionQueryBuilder
+        .skip((safePage - 1) * limit)
+        .limit(limit)
+    }
+
+    const questions = await questionQueryBuilder.lean()
+
+    const formatQuestion = (question) => ({
+      _id: question._id,
+      question: question.question || '',
+      ...(isAdmin ? { solution: question.solution || '' } : {}),
+      options: Array.isArray(question.options) ? question.options : [],
+      pairs: Array.isArray(question.pairs) ? question.pairs : [],
+      ...(isAdmin ? { correctOption: question.correctOption } : {}),
+      ...(isAdmin ? { correctOptions: Array.isArray(question.correctOptions) ? question.correctOptions : [] } : {}),
+      isBoardQuestion: Boolean(question.isBoardQuestion),
+      imageUrl: publicQuestionImageUrl(question),
+      answerImageUrl: isAdmin ? publicAnswerImageUrl(question) : '',
+      objectiveType: question.objectiveType?.type || '',
+      objectiveTypeId: question.objectiveType?._id || null,
+      topicName: question.objectiveType?.topic?.name || '',
+      topicNumber: question.objectiveType?.topic?.number || null,
+      chapterId: question.objectiveType?.topic?.chapter?._id || null,
+      chapterName: question.objectiveType?.topic?.chapter?.name || '',
+      chapterNumber: question.objectiveType?.topic?.chapter?.number || null,
+    })
+
+    const chapters = [...new Map(objectiveTypes
+      .filter((item) => item.topic?.chapter)
+      .map((item) => [String(item.topic.chapter._id), {
+        _id: item.topic.chapter._id,
+        name: item.topic.chapter.name || '',
+        number: item.topic.chapter.number || null,
+      }])).values()]
+    const objectiveTypesList = [...new Set(objectiveTypes.map((item) => item.type))]
+    res.set('Cache-Control', 'no-store')
+    res.json({
+      questions: questions.map(formatQuestion),
+      chapters,
+      objectiveTypes: objectiveTypesList,
+      totalQuestions,
+      totalPages,
+      page: safePage,
+      limit: loadAll ? 'all' : limit,
+      search,
+      chapterId,
+      objectiveType: objectiveTypeFilter,
+      boardQuestion: boardQuestionFilter,
+    })
+  } catch (error) {
+    console.error('Could not load admin question list:', error)
+    res.status(500).json({ message: 'Could not load question list.' })
+  }
+})
+
 app.get('/api/admin/students/:id', authRequired, adminRequired, async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -6735,6 +7078,66 @@ app.get('/api/announcement', async (req, res) => {
   }
 })
 
+app.get('/api/gift', authRequired, async (req, res) => {
+  try {
+    if (req.user.isAdmin || !req.user.classId) return res.json({ gift: null })
+    const gift = await Gift.findOne({ classId: req.user.classId }).populate('classId', 'name').lean()
+    res.set('Cache-Control', 'no-store')
+    res.json({ gift: publicGift(gift) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load gift.' })
+  }
+})
+
+app.get('/api/admin/gifts', authRequired, adminRequired, async (req, res) => {
+  try {
+    const gifts = await Gift.find().populate('classId', 'name grade').select('classId image.originalName image.contentType updatedAt').sort({ updatedAt: -1 }).lean()
+    res.json({ gifts: gifts.map((gift) => ({
+      id: String(gift._id),
+      classId: String(gift.classId?._id || ''),
+      className: String(gift.classId?.name || ''),
+      originalName: String(gift.image?.originalName || 'gift-image'),
+      updatedAt: gift.updatedAt,
+    })) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load gifts.' })
+  }
+})
+
+app.post('/api/admin/gifts', authRequired, adminRequired, upload.single('image'), async (req, res) => {
+  try {
+    const classId = String(req.body.classId || '').trim()
+    const classDoc = await Class.findById(classId).select('name')
+    if (!classDoc) return res.status(404).json({ message: 'Class not found.' })
+    if (!req.file?.buffer || !String(req.file.mimetype || '').startsWith('image/')) {
+      return res.status(400).json({ message: 'Please select an image.' })
+    }
+
+    const image = await sharp(req.file.buffer).rotate().webp({ quality: 86 }).toBuffer()
+    const gift = await Gift.findOneAndUpdate(
+      { classId: classDoc._id },
+      {
+        classId: classDoc._id,
+        image: { data: image, contentType: 'image/webp', originalName: req.file.originalname || 'gift-image.webp', updatedAt: new Date() },
+        updatedBy: req.user._id,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    )
+    res.status(201).json({ gift: publicGift(await gift.populate('classId', 'name')), message: 'Gift saved successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not save gift.' })
+  }
+})
+
+app.delete('/api/admin/gifts/:classId', authRequired, adminRequired, async (req, res) => {
+  try {
+    await Gift.deleteOne({ classId: req.params.classId })
+    res.json({ message: 'Gift removed successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not remove gift.' })
+  }
+})
+
 app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) => {
   try {
     const {
@@ -7319,7 +7722,9 @@ app.get('/api/test-builder/options', optionalAuth, async (req, res) => {
     const chapters = await Chapter.find({ number: { $in: chapterNumbers } }).select('number name').sort({ number: 1 }).lean()
     const topics = await Topic.find({ chapter: { $in: chapters.map((chapter) => chapter._id) } }).lean()
     const topicIds = topics.map((topic) => topic._id)
-    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).lean()
+    const objectiveTypes = await ObjectiveType.find({
+      topic: { $in: topicIds },
+    }).lean()
     const objectiveTypeIds = objectiveTypes.map((item) => item._id)
     const questionCounts = await ObjectiveQuestion.aggregate([
       { $match: { objectiveType: { $in: objectiveTypeIds } } },

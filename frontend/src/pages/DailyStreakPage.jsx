@@ -66,6 +66,10 @@ const DailyStreakPage = () => {
   const questions = challenge?.questions || []
   const question = questions[index]
 
+  const preventQuestionCapture = (event) => {
+    event.preventDefault()
+  }
+
   const progress = challenge?.questionCount
     ? Math.round(
         (challenge.attemptedCount / challenge.questionCount) * 100
@@ -371,7 +375,14 @@ const DailyStreakPage = () => {
               </div>
 
               {question && (
-                <div className="p-4 sm:p-5">
+                <div
+                  className="question-protected p-4 sm:p-5"
+                  onContextMenu={preventQuestionCapture}
+                  onCopy={preventQuestionCapture}
+                  onCut={preventQuestionCapture}
+                  onDragStart={preventQuestionCapture}
+                  onSelectStart={preventQuestionCapture}
+                >
                   {/* Chapter / topic */}
                   <div className="mb-5 flex flex-wrap items-center gap-2">
                     <span className="rounded-lg bg-cyan-50 px-3 py-1.5 text-xs font-bold text-cyan-800">
@@ -639,10 +650,14 @@ const Completed = ({ challenge, streak }) => {
         <Flame size={24} className="shrink-0 text-orange-500" />
         <div>
           <p className="text-sm font-bold text-slate-900">
-            {streak.currentStreak}-day streak
+            {challenge.streakQualified
+              ? `${streak.currentStreak}-day streak`
+              : 'No streak credit today'}
           </p>
           <p className="mt-0.5 text-[11px] text-slate-500">
-            Keep practising to build your daily habit.
+            {challenge.streakQualified
+              ? 'You got 10 or more eligible questions right. Keep practising to build your daily habit.'
+              : 'Get at least 10 eligible questions right in a daily challenge to earn streak credit.'}
           </p>
         </div>
       </div>
@@ -655,7 +670,12 @@ const Completed = ({ challenge, streak }) => {
           {(challenge.questions || []).map((question, questionIndex) => (
             <div
               key={question._id || questionIndex}
-              className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+              className="question-protected overflow-hidden rounded-xl border border-slate-200 bg-white"
+              onContextMenu={(event) => event.preventDefault()}
+              onCopy={(event) => event.preventDefault()}
+              onCut={(event) => event.preventDefault()}
+              onDragStart={(event) => event.preventDefault()}
+              onSelectStart={(event) => event.preventDefault()}
             >
               <button
                 type="button"
@@ -782,8 +802,9 @@ const EmptyState = () => (
       </h1>
 
       <p className="mt-3 text-sm leading-6 text-slate-500">
-        Practise at least one question from a chapter to unlock your
-        personalised daily challenge.
+        Practise at least one regular question from a chapter to unlock that
+        chapter for your personalised daily challenge. Skipped questions do
+        not unlock a chapter.
       </p>
 
       <Link

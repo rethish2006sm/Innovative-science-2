@@ -18,6 +18,23 @@ body {
   overscroll-behavior-x: none;
 }
 
+/* Question content is intentionally difficult to copy from the practice UI. */
+.question-protected {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.question-protected img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+@media print {
+  .question-protected {
+    visibility: hidden !important;
+  }
+}
+
 /* Defer painting of the footer until it is close to the viewport. */
 .app-footer {
   content-visibility: auto;
@@ -90,6 +107,81 @@ body {
   filter: saturate(1.08) brightness(1.04);
   box-shadow: 0 10px 26px rgba(255, 82, 44, 0.36);
 }
+
+/* Homepage actions use a calmer discovery motion than the fiery battle CTA. */
+.question-bank-link {
+  isolation: isolate;
+  background: linear-gradient(115deg, #cffafe 0%, #e0f2fe 48%, #dbeafe 100%);
+  transition: box-shadow 220ms ease, filter 220ms ease;
+}
+
+.question-bank-link::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(105deg, transparent 25%, rgba(255, 255, 255, 0.72) 48%, transparent 70%);
+  transform: translateX(-120%);
+  animation: question-bank-scan 3.4s ease-in-out infinite;
+}
+
+.question-bank-link:hover {
+  filter: saturate(1.08) brightness(1.02);
+  box-shadow: 0 12px 32px rgba(6, 182, 212, 0.24);
+}
+
+.question-bank-orbit {
+  position: absolute;
+  left: 0.72rem;
+  top: 50%;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid rgba(8, 145, 178, 0.28);
+  border-radius: 999px;
+  transform: translateY(-50%);
+  animation: question-bank-pulse 2.4s ease-out infinite;
+}
+
+.question-bank-orbit span {
+  position: absolute;
+  top: -0.16rem;
+  left: 50%;
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: #0891b2;
+  box-shadow: 0 0 0.6rem rgba(6, 182, 212, 0.9);
+  transform-origin: 50% calc(0.95rem + 0.16rem);
+  animation: question-bank-orbit 2.4s linear infinite;
+}
+
+.homepage-action-link {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+
+.homepage-action-link::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.42) 50%, transparent 65%);
+  transform: translateX(-130%);
+  transition: transform 500ms ease;
+}
+
+.homepage-action-link:hover::after { transform: translateX(130%); }
+.action-neutral { border-color: #e2e8f0; background: rgba(255, 255, 255, 0.9); color: #334155; }
+.action-neutral:hover { background: #f8fafc; box-shadow: 0 10px 24px rgba(100, 116, 139, 0.14); }
+.action-dark { background: #0f172a; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18); }
+.action-dark:hover { background: #1e293b; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28); }
+.action-violet { border-color: #ddd6fe; background: rgba(245, 243, 255, 0.9); color: #6d28d9; }
+.action-violet:hover { background: #ede9fe; box-shadow: 0 10px 24px rgba(139, 92, 246, 0.16); }
+.action-emerald { border-color: #a7f3d0; background: rgba(236, 253, 245, 0.9); color: #047857; }
+.action-emerald:hover { background: #d1fae5; box-shadow: 0 10px 24px rgba(16, 185, 129, 0.16); }
+
+@keyframes question-bank-scan { 0%, 22% { transform: translateX(-120%); } 58%, 100% { transform: translateX(120%); } }
+@keyframes question-bank-orbit { to { transform: rotate(360deg); } }
+@keyframes question-bank-pulse { 0%, 100% { opacity: 0.5; transform: translateY(-50%) scale(0.92); } 50% { opacity: 1; transform: translateY(-50%) scale(1.08); } }
 
 /* Large backdrop blurs are costly during touch scrolling. */
 @media (max-width: 767px) {

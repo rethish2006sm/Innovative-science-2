@@ -1824,7 +1824,14 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                   </div>
 
                   {currentQuestion && (
-                    <article className={`rounded-2xl border p-4 shadow-sm sm:p-5 ${currentQuestion.isBoardQuestion ? 'border-amber-300 bg-amber-50/70' : 'border-stone-200 bg-white'}`}>
+                    <article
+                      className={`question-protected rounded-2xl border p-4 shadow-sm sm:p-5 ${currentQuestion.isBoardQuestion ? 'border-amber-300 bg-amber-50/70' : 'border-stone-200 bg-white'}`}
+                      onContextMenu={(event) => event.preventDefault()}
+                      onCopy={(event) => event.preventDefault()}
+                      onCut={(event) => event.preventDefault()}
+                      onDragStart={(event) => event.preventDefault()}
+                      onSelectStart={(event) => event.preventDefault()}
+                    >
                       <div className="flex flex-col gap-3">
                         <div className="flex items-start justify-between gap-3">
                           <p className="font-mono text-xs font-bold uppercase tracking-widest text-stone-400">

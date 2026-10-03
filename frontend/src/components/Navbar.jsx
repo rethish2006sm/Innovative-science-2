@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   BarChart3,
   BookOpen,
+  ClipboardList,
   Check,
   ChevronDown,
   Flame,
@@ -45,6 +46,11 @@ const navItems = [
     name: 'Chapters',
     path: '/chapters',
     icon: <BookOpen size={18} />,
+  },
+  {
+    name: 'Question Bank',
+    path: '/questions',
+    icon: <ClipboardList size={18} />,
   },
   {
     name: 'Test Builder',
@@ -175,7 +181,7 @@ const Navbar = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const isProfilePage = location.pathname === '/profile';
-  const isAdminPage = location.pathname === '/admin' || location.pathname === '/dashboard';
+  const isAdminPage = location.pathname === '/admin' || location.pathname === '/dashboard' || location.pathname === '/admin/analysis' || location.pathname === '/admin/questions';
   const classButtonPath = auth?.user?.classId ? `/class/${auth.user.classId}` : '';
   const classButtonLabel = auth?.user?.className?.trim() || 'Class';
   const profileInitial = (auth?.user?.name || auth?.user?.email || 'U').trim().charAt(0).toUpperCase();
@@ -191,11 +197,11 @@ const Navbar = () => {
       item.name !== 'Feedback' &&
       (!hideContactForStudent || item.name !== 'Contact'),
   );
-  const primaryDesktopNavItems = desktopNavItems.filter((item) => ['Chapters', 'PYQs', 'Daily Streak', 'Battle Mode'].includes(item.name));
+  const primaryDesktopNavItems = desktopNavItems.filter((item) => ['Chapters', 'Question Bank', 'PYQs', 'Battle Mode'].includes(item.name));
   const moreDesktopNavItems = [
     aboutNavItem,
     ...navItems.filter(
-      (item) => !['Chapters', 'PYQs', 'Daily Streak', 'Battle Mode'].includes(item.name)
+      (item) => !['Chapters', 'Question Bank', 'PYQs', 'Daily Streak', 'Battle Mode'].includes(item.name)
         && (!hideContactForStudent || item.name !== 'Contact'),
     ),
   ];

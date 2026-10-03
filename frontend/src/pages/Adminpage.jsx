@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import {
   BadgePlus,
   BellRing,
@@ -7,6 +7,7 @@ import {
   Download,
   Edit3,
   FileText,
+  Gift,
   Image as ImageIcon,
   Loader2,
   MessageCircleMore,
@@ -128,6 +129,10 @@ const Adminpage = () => {
   const [studentsReady, setStudentsReady] = useState(false)
   const [classes, setClasses] = useState([])
   const [classesLoading, setClassesLoading] = useState(true)
+  const [gifts, setGifts] = useState([])
+  const [giftClassId, setGiftClassId] = useState('')
+  const [giftFile, setGiftFile] = useState(null)
+  const [giftSaving, setGiftSaving] = useState(false)
   const [reports, setReports] = useState([])
   const [contacts, setContacts] = useState([])
   const [feedbacks, setFeedbacks] = useState([])
@@ -808,6 +813,49 @@ const Adminpage = () => {
     }
   }
 
+  const loadGifts = async () => {
+    try {
+      const data = await apiRequest('/api/admin/gifts', { cache: 'no-store' })
+      setGifts(Array.isArray(data.gifts) ? data.gifts : [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const saveGift = async (event) => {
+    event.preventDefault()
+    if (!giftClassId || !giftFile) {
+      setError('Choose a class and an image for the gift.')
+      return
+    }
+    setGiftSaving(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.append('classId', giftClassId)
+      formData.append('image', giftFile)
+      const data = await apiRequest('/api/admin/gifts', { method: 'POST', body: formData })
+      const nextGift = data.gift
+      setGifts((current) => [nextGift, ...current.filter((item) => item.classId !== nextGift.classId)])
+      setGiftFile(null)
+      event.target.reset()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setGiftSaving(false)
+    }
+  }
+
+  const removeGift = async (classId) => {
+    if (!window.confirm('Remove this class gift?')) return
+    try {
+      await apiRequest(`/api/admin/gifts/${classId}`, { method: 'DELETE' })
+      setGifts((current) => current.filter((gift) => gift.classId !== classId))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   const sendWebPushMessage = async (event) => {
     event.preventDefault()
     setPushSending(true)
@@ -1095,6 +1143,8 @@ const Adminpage = () => {
 
       return () => window.clearInterval(timer)
     }
+
+    if (activeTab === 'gift') loadGifts()
   }, [activeTab])
 
   const openStudentDetail = async (student) => {
@@ -1819,7 +1869,7 @@ const Adminpage = () => {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'class-board', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
+            {['students', 'classes', 'class-board', 'gift', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -1829,6 +1879,12 @@ const Adminpage = () => {
                 {tab === 'class-board' ? 'class board' : tab === 'deletion-requests' ? 'deletion requests' : tab}
               </button>
             ))}
+            <Link
+              to="/admin/analysis"
+              className="rounded-full border border-cyan-200 bg-cyan-50 px-5 py-3 text-sm font-black text-cyan-700 transition hover:bg-cyan-100"
+            >
+              analysis
+            </Link>
           </div>
 
           {error && (
@@ -1839,6 +1895,17 @@ const Adminpage = () => {
 
           <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_0.85fr]">
             <div className="grid gap-6">
+              {activeTab === 'gift' && (
+                <div className="rounded-[1.75rem] border border-amber-200 bg-white p-5 shadow-sm sm:p-7">
+                  <div className="flex items-center gap-3"><Gift className="h-6 w-6 text-amber-600" /><div><h2 className="font-serif text-3xl text-slate-950">Class gift</h2><p className="mt-1 text-sm text-slate-500">Upload one image for a class. Students in that class see it as a popup whenever they reload.</p></div></div>
+                  <form onSubmit={saveGift} className="mt-6 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                    <label className="grid gap-2 text-sm font-bold text-slate-600">Class<select value={giftClassId} onChange={(event) => setGiftClassId(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900"><option value="">Select class</option>{classes.map((item) => <option key={item._id} value={item._id}>{item.name}{item.grade ? ` · ${item.grade}` : ''}</option>)}</select></label>
+                    <label className="grid gap-2 text-sm font-bold text-slate-600">Photo<input type="file" accept="image/*" onChange={(event) => setGiftFile(event.target.files?.[0] || null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm" /></label>
+                    <button type="submit" disabled={giftSaving} className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white hover:bg-black disabled:opacity-60">{giftSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}{giftSaving ? 'Saving...' : 'Save gift'}</button>
+                  </form>
+                  <div className="mt-6 grid gap-3">{gifts.length ? gifts.map((gift) => <div key={gift.id} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"><div><p className="font-black text-slate-900">{gift.className}</p><p className="text-xs text-slate-500">{gift.originalName}</p></div><button type="button" onClick={() => removeGift(gift.classId)} className="inline-flex items-center gap-2 rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-black text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /> Remove</button></div>) : <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-sm text-slate-500">No class gifts saved yet.</p>}</div>
+                </div>
+              )}
               {activeTab === 'students' && (
                 <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

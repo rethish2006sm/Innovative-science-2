@@ -834,7 +834,14 @@ const Testbuilderpage = () => {
                     </div>
 
                     {currentQuestion && (
-                      <article className="relative rounded-2xl bg-white lg:border lg:border-stone-200 p-5 lg:shadow-sm">
+                      <article
+                        className="question-protected relative rounded-2xl bg-white p-5 lg:border lg:border-stone-200 lg:shadow-sm"
+                        onContextMenu={(event) => event.preventDefault()}
+                        onCopy={(event) => event.preventDefault()}
+                        onCut={(event) => event.preventDefault()}
+                        onDragStart={(event) => event.preventDefault()}
+                        onSelectStart={(event) => event.preventDefault()}
+                      >
                         <button
                           type="button"
                           onClick={() => toggleMarkLater(currentQuestion.id)}
