@@ -3383,7 +3383,9 @@ const dailyQuestionView = (question, challenge) => {
   }
 }
 
-const streakExcludedObjectiveTypes = new Set(['complete-the-tables', 'diagram-based-question'])
+const streakExcludedObjectiveTypes = new Set(['complete-the-tables', 'diagram-based-question', 'match-the-following'])
+
+const dailyExcludedObjectiveTypes = new Set(['match-the-following'])
 
 const countStreakEligibleCorrectAnswers = (challenge, questions) => {
   const typeByQuestionId = new Map(
@@ -3465,6 +3467,7 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
   const chapterRank = new Map(eligibleChapterIds.map((chapterId, index) => [chapterId, index]))
   const filtered = candidates
     .filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
+    .filter((question) => !dailyExcludedObjectiveTypes.has(question.objectiveType?.type))
     // Do not repeat a question within the same calendar month. Questions
     // become eligible again automatically when the next month starts.
     .filter((question) => !usedQuestionIds.has(String(question._id)))
@@ -3561,13 +3564,23 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
     }
   }
 
+  const existingQuestionDocs = challenge?.questionIds?.length
+    ? await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds } })
+      .populate({ path: 'objectiveType', select: 'type' })
+      .select('objectiveType')
+      .lean()
+    : []
+  const hasDailyExcludedQuestion = existingQuestionDocs.some((question) => (
+    dailyExcludedObjectiveTypes.has(question.objectiveType?.type)
+  ))
+
   // A student may practise after first opening the daily-streak page. Refresh
   // an untouched challenge so the newly unlocked chapter is usable today.
   if (challenge && challenge.status !== 'completed' && !challenge.answers?.length) {
     const eligibleChapterIds = await getEligibleDailyChapterIds(userId)
     const storedChapterIds = (challenge.eligibleChapterIds || []).map((id) => String(id)).sort()
     const currentChapterIds = [...eligibleChapterIds].sort()
-    if (JSON.stringify(storedChapterIds) !== JSON.stringify(currentChapterIds)) {
+    if (hasDailyExcludedQuestion || JSON.stringify(storedChapterIds) !== JSON.stringify(currentChapterIds)) {
       const selected = await selectDailyQuestions(userId, eligibleChapterIds, localDate)
       challenge.questionIds = selected.map((question) => question._id)
       challenge.eligibleChapterIds = eligibleChapterIds
@@ -3659,6 +3672,23 @@ app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => 
     res.json(await getDailyChallenge(req.user._id, challenge.localDate, challenge.timezone))
   } catch (error) {
     res.status(500).json({ message: 'Could not complete the daily challenge.' })
+  }
+})
+
+app.post('/api/admin/streaks/reset', authRequired, adminRequired, async (req, res) => {
+  try {
+    const result = await StudentStreak.updateMany({}, {
+      $set: {
+        currentStreak: 0,
+        longestStreak: 0,
+        lastCreditedDate: null,
+      },
+    })
+
+    res.json({ resetCount: Number(result.modifiedCount || 0) })
+  } catch (error) {
+    console.error('Admin streak reset failed:', error.message)
+    res.status(500).json({ message: 'Could not reset student streaks.' })
   }
 })
 

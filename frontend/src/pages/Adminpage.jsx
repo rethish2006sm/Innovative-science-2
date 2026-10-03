@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   Loader2,
   MessageCircleMore,
+  RotateCcw,
   Search,
   Send,
   Shield,
@@ -133,6 +134,8 @@ const Adminpage = () => {
   const [giftClassId, setGiftClassId] = useState('')
   const [giftFile, setGiftFile] = useState(null)
   const [giftSaving, setGiftSaving] = useState(false)
+  const [streakResetting, setStreakResetting] = useState(false)
+  const [streakResetSuccess, setStreakResetSuccess] = useState('')
   const [reports, setReports] = useState([])
   const [contacts, setContacts] = useState([])
   const [feedbacks, setFeedbacks] = useState([])
@@ -853,6 +856,25 @@ const Adminpage = () => {
       setGifts((current) => current.filter((gift) => gift.classId !== classId))
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const resetAllStreaks = async () => {
+    if (!window.confirm('Reset the current and longest streak for every student to zero? This cannot be undone.')) {
+      return
+    }
+
+    setStreakResetting(true)
+    setStreakResetSuccess('')
+    setError('')
+
+    try {
+      const data = await apiRequest('/api/admin/streaks/reset', { method: 'POST' })
+      setStreakResetSuccess(`All student streaks were reset to zero. ${data.resetCount || 0} streak record(s) updated.`)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setStreakResetting(false)
     }
   }
 
@@ -1869,7 +1891,7 @@ const Adminpage = () => {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'class-board', 'gift', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
+            {['students', 'classes', 'class-board', 'gift', 'streak', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -1904,6 +1926,40 @@ const Adminpage = () => {
                     <button type="submit" disabled={giftSaving} className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white hover:bg-black disabled:opacity-60">{giftSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}{giftSaving ? 'Saving...' : 'Save gift'}</button>
                   </form>
                   <div className="mt-6 grid gap-3">{gifts.length ? gifts.map((gift) => <div key={gift.id} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"><div><p className="font-black text-slate-900">{gift.className}</p><p className="text-xs text-slate-500">{gift.originalName}</p></div><button type="button" onClick={() => removeGift(gift.classId)} className="inline-flex items-center gap-2 rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-black text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /> Remove</button></div>) : <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-sm text-slate-500">No class gifts saved yet.</p>}</div>
+                </div>
+              )}
+              {activeTab === 'streak' && (
+                <div className="rounded-[1.75rem] border border-red-200 bg-white p-5 shadow-sm sm:p-7">
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-red-50 text-red-600">
+                      <RotateCcw className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <h2 className="font-serif text-3xl text-slate-950">Streak tools</h2>
+                      <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+                        Reset every student&apos;s current and longest daily streak. This does not delete daily challenge history.
+                      </p>
+                    </div>
+                  </div>
+                  {streakResetSuccess && (
+                    <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                      {streakResetSuccess}
+                    </div>
+                  )}
+                  <div className="mt-6 rounded-3xl border border-red-100 bg-red-50/60 p-4">
+                    <p className="text-sm leading-6 text-red-800">
+                      This action permanently sets all stored streak values and their credited dates to zero/null.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={resetAllStreaks}
+                      disabled={streakResetting}
+                      className="mt-4 inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <RotateCcw className={`h-4 w-4 ${streakResetting ? 'animate-spin' : ''}`} />
+                      {streakResetting ? 'Resetting streaks...' : 'Reset all user streaks'}
+                    </button>
+                  </div>
                 </div>
               )}
               {activeTab === 'students' && (
