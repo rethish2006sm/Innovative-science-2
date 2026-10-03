@@ -8,6 +8,7 @@ import { hasFeedbackFlowBeenSubmitted } from '../lib/feedbackFlow'
 
 const objectiveLabels = {
   mcqs: 'MCQs',
+  'odd-man-out': 'Odd Man Out',
   'true-or-false': 'True or False',
   correlation: 'Correlation',
   'match-the-following': 'Match the Following',

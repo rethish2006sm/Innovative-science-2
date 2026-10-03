@@ -217,7 +217,9 @@ const Chapters = () => {
         <div className="mt-0 border-b border-stone-200 pb-5 sm:mt-2 sm:pb-6">
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            // Chapters is the top of the learning hierarchy. Always return
+            // to Home instead of depending on whichever page opened it.
+            onClick={() => navigate('/')}
             className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
             aria-label="Go back"
             title="Go back"

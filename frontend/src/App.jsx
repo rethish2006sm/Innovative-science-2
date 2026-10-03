@@ -1,40 +1,44 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
 import StudentMessagePopup from './components/StudentMessagePopup'
 import SiteNoticeBanner from './components/SiteNoticeBanner'
-import Aboutpage from './pages/Aboutpage'
-import ChapterWeightage from './pages/Chapter_weightage'
-import Chapters from './pages/Chapters'
-import Completethetables from './pages/Completethetables'
-import Contactpage from './pages/Contactpage'
-import Correlation from './pages/Correlation'
-import Diagrams from './pages/diagrams'
-import Adminpage from './pages/Adminpage'
-import Classpage from './pages/Classpage'
-import Feedbackpage from './pages/Feedbackpage'
-import BattleModeHome from './pages/BattleModeHome'
-import BattleCreatePage from './pages/BattleCreatePage'
-import BattleJoinPage from './pages/BattleJoinPage'
-import BattleRoomPage from './pages/BattleRoomPage'
-import Improvementpage from './pages/Improvementpage'
-import Identifysymbol from './pages/Identifysymbol'
-import Homepage from './pages/Homepage'
-import LeaderboardPage from './pages/LeaderboardPage'
-import Matchthefollowing from './pages/Matchthefollowing'
-import MCQs from './pages/MCQs'
-import Objectivepage from './pages/Objectivepage'
-import Profilepage from './pages/Profilepage'
-import Signinpage from './pages/Signinpage'
-import Signuppage from './pages/Signuppage'
-import CompleteProfilePage from './pages/CompleteProfilePage'
-import SettingsPage from './pages/SettingsPage'
-import PyqsPage from './pages/PyqsPage'
-import Testbuilderpage from './pages/Testbuilderpage'
-import Topicspage from './pages/Topicspage'
-import TrueorFalse from './pages/TrueorFalse'
+const Aboutpage = lazy(() => import('./pages/Aboutpage'))
+const ChapterWeightage = lazy(() => import('./pages/Chapter_weightage'))
+const Chapters = lazy(() => import('./pages/Chapters'))
+const Completethetables = lazy(() => import('./pages/Completethetables'))
+const Contactpage = lazy(() => import('./pages/Contactpage'))
+const Correlation = lazy(() => import('./pages/Correlation'))
+const Diagrams = lazy(() => import('./pages/diagrams'))
+const Adminpage = lazy(() => import('./pages/Adminpage'))
+const Classpage = lazy(() => import('./pages/Classpage'))
+const Feedbackpage = lazy(() => import('./pages/Feedbackpage'))
+const BattleModeHome = lazy(() => import('./pages/BattleModeHome'))
+const BattleCreatePage = lazy(() => import('./pages/BattleCreatePage'))
+const BattleJoinPage = lazy(() => import('./pages/BattleJoinPage'))
+const BattleRoomPage = lazy(() => import('./pages/BattleRoomPage'))
+const Improvementpage = lazy(() => import('./pages/Improvementpage'))
+const Identifysymbol = lazy(() => import('./pages/Identifysymbol'))
+const Homepage = lazy(() => import('./pages/Homepage'))
+const LeaderboardPage = lazy(() => import('./pages/LeaderboardPage'))
+const DailyStreakPage = lazy(() => import('./pages/DailyStreakPage'))
+const Matchthefollowing = lazy(() => import('./pages/Matchthefollowing'))
+const MCQs = lazy(() => import('./pages/MCQs'))
+const Numericals = lazy(() => import('./pages/Numericals'))
+const Oddmanout = lazy(() => import('./pages/Oddmanout'))
+const Objectivepage = lazy(() => import('./pages/Objectivepage'))
+const Profilepage = lazy(() => import('./pages/Profilepage'))
+const ProfilePerformancePage = lazy(() => import('./pages/ProfilePerformancePage'))
+const Signinpage = lazy(() => import('./pages/Signinpage'))
+const Signuppage = lazy(() => import('./pages/Signuppage'))
+const CompleteProfilePage = lazy(() => import('./pages/CompleteProfilePage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const PyqsPage = lazy(() => import('./pages/PyqsPage'))
+const Testbuilderpage = lazy(() => import('./pages/Testbuilderpage'))
+const Topicspage = lazy(() => import('./pages/Topicspage'))
+const TrueorFalse = lazy(() => import('./pages/TrueorFalse'))
 import Seo from './components/Seo'
 import { io } from 'socket.io-client'
 import { API_BASE_URL, apiRequest } from './api'
@@ -42,6 +46,7 @@ import { authEvents, getStoredAuth, updateStoredUser } from './authStorage'
 import { clearBattleSession, getBattleSession, getBattleSessionRoute, saveBattleSession } from './lib/battleSession'
 import { registerWebPush } from './lib/webPush'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { getActiveScience, SCIENCE_CHANGED_EVENT } from './science'
 
 const SITE_DESCRIPTION =
   'Innovative Science 2 helps students practice science chapters, solve objective questions, take tests, and track brain cell progress.'
@@ -98,6 +103,14 @@ const getSeoFromPathname = (pathname) => {
     return {
       title: 'Leaderboard',
       description: 'See the top students ranked by brain cells, score, and overall practice progress.',
+    }
+  }
+
+  if (normalizedPath === '/daily-streak') {
+    return {
+      title: 'Daily Streak',
+      description: 'Build a daily science practice streak with a personalized challenge.',
+      noindex: true,
     }
   }
 
@@ -190,6 +203,13 @@ const getSeoFromPathname = (pathname) => {
     return {
       title: 'Correlation Practice',
       description: 'Practice correlation questions with a simple, exam-focused workflow.',
+    }
+  }
+
+  if (/\/objectives\/odd-man-out$/.test(normalizedPath)) {
+    return {
+      title: 'Odd Man Out Practice',
+      description: 'Choose the science option that does not belong with the other three.',
     }
   }
 
@@ -308,14 +328,18 @@ const hasCompleteProfile = (profile = {}) => Boolean(
 )
 
 const AuthRedirect = ({ children }) => {
-  const { user, loading } = useAuth()
-  const storedUser = getStoredAuth()?.user
+  const { loading } = useAuth()
+  const storedAuth = getStoredAuth()
+  const storedUser = storedAuth?.user
 
   if (loading) {
     return <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">Checking your session…</div>
   }
 
-  if (!user && !storedUser) return children
+  // Firebase can still have a client-side user while the backend session is
+  // missing or has failed to sync. Treat that state as a guest session so the
+  // public site and science selector remain usable before sign-in.
+  if (!storedAuth?.token) return children
 
   return <Navigate to={hasCompleteProfile(storedUser) ? '/' : '/complete-profile'} replace />
 }
@@ -349,14 +373,20 @@ const AuthRequiredScreen = () => (
   </section>
 )
 
+const PageLoading = () => (
+  <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">
+    Loading…
+  </div>
+)
+
 const ProtectedRoute = ({ children }) => {
-  const { user, loading } = useAuth()
+  const { loading } = useAuth()
 
   if (loading) {
     return <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">Checking your session…</div>
   }
 
-  return user || getStoredAuth() ? children : <AuthRequiredScreen />
+  return getStoredAuth()?.token ? children : <AuthRequiredScreen />
 }
 
 const AppLayout = () => {
@@ -366,12 +396,19 @@ const AppLayout = () => {
   const [showSigninReminder, setShowSigninReminder] = useState(false)
   const [siteNotice, setSiteNotice] = useState(null)
   const [dismissedNoticeKey, setDismissedNoticeKey] = useState('')
+  const [activeScience, setActiveScience] = useState(() => getActiveScience())
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
   const isBattleRoute = pathname.startsWith('/battle-mode')
   const isAuthRoute = pathname === '/signin' || pathname === '/signup'
   const seo = getSeoFromPathname(pathname)
   const siteNoticeKey = siteNotice?.id ? `${siteNotice.id}:${siteNotice.updatedAt || ''}` : ''
   const showSiteNotice = Boolean(siteNotice?.message && !isObjectivePracticeRoute && !isBattleRoute && siteNoticeKey && dismissedNoticeKey !== siteNoticeKey)
+
+  useEffect(() => {
+    const syncScience = (event) => setActiveScience(event.detail?.science || getActiveScience())
+    window.addEventListener(SCIENCE_CHANGED_EVENT, syncScience)
+    return () => window.removeEventListener(SCIENCE_CHANGED_EVENT, syncScience)
+  }, [])
 
   useEffect(() => {
     const syncAuth = () => setAuth(getStoredAuth())
@@ -591,12 +628,14 @@ const AppLayout = () => {
           />
         )}
         <main className="min-h-screen w-full bg-slate-50 text-slate-950">
-          <Routes>
+          <Suspense fallback={<PageLoading />}>
+          <Routes key={activeScience}>
           <Route path="/" element={<Homepage />} />
           <Route path="/about" element={<Aboutpage />} />
           <Route path="/contact" element={<Contactpage />} />
           <Route path="/feedback" element={<Feedbackpage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
+          <Route path="/daily-streak" element={<ProtectedRoute><DailyStreakPage /></ProtectedRoute>} />
           <Route path="/battle-mode" element={<BattleModeHome />} />
           <Route path="/battle-mode/create" element={<ProtectedRoute><BattleCreatePage /></ProtectedRoute>} />
           <Route path="/battle-mode/join" element={<ProtectedRoute><BattleJoinPage /></ProtectedRoute>} />
@@ -620,11 +659,14 @@ const AppLayout = () => {
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/mcqs" element={<MCQs />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/true-or-false" element={<TrueorFalse />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/correlation" element={<Correlation />} />
+          <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/odd-man-out" element={<Oddmanout />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/match-the-following" element={<Matchthefollowing />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/complete-the-tables" element={<Completethetables />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/diagram-based-question" element={<Diagrams />} />
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/identify-symbol" element={<Identifysymbol />} />
+          <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/numericals" element={<Numericals />} />
           <Route path="/profile" element={<ProtectedRoute><Profilepage /></ProtectedRoute>} />
+          <Route path="/profile/performance" element={<ProtectedRoute><ProfilePerformancePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/complete-profile" element={<ProtectedRoute><CompleteProfilePage /></ProtectedRoute>} />
           <Route path="/pyqs" element={<PyqsPage />} />
@@ -645,6 +687,7 @@ const AppLayout = () => {
             }
           />
           </Routes>
+          </Suspense>
         </main>
       </div>
       {!isObjectivePracticeRoute && !isBattleRoute && <div className="app-footer"><Footer /></div>}

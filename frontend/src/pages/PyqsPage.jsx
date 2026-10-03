@@ -14,9 +14,7 @@ import {
 } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
-
-const FIXED_TITLE = 'Class 10 Science 2'
-const FIXED_SUBJECT = 'Science 2'
+import { getActiveScience, SCIENCE_CHANGED_EVENT } from '../science'
 
 const MONTH_OPTIONS = [
   'January',
@@ -42,6 +40,7 @@ const initialUploadForm = {
 const PyqsPage = () => {
   const navigate = useNavigate()
   const [auth, setAuth] = useState(() => getStoredAuth())
+  const [science, setScience] = useState(() => getActiveScience())
   const [pyqs, setPyqs] = useState([])
   const [selectedPyqId, setSelectedPyqId] = useState('')
   const [uploadForm, setUploadForm] = useState(initialUploadForm)
@@ -51,6 +50,8 @@ const PyqsPage = () => {
   const [error, setError] = useState('')
   const [selectedYear, setSelectedYear] = useState('')
   const [selectedMonth, setSelectedMonth] = useState('')
+  const scienceLabel = science === 'science1' ? 'Science 1' : 'Science 2'
+  const pageTitle = `Class 10 ${scienceLabel}`
 
   const selectedPyq =
     pyqs.find((item) => item.id === selectedPyqId) || pyqs[0] || null
@@ -87,6 +88,18 @@ const PyqsPage = () => {
     }
   }, [])
 
+  useEffect(() => {
+    const syncScience = () => {
+      setScience(getActiveScience())
+      setSelectedPyqId('')
+      setSelectedYear('')
+      setSelectedMonth('')
+    }
+
+    window.addEventListener(SCIENCE_CHANGED_EVENT, syncScience)
+    return () => window.removeEventListener(SCIENCE_CHANGED_EVENT, syncScience)
+  }, [])
+
   /* ---------------- LOAD PYQS ---------------- */
 
   useEffect(() => {
@@ -110,7 +123,7 @@ const PyqsPage = () => {
     }
 
     loadPyqs()
-  }, [auth?.token])
+  }, [auth?.token, science])
 
   /* ---------------- FORM ---------------- */
 
@@ -263,7 +276,7 @@ const PyqsPage = () => {
               {/* Title */}
               <div className="mt-3 max-w-4xl">
                 <h1 className="font-serif text-4xl font-medium leading-[1.05] tracking-[-0.035em] text-slate-950 sm:text-5xl lg:text-[4.5rem]">
-                  {FIXED_TITLE}
+                  {pageTitle}
                 </h1>
 
               </div>
@@ -309,13 +322,13 @@ const PyqsPage = () => {
                       </h2>
 
                       <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
-                        Save a question paper link for students.
+                        Save a question paper link for students in {scienceLabel}.
                       </p>
                     </div>
                   </div>
 
-                  <div className="hidden rounded-full bg-slate-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500 sm:block">
-                    Admin only
+                  <div className="rounded-full bg-cyan-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-700">
+                    Adding to {scienceLabel}
                   </div>
                 </div>
 
@@ -608,7 +621,7 @@ const PyqsPage = () => {
         {/* Bottom subtle branding */}
         <div className="flex items-center justify-center gap-2 py-6 text-[10px] font-black uppercase tracking-[0.22em] text-slate-300">
           <Sparkles className="h-3 w-3" />
-          Science 2 • PYQs
+          {scienceLabel} • PYQs
         </div>
       </div>
     </section>

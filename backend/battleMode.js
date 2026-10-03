@@ -377,7 +377,9 @@ const battleRoomSchema = new (require('mongoose').Schema)(
 battleRoomSchema.index({ cleanupAt: 1 }, { expireAfterSeconds: 0, sparse: true })
 battleRoomSchema.index({ codeExpiresAt: 1 })
 
-const getBattleRoomModel = (mongoose) => mongoose.models.BattleRoom || mongoose.model('BattleRoom', battleRoomSchema)
+const getBattleRoomModel = (mongoose, connection = mongoose.connection) => (
+  connection.models.BattleRoom || connection.model('BattleRoom', battleRoomSchema)
+)
 
 const safeLower = (value) => String(value || '').trim().toLowerCase()
 const safeUpper = (value) => String(value || '').trim().toUpperCase()
@@ -980,8 +982,20 @@ const normalizeBattleSettingsUpdate = (body = {}, currentSettings = {}) => ({
     : Boolean(currentSettings.roomChat),
 })
 
-const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequired, optionalAuth }) => {
-  const BattleRoom = getBattleRoomModel(mongoose)
+const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequired, optionalAuth, getScienceConnection }) => {
+  const baseBattleRoom = getBattleRoomModel(mongoose)
+  const BattleRoom = getScienceConnection
+    ? new Proxy(baseBattleRoom, {
+      get(target, property) {
+        const model = getBattleRoomModel(mongoose, getScienceConnection())
+        const value = model[property]
+        return typeof value === 'function' ? value.bind(model) : value
+      },
+      construct(target, args) {
+        return Reflect.construct(getBattleRoomModel(mongoose, getScienceConnection()), args)
+      },
+    })
+    : baseBattleRoom
   const io = sharedIo || new Server(server, {
     cors: {
       origin: true,

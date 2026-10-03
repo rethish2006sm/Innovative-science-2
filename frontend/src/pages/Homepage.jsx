@@ -1,10 +1,166 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, Award, BookOpen, Brain, CheckCircle2, Flame, MessageCircleMore, Sparkles, Star, Swords, Trophy, TrendingUp, X } from 'lucide-react'
+import { ArrowRight, BookOpen, Brain, CalendarDays, CheckCircle2, Flame, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
-import ChapterWeightageGraph from '../components/ChapterWeightageGraph'
+import { getFeedbackClientKey } from '../lib/feedbackClient'
+
+const CHAPTER_WEIGHTAGE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#06b6d4', '#8b5cf6', '#ec4899', '#14b8a6']
+
+const getLocalDateKey = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const polarToCartesian = (center, radius, angle) => {
+  const radians = ((angle - 90) * Math.PI) / 180
+  return {
+    x: center + radius * Math.cos(radians),
+    y: center + radius * Math.sin(radians),
+  }
+}
+
+const createWeightageArc = (center, radius, startAngle, endAngle) => {
+  const start = polarToCartesian(center, radius, endAngle)
+  const end = polarToCartesian(center, radius, startAngle)
+  const largeArcFlag = endAngle - startAngle <= 180 ? 0 : 1
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`
+}
+
+const ChapterWeightageInline = ({ chapters = [], distributionMode = 'withOption' }) => {
+  const [activeIndex, setActiveIndex] = useState(null)
+
+  const totalMarks = chapters.reduce(
+    (total, chapter) => total + (Number(chapter.marks) || 0),
+    0
+  )
+
+  const segments = useMemo(() => [...chapters]
+    .sort((a, b) => {
+      const aNumber = Number(a.number)
+      const bNumber = Number(b.number)
+      if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber
+      return String(a.number || '').localeCompare(String(b.number || ''), undefined, { numeric: true })
+    })
+    .map((chapter, index) => ({
+      ...chapter,
+      value: Number(chapter.marks) || 0,
+      color: CHAPTER_WEIGHTAGE_COLORS[index % CHAPTER_WEIGHTAGE_COLORS.length],
+    }))
+    .map((chapter, index) => ({
+      ...chapter,
+      percentage: totalMarks ? ((chapter.value / totalMarks) * 100) : 0,
+      rank: 0,
+    })), [chapters, totalMarks])
+
+  const chartSegments = useMemo(() => {
+    let currentAngle = 0
+    const gap = segments.length > 1 ? 3 : 0
+
+    return segments.map((chapter) => {
+      const angle = totalMarks ? (chapter.value / totalMarks) * 360 : 0
+      const nextSegment = {
+        ...chapter,
+        startAngle: currentAngle + gap / 2,
+        endAngle: Math.max(currentAngle + angle - gap / 2, currentAngle + gap / 2),
+      }
+      currentAngle += angle
+      return nextSegment
+    })
+  }, [segments, totalMarks])
+
+  const selectedIndex = activeIndex === null ? -1 : Math.min(activeIndex, Math.max(segments.length - 1, 0))
+  const selectedChapter = selectedIndex >= 0 ? segments[selectedIndex] : null
+  return (
+    <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 sm:rounded-3xl sm:p-6">
+      {segments.length ? (
+        <>
+          <div className="flex justify-center">
+            <div className="relative shrink-0">
+              <svg viewBox="0 0 300 300" className="h-[250px] w-[250px] sm:h-[330px] sm:w-[330px]" role="img" aria-label="Interactive chapter weightage chart">
+                <circle cx="150" cy="150" r="111" fill="none" stroke="#f1f5f9" strokeWidth="42" />
+                {chartSegments.map((chapter, index) => {
+                  const isActive = selectedIndex === index
+                  const arcPath = createWeightageArc(150, isActive ? 118 : 108, chapter.startAngle, chapter.endAngle)
+                  return (
+                    <motion.path
+                      key={chapter._id || chapter.number || index}
+                      fill="none"
+                      stroke={chapter.color}
+                      strokeWidth={isActive ? 46 : 40}
+                      strokeLinecap="butt"
+                      strokeLinejoin="round"
+                      initial={{ d: arcPath, opacity: 0 }}
+                      animate={{
+                        d: arcPath,
+                        opacity: 1,
+                        strokeWidth: isActive ? 46 : 40,
+                      }}
+                      transition={{
+                        d: { duration: 0.35, ease: [0.22, 1, 0.36, 1] },
+                        opacity: { duration: 0.3, delay: index * 0.03 },
+                        strokeWidth: { duration: 0.35, ease: [0.22, 1, 0.36, 1] },
+                      }}
+                      className="cursor-pointer"
+                      onClick={() => {
+                        setActiveIndex(index)
+                      }}
+                      aria-label={`Select ${chapter.name}`}
+                    />
+                  )
+                })}
+              </svg>
+              <div className="pointer-events-auto absolute inset-0 m-auto flex h-[150px] w-[150px] flex-col items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-center shadow-[0_3px_12px_rgba(15,23,42,0.08)] sm:h-[178px] sm:w-[178px]">
+                <AnimatePresence mode="wait">
+                  {selectedChapter ? (
+                    <motion.div
+                      key={selectedChapter._id || selectedChapter.number || selectedChapter.name}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.18 }}
+                      className="flex w-full flex-col items-center"
+                    >
+                      <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-cyan-700">Selected</p>
+                      <p className="mt-1 max-w-full break-words text-[clamp(0.68rem,2.4vw,0.95rem)] font-black leading-tight text-slate-950" title={selectedChapter.name}>
+                        {selectedChapter.name}
+                      </p>
+                      <Link
+                        to={`/chapters/${selectedChapter.number}/topics`}
+                        className="mt-2 inline-flex items-center justify-center rounded-lg bg-cyan-600 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-white transition hover:bg-cyan-700"
+                      >
+                        Open Chp
+                      </Link>
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="overview"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.18 }}
+                    >
+                      <p className="text-[9px] font-medium uppercase tracking-[0.28em] text-slate-500 sm:text-xs">Overview</p>
+                      <p className="mt-2 text-3xl font-black leading-none text-slate-950 sm:text-4xl">{totalMarks}</p>
+                      <p className="mt-2 text-xs text-slate-500 sm:text-sm">Total Marks</p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+
+          </div>
+          <p className="mt-3 text-center text-[10px] text-slate-500">{distributionMode === 'withOption' ? 'Weightage includes options.' : 'Weightage excludes options.'} Select a slice to highlight it.</p>
+        </>
+      ) : (
+        <div className="mt-5 rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">No chapter weightage data available yet.</div>
+      )}
+    </div>
+  )
+}
 
 const normalizeTopFiveRows = (rows = []) => (Array.isArray(rows) ? rows.slice(0, 5) : [])
 
@@ -42,7 +198,7 @@ const staggerContainer = {
   }
 }
 
-const AnimatedBattleModeLink = motion(Link)
+const AnimatedBattleModeLink = motion.create(Link)
 
 const Homepage = () => {
   const navigate = useNavigate()
@@ -51,8 +207,14 @@ const Homepage = () => {
   const [leaderboardScope, setLeaderboardScope] = useState('all')
   const [selectedClassId, setSelectedClassId] = useState(() => getStoredAuth()?.user?.classId || '')
   const [chapters, setChapters] = useState([])
-  const [progress, setProgress] = useState(null)
+  const [dailyStreakData, setDailyStreakData] = useState(null)
   const [featuredFeedback, setFeaturedFeedback] = useState([])
+  const [feedbackForm, setFeedbackForm] = useState({ name: '', email: '', message: '' })
+  const [feedbackRating, setFeedbackRating] = useState(5)
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
+  const [feedbackSuccess, setFeedbackSuccess] = useState('')
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false)
   const [leaderboardLoading, setLeaderboardLoading] = useState(true)
   const [chaptersLoading, setChaptersLoading] = useState(true)
   const [auth, setAuth] = useState(() => getStoredAuth())
@@ -134,6 +296,14 @@ const Homepage = () => {
   }, [])
 
   useEffect(() => {
+    setFeedbackForm((current) => ({
+      ...current,
+      name: auth?.user?.name || current.name,
+      email: auth?.user?.email || current.email,
+    }))
+  }, [auth?.user?.email, auth?.user?.name])
+
+  useEffect(() => {
     let cancelled = false
 
     const loadChapterData = async () => {
@@ -202,25 +372,21 @@ const Homepage = () => {
   useEffect(() => {
     let cancelled = false
 
-    const loadProgress = async () => {
+    const loadDailyStreak = async () => {
       if (!auth?.token) {
-        setProgress(null)
+        setDailyStreakData(null)
         return
       }
 
       try {
-        const progressData = await apiRequest('/api/progress/me').catch(() => null)
-        if (!cancelled) {
-          setProgress(progressData?.progress || null)
-        }
+        const data = await apiRequest('/api/daily-challenge/history', { cache: 'no-store' })
+        if (!cancelled) setDailyStreakData(data)
       } catch (error) {
-        if (!cancelled) {
-          setProgress(null)
-        }
+        if (!cancelled) setDailyStreakData(null)
       }
     }
 
-    loadProgress()
+    loadDailyStreak()
 
     return () => {
       cancelled = true
@@ -249,6 +415,26 @@ const Homepage = () => {
     { label: 'Top students', value: leaderboard.length || 0, icon: Trophy },
     { label: 'Brain cells / question', value: '1', icon: Brain },
   ], [chapters.length, leaderboard.length])
+
+  const streakCalendar = useMemo(() => {
+    const today = new Date()
+    const completedDates = new Set(
+      (dailyStreakData?.challenges || [])
+        .filter((challenge) => challenge.status === 'completed')
+        .map((challenge) => challenge.localDate)
+    )
+
+    return Array.from({ length: 7 }, (_, offset) => {
+      const date = new Date(today)
+      date.setDate(today.getDate() - (6 - offset))
+      return {
+        key: getLocalDateKey(date),
+        label: date.toLocaleDateString(undefined, { weekday: 'short' }),
+        day: date.getDate(),
+        isToday: offset === 6,
+      }
+    }).map((day) => ({ ...day, completed: completedDates.has(day.key) }))
+  }, [dailyStreakData])
 
   const openAiTeacher = () => {
     if (!getStoredAuth()?.token) {
@@ -333,6 +519,38 @@ const Homepage = () => {
     }
   }
 
+  const submitHomepageFeedback = async (event) => {
+    event.preventDefault()
+    setFeedbackSubmitting(true)
+    setFeedbackError('')
+    setFeedbackSuccess('')
+
+    try {
+      await apiRequest('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          rating: feedbackRating,
+          name: feedbackForm.name,
+          email: feedbackForm.email,
+          message: feedbackForm.message,
+          clientKey: getFeedbackClientKey(),
+        }),
+      })
+
+      setFeedbackSuccess('Thanks! Your feedback was sent to admin.')
+      setFeedbackForm({
+        name: auth?.user?.name || '',
+        email: auth?.user?.email || '',
+        message: '',
+      })
+      setFeedbackRating(5)
+    } catch (error) {
+      setFeedbackError(error.message)
+    } finally {
+      setFeedbackSubmitting(false)
+    }
+  }
+
   return (
     <section className="relative min-h-screen w-full overflow-hidden bg-slate-50 px-0 py-0 sm:px-0 sm:py-0">
       {/* Animated Background Effects */}
@@ -349,35 +567,55 @@ const Homepage = () => {
         />
       </div>
 
-      <div className="relative z-10 mx-auto w-full max-w-none px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-6">
-        <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr] lg:gap-6">
+      <div className="relative z-10 mx-auto w-full max-w-[1600px] px-2 py-2 min-[380px]:px-3 sm:px-4 sm:py-4 lg:px-6 lg:py-6">
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[1.15fr_0.85fr] lg:gap-6">
           
           {/* Main Hero Card */}
           <motion.div 
             initial="hidden"
             animate="visible"
             variants={staggerContainer}
-            className="flex flex-col rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-lg sm:rounded-[2.5rem] sm:backdrop-blur-2xl sm:p-10"
+            className="flex min-w-0 flex-col rounded-2xl border border-white/70 bg-white/75 p-3 shadow-[0_8px_32px_-14px_rgba(0,0,0,0.12)] backdrop-blur-lg min-[380px]:p-4 sm:rounded-[2rem] sm:backdrop-blur-2xl sm:p-7 lg:p-9"
           >
-            <motion.div variants={fadeUp} className="inline-flex self-start items-center gap-2 rounded-full border border-cyan-200 bg-cyan-100/50 px-4 py-1.5 text-xs font-black uppercase tracking-widest text-cyan-800 backdrop-blur-md">
-              <Sparkles className="h-4 w-4" />
-              Innovative Science 2
+            <motion.div variants={fadeUp} className="mt-3 rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 to-amber-50/70 p-3 min-[380px]:p-3.5 sm:mt-5 sm:rounded-3xl sm:p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-orange-500 text-white shadow-sm sm:h-10 sm:w-10 sm:rounded-2xl">
+                    <Flame className="h-5 w-5" fill="currentColor" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">Daily streak</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900">
+                      {dailyStreakData?.streak?.currentStreak || 0} day{dailyStreakData?.streak?.currentStreak === 1 ? '' : 's'} in a row
+                    </p>
+                  </div>
+                </div>
+                <Link to="/daily-streak" className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-2 text-xs font-bold text-orange-700 shadow-sm transition hover:bg-orange-100">
+                  Practice today
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+              <div className="mt-3 flex items-center gap-1.5 rounded-xl bg-white/70 p-2 min-[380px]:gap-2 min-[380px]:p-2.5 sm:mt-4 sm:rounded-2xl">
+                <CalendarDays className="h-4 w-4 shrink-0 text-orange-500" />
+                <div className="grid flex-1 grid-cols-7 gap-1.5">
+                  {streakCalendar.map((day) => (
+                    <div key={day.key} className="text-center">
+                      <p className="text-[9px] font-bold uppercase text-slate-400">{day.label}</p>
+                      <div className={`mx-auto mt-1 grid h-7 w-7 place-items-center rounded-full text-[11px] font-black ${day.completed ? 'bg-orange-500 text-white' : day.isToday ? 'border-2 border-orange-400 bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-400'}`}>
+                        {day.completed ? '✓' : day.day}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </motion.div>
-            
-            <motion.h1 variants={fadeUp} className="mt-5 font-serif text-3xl leading-[1.08] tracking-tight text-slate-900 sm:mt-6 sm:text-5xl lg:text-7xl">
-              Practice science in a way that actually <span className="bg-gradient-to-r from-cyan-600 to-emerald-500 bg-clip-text text-transparent">shows progress.</span>
-            </motion.h1>
-            
-            <motion.p variants={fadeUp} className="mt-4 max-w-2xl text-sm leading-relaxed text-slate-600 sm:mt-6 sm:text-lg">
-              Work through objective questions, track chapter-wise improvement, earn brain cells, and conquer the leaderboard.
-            </motion.p>
 
-            <motion.div variants={fadeUp} className="mt-6 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+            <motion.div variants={fadeUp} className="mt-4 grid grid-cols-2 gap-2 min-[520px]:flex min-[520px]:flex-wrap min-[520px]:items-center min-[520px]:gap-3 sm:mt-6">
               <AnimatedBattleModeLink
                 to="/battle-mode"
                 whileHover={{ scale: 1.03, y: -2 }}
                 whileTap={{ scale: 0.98 }}
-                className="group relative inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full border border-amber-200/80 bg-gradient-to-r from-orange-500 via-rose-500 to-amber-500 px-6 py-3.5 text-sm font-black text-white shadow-[0_16px_45px_rgba(249,115,22,0.28)] transition-all hover:shadow-[0_18px_55px_rgba(249,115,22,0.35)] active:scale-95 sm:w-auto sm:px-8 sm:py-4"
+                className="group relative inline-flex min-h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-amber-200/80 bg-gradient-to-r from-orange-500 via-rose-500 to-amber-500 px-2.5 py-2.5 text-xs font-black text-white shadow-[0_8px_24px_rgba(249,115,22,0.2)] transition-all hover:shadow-[0_12px_30px_rgba(249,115,22,0.28)] active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm"
               >
                 <motion.span
                   aria-hidden="true"
@@ -397,56 +635,33 @@ const Homepage = () => {
                 />
                 <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.3),_transparent_40%)] opacity-70" />
               </AnimatedBattleModeLink>
-              <Link to="/test-builder" className="group relative inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-slate-950 px-6 py-3.5 text-sm font-bold text-white transition-all hover:bg-slate-900 hover:shadow-lg hover:shadow-slate-900/20 active:scale-95 sm:w-auto sm:px-8 sm:py-4">
+              <Link to="/test-builder" className="group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-2.5 py-2.5 text-xs font-bold text-white transition-all hover:bg-slate-800 active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Create test
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </Link>
-              <Link to="/chapters" className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white/80 px-6 py-3.5 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 hover:shadow-md active:scale-95 sm:w-auto sm:px-8 sm:py-4">
+              <Link to="/chapters" className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white/90 px-2.5 py-2.5 text-xs font-bold text-slate-700 transition-all hover:bg-slate-50 hover:shadow-md active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Browse chapters
               </Link>
-              <Link to="/leaderboard" className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-200 bg-emerald-50/80 px-6 py-3.5 text-sm font-bold text-emerald-700 transition-all hover:bg-emerald-100 hover:shadow-md active:scale-95 sm:w-auto sm:px-8 sm:py-4">
+              <Link to="/leaderboard" className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/90 px-2.5 py-2.5 text-xs font-bold text-emerald-700 transition-all hover:bg-emerald-100 hover:shadow-md active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Leaderboard
-              </Link>
-              <Link to="/feedback" className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-amber-200 bg-amber-50/80 px-6 py-3.5 text-sm font-bold text-amber-700 transition-all hover:bg-amber-100 hover:shadow-md active:scale-95 sm:w-auto sm:px-8 sm:py-4">
-                Leave feedback
-                <MessageCircleMore className="h-4 w-4" />
               </Link>
             </motion.div>
 
-            <motion.div variants={staggerContainer} className="mt-8 grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:mt-12 sm:grid-cols-3 sm:gap-4">
+            <motion.div variants={staggerContainer} className="mt-4 grid grid-cols-3 gap-2 sm:mt-7 sm:gap-3">
               {stats.map((stat, i) => (
-                <motion.div key={stat.label} variants={fadeUp} whileHover={{ y: -5 }} className="rounded-3xl border border-white/50 bg-white/40 p-4 shadow-sm backdrop-blur-md transition-colors hover:bg-white/60 sm:p-5">
-                  <stat.icon className="h-6 w-6 text-cyan-600" />
-                  <p className="mt-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 sm:mt-4 sm:text-xs">{stat.label}</p>
-                  <p className="mt-1 text-2xl font-black text-slate-900 sm:text-3xl">{stat.value}</p>
+                <motion.div key={stat.label} variants={fadeUp} whileHover={{ y: -5 }} className="min-w-0 rounded-xl border border-white/70 bg-white/65 p-2.5 shadow-sm backdrop-blur-md transition-colors hover:bg-white/85 min-[380px]:p-3 sm:rounded-2xl sm:p-4">
+                  <stat.icon className="h-4 w-4 text-cyan-600 sm:h-5 sm:w-5" />
+                  <p className="mt-2 text-[9px] font-bold uppercase tracking-wide text-slate-500 min-[380px]:text-[10px] sm:mt-3 sm:text-xs sm:tracking-widest">{stat.label}</p>
+                  <p className="mt-1 text-lg font-black text-slate-900 min-[380px]:text-xl sm:text-2xl">{stat.value}</p>
                 </motion.div>
               ))}
             </motion.div>
 
-            {progress && (
-              <motion.div variants={fadeUp} className="mt-6 relative overflow-hidden rounded-[1.75rem] border border-emerald-200 bg-gradient-to-br from-emerald-50 to-emerald-100/50 p-5 sm:mt-8 sm:rounded-[2rem] sm:p-8">
-                <div className="relative z-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700 sm:text-xs">Your latest progress</p>
-                    <h2 className="mt-2 font-serif text-xl text-slate-900 sm:text-2xl">
-                      {auth?.user?.name ? `${auth.user.name}'s report card` : 'Your report card'}
-                    </h2>
-                    <p className="mt-2 max-w-xl text-sm leading-relaxed text-slate-600">
-                      <span className="font-bold text-emerald-700">{progress.averagePercent}% average</span> across your saved attempts and <span className="font-bold text-emerald-700">{progress.totalBrainCells} brain cells</span> collected.
-                    </p>
-                  </div>
-                  <Link to="/improvement" className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 py-3.5 text-sm font-bold text-white transition-all hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-600/30 active:scale-95 sm:w-auto sm:px-6 sm:py-4">
-                    View MY IMPROVEMENT
-                    <TrendingUp className="h-4 w-4" />
-                  </Link>
-                </div>
-              </motion.div>
-            )}
           </motion.div>
 
           {/* Right Column / Leaderboard */}
-          <div className="flex flex-col gap-4 lg:gap-6">
-            <div className="rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8">
+          <div className="flex min-w-0 flex-col gap-3 sm:gap-4 lg:gap-6">
+            <div className="min-w-0 rounded-2xl border border-white/70 bg-white/75 p-3 shadow-[0_8px_32px_-14px_rgba(0,0,0,0.12)] backdrop-blur-md min-[380px]:p-4 sm:rounded-[2rem] sm:backdrop-blur-xl sm:p-6">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 sm:text-xs">Top 5 students</p>
@@ -459,7 +674,7 @@ const Homepage = () => {
                 </div>
               </div>
 
-              <div className="mt-5 flex flex-wrap gap-2 rounded-full bg-slate-100 p-1 sm:mt-6">
+              <div className="mt-3 flex flex-wrap gap-1.5 rounded-xl bg-slate-100 p-1 sm:mt-5 sm:rounded-full">
                 <button
                   onClick={() => setLeaderboardScope('all')}
                   className={`flex-1 rounded-full px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-all ${leaderboardScope === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
@@ -504,7 +719,7 @@ const Homepage = () => {
                 )}
               </AnimatePresence>
 
-              <div className="mt-5 min-h-[260px] sm:mt-6 sm:min-h-[300px]">
+              <div className="mt-3 min-h-0 sm:mt-5 sm:min-h-[260px]">
                 {leaderboardLoading ? (
                   <div className="flex h-full flex-col justify-center rounded-3xl border-2 border-dashed border-slate-200 px-4 py-10 text-sm font-medium text-slate-500">
                     <div className="flex items-center gap-2">
@@ -533,7 +748,7 @@ const Homepage = () => {
                     </div>
                   </div>
                 ) : leaderboard.length ? (
-                  <div className="grid gap-3">
+                  <div className="grid gap-2.5 sm:gap-3">
                     {leaderboard.map((student, index) => (
                       <article 
                         key={student.id} 
@@ -561,53 +776,20 @@ const Homepage = () => {
               </div>
             </div>
 
-            <Link
-              to="/battle-mode"
-              className="group rounded-[1.75rem] border border-cyan-200/60 bg-gradient-to-br from-cyan-50 to-emerald-50 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] transition hover:-translate-y-0.5 hover:shadow-lg sm:rounded-[2.5rem] sm:p-6"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-600 sm:text-xs">Highlighted feature</p>
-                  <h2 className="mt-1.5 font-serif text-2xl text-slate-900 sm:text-3xl">Battle Mode</h2>
-                </div>
-                <div className="rounded-2xl bg-cyan-600 p-3 text-white">
-                  <Swords className="h-6 w-6" />
-                </div>
-              </div>
-              <p className="mt-4 max-w-xl text-sm leading-7 text-slate-600">
-                Create a competitive room, let 2 to 4 students join, and battle in a real-time quiz arena with streak bonuses and live ranking.
-              </p>
-              <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-sm font-bold text-white transition group-hover:gap-3">
-                Enter battle arena
-                <ArrowRight className="h-4 w-4" />
-              </div>
-            </Link>
-
           </div>
         </div>
 
         <motion.div
+          id="chapter-weightage"
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-80px' }}
           transition={{ duration: 0.5, delay: 0.15 }}
           className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:mt-6 sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8"
         >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-600 sm:text-xs">
-                Chapter weightage
-              </p>
-              <h2 className="mt-1.5 font-serif text-2xl text-slate-900 sm:mt-2 sm:text-3xl">
-                Study priorities at a glance
-              </h2>
-            </div>
-            <div className="rounded-2xl bg-cyan-100 p-2.5 sm:p-3">
-              <BookOpen className="h-7 w-7 text-cyan-600 sm:h-8 sm:w-8" />
-            </div>
-          </div>
+          
 
-          <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-slate-50 p-3 sm:mt-6 sm:rounded-[2rem] sm:p-5">
+          <div className="mt-3 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50 p-2 sm:mt-5 sm:rounded-2xl sm:p-4">
             {chaptersLoading ? (
               <div className="grid gap-3 rounded-[1.25rem] border border-dashed border-slate-200 bg-white/80 p-5 sm:grid-cols-[auto_1fr] sm:items-center sm:p-6">
                 <div className="mx-auto h-24 w-24 animate-pulse rounded-full bg-slate-200/80 sm:h-32 sm:w-32" />
@@ -622,103 +804,120 @@ const Homepage = () => {
                 </div>
               </div>
             ) : (
-              <ChapterWeightageGraph chapters={chapters} animateIntro={false} />
+              <ChapterWeightageInline chapters={chapters} animateIntro={false} />
             )}
           </div>
         </motion.div>
 
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          id="home-feedback"
+          initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: '-80px' }}
-          transition={{ duration: 0.5, delay: 0.1 }}
-          className="mt-4 rounded-[1.75rem] border border-white/60 bg-white/60 p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.1)] backdrop-blur-md sm:mt-6 sm:rounded-[2.5rem] sm:backdrop-blur-xl sm:p-8"
+          viewport={{ once: true, margin: '-60px' }}
+          transition={{ duration: 0.4 }}
+          className="mt-5 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:mt-7 sm:p-6 lg:p-8"
         >
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 sm:text-xs">
-                Feedback picked by admin
-              </p>
-              <h2 className="mt-1.5 font-serif text-2xl text-slate-900 sm:mt-2 sm:text-3xl">
-                Real voices from the classroom
-              </h2>
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-600 sm:text-xs">Student feedback</p>
             </div>
-            <div className="rounded-2xl bg-amber-100 p-2.5 sm:p-3">
-              <Star className="h-7 w-7 text-amber-500 sm:h-8 sm:w-8" />
-            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setFeedbackError('')
+                setFeedbackSuccess('')
+                setIsFeedbackOpen(true)
+              }}
+              aria-label="Add feedback"
+              title="Add feedback"
+              className="group relative grid h-12 w-12 shrink-0 place-items-center rounded-full bg-amber-50 text-amber-600 shadow-sm ring-1 ring-amber-100 transition hover:-translate-y-0.5 hover:bg-amber-100 hover:shadow-md active:scale-95 sm:h-14 sm:w-14"
+            >
+              <Pencil className="h-5 w-5 sm:h-6 sm:w-6" />
+              <span className="absolute -right-0.5 -top-0.5 grid h-5 w-5 place-items-center rounded-full bg-slate-950 text-white ring-2 ring-white" aria-hidden="true">
+                <Plus className="h-3 w-3" />
+              </span>
+            </button>
           </div>
 
-          {featuredFeedback.length ? (
-            <div className="mt-5 grid gap-4 md:grid-cols-3">
-              {featuredFeedback.map((item) => (
-                <article key={item.id} className="rounded-[1.5rem] border border-slate-200/80 bg-slate-50 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
-                        {item.name} {item.className ? `• ${item.className}` : ''}
-                      </p>
-                      <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
-                        {formatFeedbackSourceLabel(item)}
-                      </p>
-                      <div className="mt-2 flex items-center gap-1">
-                        {Array.from({ length: 5 }).map((_, index) => (
-                          <Star
-                            key={`${item.id}-star-${index}`}
-                            className={`h-4 w-4 ${index < item.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`}
-                          />
-                        ))}
+          <div className="mt-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700"><Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />Student voices</div>
+            </div>
+
+            <div className="min-w-0">
+              {featuredFeedback.length ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {featuredFeedback.map((item) => (
+                    <article key={item.id} className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-amber-200 hover:shadow-sm sm:p-5">
+                      <div className="flex items-start gap-3">
+                        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-cyan-50 text-sm font-black text-cyan-700">{(item.name || 'S').trim().charAt(0).toUpperCase()}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 flex-nowrap items-center gap-2 whitespace-nowrap">
+                            <p className="shrink min-w-0 truncate text-xs font-bold leading-5 text-slate-900">{item.name || 'Student'}</p>
+                            <div className="flex shrink-0 items-center gap-0.5" aria-label={`${item.rating} out of 5 stars`}>
+                              {Array.from({ length: 5 }).map((_, index) => <Star key={`${item.id}-star-${index}`} className={`h-3.5 w-3.5 ${index < item.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />)}
+                            </div>
+                          </div>
+                          <p className="mt-1 truncate text-xs text-slate-500">{[item.className, formatFeedbackSourceLabel(item)].filter(Boolean).join(' · ')}</p>
+                        </div>
                       </div>
-                    </div>
-                    <MessageCircleMore className="h-5 w-5 text-emerald-500" />
-                  </div>
-                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-600">
-                    {item.message || 'No message was added, but the rating still counts.'}
-                  </p>
-                </article>
-              ))}
+                      <p className="mt-4 flex-1 whitespace-pre-wrap break-words text-sm leading-[1.9] text-black">{item.message || 'Shared a rating for their learning experience.'}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-4 flex min-h-40 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
+                  <MessageCircleMore className="h-7 w-7 text-slate-300" />
+                  <p className="mt-3 text-sm font-bold text-slate-700">Your voice matters</p>
+                  <p className="mt-1 max-w-xs text-xs leading-5 text-slate-500">Featured student reviews will appear here once approved by admin.</p>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="mt-5 rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-              No featured feedback yet. Visit the feedback page and send the first good note.
-            </div>
-          )}
+          </div>
         </motion.div>
 
-        {/* Bottom Bento Grid section */}
-        <motion.div 
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-100px" }}
-          variants={staggerContainer}
-          className="mt-8 grid gap-6 lg:grid-cols-[1fr_1.2fr]"
-        >
-          <motion.div variants={fadeUp} className="relative overflow-hidden rounded-[2.5rem] bg-slate-950 p-8 text-white shadow-2xl sm:p-10">
-            <div className="absolute top-0 right-0 h-64 w-64 translate-x-1/3 -translate-y-1/3 rounded-full bg-cyan-600/30 blur-[80px]" />
-            <div className="relative z-10">
-              <p className="text-xs font-black uppercase tracking-widest text-cyan-400">Practice flow</p>
-              <h2 className="mt-3 font-serif text-3xl sm:text-4xl">Three simple steps</h2>
-              <div className="mt-8 grid gap-5">
-                <StepCard number="01" title="Choose chapters" text="Pick one or more chapters and then choose the objective types you want." />
-                <StepCard number="02" title="Practice or test" text="Answer one-mark questions, reveal hints, and submit your work." />
-                <StepCard number="03" title="Track improvement" text="Scores, weak concepts, and class rankings are saved automatically." />
+        {isFeedbackOpen && (
+          <div
+            className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/45 p-3 sm:p-5"
+            onClick={() => setIsFeedbackOpen(false)}
+          >
+            <div
+              className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-white/30 bg-white p-5 shadow-2xl sm:p-7"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-600 sm:text-xs">Student feedback</p>
+                  <h3 className="mt-1 text-xl font-black tracking-tight text-slate-900">How was your experience?</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">Your feedback helps us make learning better.</p>
+                </div>
+                <button type="button" onClick={() => setIsFeedbackOpen(false)} aria-label="Close feedback form" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-900">
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-            </div>
-          </motion.div>
 
-          <motion.div variants={fadeUp} className="rounded-[2.5rem] border border-cyan-100/50 bg-white/60 p-8 shadow-sm backdrop-blur-md sm:backdrop-blur-xl sm:p-10">
-            <p className="text-xs font-black uppercase tracking-widest text-cyan-600">Why students like it</p>
-            <h2 className="mt-3 font-serif text-3xl text-slate-900 sm:text-4xl">Everything needed to keep moving</h2>
-            <p className="mt-5 max-w-xl text-base leading-relaxed text-slate-600">
-              Combines chapter learning, objective practice, AI help, and reporting so you always know exactly what to study next.
-            </p>
-            <div className="mt-8 grid gap-4 grid-cols-1 sm:grid-cols-2">
-              <MiniStat icon={Award} title="Brain cells" value="Earn brain cells by solving objectives" delay={0.1} />
-              <MiniStat icon={CheckCircle2} title="Reports" value="Saved after attempts" delay={0.2} />
-              <MiniStat icon={TrendingUp} title="Improvement" value="Live tracking visible" delay={0.3} />
-              <MiniStat icon={BookOpen} title="Questions" value="MCQ to completion" delay={0.4} />
+              <form onSubmit={submitHomepageFeedback} className="mt-5 grid gap-3">
+                <div className="flex items-center gap-1" role="group" aria-label="Your rating">
+                  {[1, 2, 3, 4, 5].map((value) => (
+                    <button key={value} type="button" onClick={() => setFeedbackRating(value)} aria-label={`${value} star${value > 1 ? 's' : ''}`} aria-pressed={feedbackRating === value} className={`grid h-10 w-10 place-items-center rounded-xl transition active:scale-90 ${value <= feedbackRating ? 'bg-amber-100 text-amber-500' : 'bg-slate-50 text-slate-300 hover:bg-amber-50 hover:text-amber-400'}`}>
+                      <Star className={`h-5 w-5 ${value <= feedbackRating ? 'fill-current' : ''}`} />
+                    </button>
+                  ))}
+                  <span className="ml-2 text-xs font-semibold text-slate-500">{feedbackRating}/5</span>
+                </div>
+                <input value={feedbackForm.name} onChange={(event) => setFeedbackForm((current) => ({ ...current, name: event.target.value }))} placeholder="Your name" aria-label="Your name" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                <input type="email" value={feedbackForm.email} onChange={(event) => setFeedbackForm((current) => ({ ...current, email: event.target.value }))} placeholder="Email (optional)" aria-label="Email (optional)" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                <textarea rows={4} value={feedbackForm.message} onChange={(event) => setFeedbackForm((current) => ({ ...current, message: event.target.value }))} placeholder="What did you like? What can we improve?" aria-label="Your feedback" className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                {feedbackError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{feedbackError}</p>}
+                {feedbackSuccess && <p role="status" className="flex items-start gap-2 rounded-xl bg-emerald-50 px-3 py-2.5 text-xs font-medium leading-5 text-emerald-700"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />{feedbackSuccess}</p>}
+                <button type="submit" disabled={feedbackSubmitting} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">
+                  {feedbackSubmitting ? 'Sending feedback...' : 'Send feedback'}<Send className="h-4 w-4" />
+                </button>
+              </form>
             </div>
-          </motion.div>
-        </motion.div>
+          </div>
+        )}
+
       </div>
 
       {isAiTeacherOpen && (
@@ -746,7 +945,7 @@ const Homepage = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-              <div className="grid gap-3">
+              <div className="grid gap-2.5 sm:gap-3">
                 {aiTeacherMessages.map((message, index) => (
                   <div
                     key={`${message.role}-${index}`}
@@ -783,35 +982,5 @@ const Homepage = () => {
     </section>
   )
 }
-
-// Sub-components updated for styling & subtle animations
-const StepCard = ({ number, title, text }) => (
-  <motion.div whileHover={{ x: 5 }} className="group rounded-3xl border border-white/10 bg-white/5 p-5 transition-colors hover:bg-white/10">
-    <div className="flex items-center gap-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-xs font-black text-cyan-300 ring-1 ring-cyan-500/30">
-        {number}
-      </div>
-      <h3 className="text-lg font-bold">{title}</h3>
-    </div>
-    <p className="mt-3 pl-14 text-sm leading-relaxed text-slate-400 group-hover:text-slate-300">{text}</p>
-  </motion.div>
-)
-
-const MiniStat = ({ icon: Icon, title, value, delay }) => (
-  <motion.div 
-    initial={{ opacity: 0, y: 20 }}
-    whileInView={{ opacity: 1, y: 0 }}
-    viewport={{ once: true }}
-    transition={{ delay, duration: 0.5 }}
-    whileHover={{ y: -4 }}
-    className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-sm transition-all hover:shadow-md"
-  >
-    <div className="inline-flex rounded-xl bg-cyan-50 p-2 text-cyan-600">
-      <Icon className="h-5 w-5" />
-    </div>
-    <p className="mt-4 text-xs font-black uppercase tracking-widest text-slate-400">{title}</p>
-    <p className="mt-1 text-sm font-bold text-slate-900">{value}</p>
-  </motion.div>
-)
 
 export default Homepage

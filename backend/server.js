@@ -6,6 +6,7 @@ const cors = require('cors')
 const dotenv = require('dotenv')
 const fs = require('fs')
 const http = require('http')
+const { AsyncLocalStorage } = require('async_hooks')
 const multer = require('multer')
 const sharp = require('sharp')
 const path = require('path')
@@ -18,8 +19,58 @@ const { initBattleMode } = require('./battleMode')
 
 dotenv.config()
 
+// Science 1 and Science 2 share one MongoDB database. The selected science is
+// request-scoped and academic schemas use it as a data partition flag.
+const scienceContext = new AsyncLocalStorage()
+const getActiveScience = () => scienceContext.getStore()?.science || 'science2'
+const addScienceScope = (schema) => {
+  schema.add({
+    science: {
+      type: String,
+      enum: ['science1', 'science2'],
+      default: 'science2',
+      index: true,
+    },
+  })
+
+  schema.pre('validate', function setScienceFlag() {
+    if (this.isNew || !this.science) this.science = getActiveScience()
+  })
+
+  schema.pre([
+    'find',
+    'findOne',
+    'findOneAndUpdate',
+    'findOneAndDelete',
+    'findOneAndReplace',
+    'updateOne',
+    'updateMany',
+    'deleteOne',
+    'deleteMany',
+    'countDocuments',
+    'distinct',
+  ], function scopeScienceQuery() {
+    this.where({ science: getActiveScience() })
+  })
+
+  schema.pre('aggregate', function scopeScienceAggregate() {
+    this.pipeline().unshift({ $match: { science: getActiveScience() } })
+  })
+}
+
 const app = express()
 const server = http.createServer(app)
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Stop the existing backend process or use a different PORT in backend/.env.`)
+    process.exitCode = 1
+    return
+  }
+
+  console.error('Backend server error:', error.message)
+  process.exitCode = 1
+})
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -68,8 +119,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'development_secret_change_me'
 const TOKEN_AGE = '7d'
 const ADMIN_EMAIL = 'rethish.2006sm@gmail.com'
 const ADMIN_PASSWORD = '1234567'
-const PYQ_FIXED_TITLE = 'Class 10 Science 2'
-const PYQ_FIXED_SUBJECT = 'Science 2'
+const getScienceLabel = () => getActiveScience() === 'science1' ? 'Science 1' : 'Science 2'
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-lite'
 const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || '').trim()
 const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || '').trim()
@@ -300,7 +350,7 @@ userSchema.index({ isAdmin: 1, name: 1 })
 userSchema.index({ isAdmin: 1, email: 1 })
 userSchema.index({ isAdmin: 1, phoneNumber: 1 })
 
-const User = mongoose.model('User', userSchema)
+const Science2User = mongoose.model('User', userSchema)
 
 const normalizeEmail = (email = '') => email.toLowerCase().trim()
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
@@ -324,7 +374,6 @@ const chapterSchema = new mongoose.Schema(
     number: {
       type: Number,
       required: true,
-      unique: true,
       min: 1,
     },
     name: {
@@ -383,7 +432,7 @@ const topicSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-topicSchema.index({ chapter: 1, number: 1 }, { unique: true })
+topicSchema.index({ science: 1, chapter: 1, number: 1 }, { unique: true })
 
 const objectiveTypeSchema = new mongoose.Schema(
   {
@@ -397,19 +446,21 @@ const objectiveTypeSchema = new mongoose.Schema(
       required: true,
       enum: [
         'mcqs',
+        'odd-man-out',
         'true-or-false',
         'correlation',
         'match-the-following',
         'complete-the-tables',
         'diagram-based-question',
         'identify-symbol',
+        'numericals',
       ],
     },
   },
   { timestamps: true },
 )
 
-objectiveTypeSchema.index({ topic: 1, type: 1 }, { unique: true })
+objectiveTypeSchema.index({ science: 1, topic: 1, type: 1 }, { unique: true })
 
 const objectiveQuestionSchema = new mongoose.Schema(
   {
@@ -423,6 +474,12 @@ const objectiveQuestionSchema = new mongoose.Schema(
       trim: true,
       default: '',
       maxlength: 800,
+    },
+    solution: {
+      type: String,
+      trim: true,
+      default: '',
+      maxlength: 4000,
     },
     isBoardQuestion: {
       type: Boolean,
@@ -474,6 +531,11 @@ const objectiveQuestionSchema = new mongoose.Schema(
   },
   { timestamps: true },
 )
+
+// These queries are used on almost every practice navigation screen.
+// Indexing the foreign key avoids scanning all questions for each topic.
+objectiveQuestionSchema.index({ objectiveType: 1 })
+objectiveQuestionSchema.index({ objectiveType: 1, isBoardQuestion: 1 })
 
 const practiceScoreSchema = new mongoose.Schema(
   {
@@ -539,13 +601,20 @@ const practiceScoreSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-practiceScoreSchema.index({ user: 1, objectiveType: 1 }, { unique: true })
+practiceScoreSchema.index({ science: 1, user: 1, objectiveType: 1 }, { unique: true })
 
-const Chapter = mongoose.model('Chapter', chapterSchema)
-const Topic = mongoose.model('Topic', topicSchema)
-const ObjectiveType = mongoose.model('ObjectiveType', objectiveTypeSchema)
-const ObjectiveQuestion = mongoose.model('ObjectiveQuestion', objectiveQuestionSchema)
-const PracticeScore = mongoose.model('PracticeScore', practiceScoreSchema)
+addScienceScope(chapterSchema)
+chapterSchema.index({ science: 1, number: 1 }, { unique: true })
+addScienceScope(topicSchema)
+addScienceScope(objectiveTypeSchema)
+addScienceScope(objectiveQuestionSchema)
+addScienceScope(practiceScoreSchema)
+
+const Science2Chapter = mongoose.model('Chapter', chapterSchema)
+const Science2Topic = mongoose.model('Topic', topicSchema)
+const Science2ObjectiveType = mongoose.model('ObjectiveType', objectiveTypeSchema)
+const Science2ObjectiveQuestion = mongoose.model('ObjectiveQuestion', objectiveQuestionSchema)
+const Science2PracticeScore = mongoose.model('PracticeScore', practiceScoreSchema)
 
 // Immutable content history used by the fact-checked notification generator.
 // Keep this separate from the content collections so deletes remain auditable.
@@ -565,7 +634,8 @@ const contentChangeSchema = new mongoose.Schema(
 )
 contentChangeSchema.index({ createdAt: -1 })
 contentChangeSchema.index({ entityType: 1, entityId: 1, createdAt: -1 })
-const ContentChange = mongoose.model('ContentChange', contentChangeSchema)
+addScienceScope(contentChangeSchema)
+const Science2ContentChange = mongoose.model('ContentChange', contentChangeSchema)
 
 const classSchema = new mongoose.Schema(
   {
@@ -709,6 +779,44 @@ const practiceAttemptSchema = new mongoose.Schema(
 
 practiceAttemptSchema.index({ user: 1, createdAt: -1 })
 practiceAttemptSchema.index({ user: 1, attemptType: 1, createdAt: -1 })
+
+const dailyChallengeSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    subject: { type: String, enum: ['science1', 'science2'], required: true },
+    localDate: { type: String, required: true },
+    timezone: { type: String, required: true, maxlength: 80 },
+    questionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ObjectiveQuestion' }],
+    eligibleChapterIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Chapter' }],
+    answers: [{
+      questionId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      selectedAnswer: { type: mongoose.Schema.Types.Mixed },
+      isCorrect: { type: Boolean, required: true },
+      answeredAt: { type: Date, default: Date.now },
+    }],
+    attemptedCount: { type: Number, default: 0, min: 0 },
+    correctCount: { type: Number, default: 0, min: 0 },
+    score: { type: Number, default: 0, min: 0 },
+    status: { type: String, enum: ['in_progress', 'completed', 'bank_insufficient'], default: 'in_progress' },
+    generatedAt: { type: Date, default: Date.now },
+    completedAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+)
+dailyChallengeSchema.index({ user: 1, subject: 1, localDate: 1 }, { unique: true })
+dailyChallengeSchema.index({ user: 1, subject: 1, completedAt: -1 })
+
+const studentStreakSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    subject: { type: String, enum: ['science1', 'science2'], required: true },
+    currentStreak: { type: Number, default: 0, min: 0 },
+    longestStreak: { type: Number, default: 0, min: 0 },
+    lastCreditedDate: { type: String, default: null },
+  },
+  { timestamps: true },
+)
+studentStreakSchema.index({ user: 1, subject: 1 }, { unique: true })
 
 const reportSchema = new mongoose.Schema(
   {
@@ -874,7 +982,7 @@ const classPostSchema = new mongoose.Schema(
 
 classPostSchema.index({ classId: 1, createdAt: -1 })
 
-const ClassPost = mongoose.model('ClassPost', classPostSchema)
+const Science2ClassPost = mongoose.model('ClassPost', classPostSchema)
 
 const battleRewardSchema = new mongoose.Schema(
   {
@@ -944,7 +1052,7 @@ const notificationSchema = new mongoose.Schema(
   { timestamps: true },
 )
 notificationSchema.index({ recipient: 1, createdAt: -1 })
-const Notification = mongoose.model('Notification', notificationSchema)
+const Science2Notification = mongoose.model('Notification', notificationSchema)
 
 const pushSubscriptionSchema = new mongoose.Schema(
   {
@@ -960,11 +1068,11 @@ const pushSubscriptionSchema = new mongoose.Schema(
   { timestamps: true },
 )
 pushSubscriptionSchema.index({ user: 1, updatedAt: -1 })
-const PushSubscription = mongoose.model('PushSubscription', pushSubscriptionSchema)
+const Science2PushSubscription = mongoose.model('PushSubscription', pushSubscriptionSchema)
 
 battleRewardSchema.index({ roomId: 1, userId: 1 }, { unique: true })
 
-const BattleReward = mongoose.models.BattleReward || mongoose.model('BattleReward', battleRewardSchema)
+const Science2BattleReward = mongoose.models.BattleReward || mongoose.model('BattleReward', battleRewardSchema)
 let BattleRoomModel = null
 
 const pyqSchema = new mongoose.Schema(
@@ -1014,13 +1122,23 @@ const pyqSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-pyqSchema.index({ createdAt: -1 })
+// PYQs belong to the currently selected science, just like chapters and
+// objective questions. Existing records without this field are migrated to
+// Science 2 because that is where the current PYQ data belongs.
+addScienceScope(pyqSchema)
 
-const Class = mongoose.model('Class', classSchema)
-const PracticeAttempt = mongoose.model('PracticeAttempt', practiceAttemptSchema)
-const Report = mongoose.model('Report', reportSchema)
-const Message = mongoose.model('Message', messageSchema)
-const Pyq = mongoose.model('Pyq', pyqSchema)
+pyqSchema.index({ createdAt: -1 })
+addScienceScope(practiceAttemptSchema)
+addScienceScope(dailyChallengeSchema)
+addScienceScope(studentStreakSchema)
+
+const Science2Class = mongoose.model('Class', classSchema)
+const Science2PracticeAttempt = mongoose.model('PracticeAttempt', practiceAttemptSchema)
+const Science2DailyChallenge = mongoose.model('DailyChallenge', dailyChallengeSchema)
+const Science2StudentStreak = mongoose.model('StudentStreak', studentStreakSchema)
+const Science2Report = mongoose.model('Report', reportSchema)
+const Science2Message = mongoose.model('Message', messageSchema)
+const Science2Pyq = mongoose.model('Pyq', pyqSchema)
 const siteNoticeSchema = new mongoose.Schema(
   {
     message: {
@@ -1043,7 +1161,7 @@ const siteNoticeSchema = new mongoose.Schema(
   },
   { timestamps: true },
 )
-const SiteNotice = mongoose.model('SiteNotice', siteNoticeSchema)
+const Science2SiteNotice = mongoose.model('SiteNotice', siteNoticeSchema)
 
 const auditSnapshot = (value) => {
   if (!value) return null
@@ -1386,10 +1504,8 @@ const sendWebPushToUsers = async (userIds, payload) => {
     configured: true,
   }
 }
-const ContactMessage = mongoose.model(
-  'ContactMessage',
-  new mongoose.Schema(
-    {
+const contactMessageSchema = new mongoose.Schema(
+  {
       name: {
         type: String,
         required: true,
@@ -1420,11 +1536,12 @@ const ContactMessage = mongoose.model(
         default: 'open',
       },
     },
-    { timestamps: true },
-  ),
+  { timestamps: true },
 )
 
-ContactMessage.schema.index({ createdAt: -1 })
+const Science2ContactMessage = mongoose.model('ContactMessage', contactMessageSchema)
+
+Science2ContactMessage.schema.index({ createdAt: -1 })
 
 const feedbackSchema = new mongoose.Schema(
   {
@@ -1512,7 +1629,166 @@ const feedbackSchema = new mongoose.Schema(
 
 feedbackSchema.index({ createdAt: -1 })
 
-const Feedback = mongoose.model('Feedback', feedbackSchema)
+const Science2Feedback = mongoose.model('Feedback', feedbackSchema)
+
+const accountDeletionRequestSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    unique: true,
+    index: true,
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending',
+    index: true,
+  },
+  requestedAt: { type: Date, default: Date.now },
+  reviewedAt: { type: Date, default: null },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+})
+
+const AccountDeletionRequest = mongoose.model('AccountDeletionRequest', accountDeletionRequestSchema)
+
+// Account records remain shared. Academic content is separated by the
+// request-scoped science flag while staying in this same MongoDB database.
+const AccountUser = Science2User
+
+const scienceConnectionPromises = new Map()
+
+const science2Models = {
+  User: Science2User,
+  Chapter: Science2Chapter,
+  Topic: Science2Topic,
+  ObjectiveType: Science2ObjectiveType,
+  ObjectiveQuestion: Science2ObjectiveQuestion,
+  PracticeScore: Science2PracticeScore,
+  ContentChange: Science2ContentChange,
+  ClassPost: Science2ClassPost,
+  Notification: Science2Notification,
+  PushSubscription: Science2PushSubscription,
+  BattleReward: Science2BattleReward,
+  Class: Science2Class,
+  PracticeAttempt: Science2PracticeAttempt,
+  DailyChallenge: Science2DailyChallenge,
+  StudentStreak: Science2StudentStreak,
+  Report: Science2Report,
+  Message: Science2Message,
+  Pyq: Science2Pyq,
+  SiteNotice: Science2SiteNotice,
+  ContactMessage: Science2ContactMessage,
+  Feedback: Science2Feedback,
+}
+
+// Class membership is operational/shared data. Explicitly point cross-science
+// population at the shared Science 2 model instead of looking for a separate
+// Class collection inside Science 1.
+userSchema.path('classId').options.ref = Science2Class
+classPostSchema.path('classId').options.ref = Science2Class
+messageSchema.path('targetClassId').options.ref = Science2Class
+feedbackSchema.path('classId').options.ref = Science2Class
+
+const getScienceConnection = (science = getActiveScience()) => {
+  if (!['science1', 'science2'].includes(science)) throw new Error('Unsupported science selection.')
+  return mongoose.connection
+}
+
+const ensureScienceConnection = async (science = getActiveScience()) => {
+  const connection = getScienceConnection(science)
+  if (connection.readyState === 1) return connection
+  if (!scienceConnectionPromises.has(science)) {
+    scienceConnectionPromises.set(science, connection.asPromise().finally(() => scienceConnectionPromises.delete(science)))
+  }
+  await scienceConnectionPromises.get(science)
+  return connection
+}
+
+const modelForScience = (name) => {
+  if (name === 'Class') return Science2Class
+  return science2Models[name]
+}
+
+const scienceModel = (name) => new Proxy(science2Models[name], {
+  get(target, property) {
+    const model = modelForScience(name)
+    const value = model[property]
+    return typeof value === 'function' ? value.bind(model) : value
+  },
+  construct(target, args) {
+    return Reflect.construct(modelForScience(name), args)
+  },
+})
+
+const User = scienceModel('User')
+const Chapter = scienceModel('Chapter')
+const Topic = scienceModel('Topic')
+const ObjectiveType = scienceModel('ObjectiveType')
+const ObjectiveQuestion = scienceModel('ObjectiveQuestion')
+const PracticeScore = scienceModel('PracticeScore')
+const ContentChange = scienceModel('ContentChange')
+const ClassPost = scienceModel('ClassPost')
+const Notification = scienceModel('Notification')
+const PushSubscription = scienceModel('PushSubscription')
+const BattleReward = scienceModel('BattleReward')
+const Class = scienceModel('Class')
+const PracticeAttempt = scienceModel('PracticeAttempt')
+const DailyChallenge = scienceModel('DailyChallenge')
+const StudentStreak = scienceModel('StudentStreak')
+const Report = scienceModel('Report')
+const Message = scienceModel('Message')
+const Pyq = scienceModel('Pyq')
+const SiteNotice = scienceModel('SiteNotice')
+const ContactMessage = scienceModel('ContactMessage')
+const Feedback = scienceModel('Feedback')
+
+const sharedScienceRoutePrefixes = [
+  '/api/auth',
+  '/api/admin/dashboard',
+  '/api/admin/students',
+  '/api/admin/classes',
+  '/api/admin/messages',
+  '/api/admin/contacts',
+  '/api/admin/notifications',
+  '/api/admin/push',
+  '/api/admin/announcement',
+  '/api/classes',
+  '/api/messages',
+  '/api/notifications',
+  '/api/push',
+  '/api/announcement',
+  // Leaderboard totals and rank are account-level progress shared by both sciences.
+  '/api/leaderboard',
+  '/api/admin/account-deletion-requests',
+]
+
+const isSharedScienceRoute = (path) => sharedScienceRoutePrefixes.some((prefix) => (
+  path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`)
+))
+
+app.use(async (req, res, next) => {
+  if (!req.path.startsWith('/api')) return next()
+
+  const requestedScience = String(req.headers['x-science'] || req.query.science || 'science2').toLowerCase()
+  if (!['science1', 'science2'].includes(requestedScience)) {
+    return res.status(400).json({ message: 'Invalid science selection.' })
+  }
+
+  try {
+    const effectiveScience = isSharedScienceRoute(req.path) ? 'science2' : requestedScience
+    await ensureScienceConnection(effectiveScience)
+    res.set('X-Science', requestedScience)
+    return scienceContext.run({ science: effectiveScience, requestedScience }, next)
+  } catch (error) {
+    console.error(`Could not connect to ${requestedScience}:`, error.message)
+    return res.status(503).json({ message: `${requestedScience === 'science1' ? 'Science 1' : 'Science 2'} database is unavailable.` })
+  }
+})
+
+const findAccountUser = async (filter) => {
+  return AccountUser.findOne(filter)
+}
 
 const publicUser = (user, { includePassword = false } = {}) => ({
   id: user._id.toString(),
@@ -1534,6 +1810,7 @@ const publicUser = (user, { includePassword = false } = {}) => ({
   isAdmin: Boolean(user.isAdmin),
   classId: user.classId?._id?.toString?.() || user.classId?.toString?.() || '',
   className: user.classId?.name || '',
+  totalBrainCells: safeNumber(user.totalBrainCells),
   profileImageUrl: user.profileImage?.data
     ? `/api/auth/users/${user._id}/avatar?v=${
         user.profileImage.updatedAt?.getTime() || Date.now()
@@ -1571,7 +1848,7 @@ const publicQuestionImageUrl = (question) => (
   question.questionImage?.data
     ? `/api/objective-questions/${question._id}/image?v=${
         question.questionImage.updatedAt?.getTime() || Date.now()
-      }`
+      }&science=${getActiveScience()}`
     : ''
 )
 
@@ -1579,7 +1856,7 @@ const publicAnswerImageUrl = (question) => (
   question.answerImage?.data
     ? `/api/objective-questions/${question._id}/answer-image?v=${
         question.answerImage.updatedAt?.getTime() || Date.now()
-      }`
+      }&science=${getActiveScience()}`
     : ''
 )
 
@@ -2226,11 +2503,13 @@ const buildAdminStudentQuery = async ({ search = '', classId = '' } = {}) => {
 }
 
 const buildAdminDashboardCounts = async () => {
+  // These dashboard totals are operational account metrics and intentionally
+  // Stay identical because account and class records are shared.
   const [totalStudents, totalClasses, totalReports, totalFeedback] = await Promise.all([
-    User.countDocuments({ isAdmin: false }),
-    Class.countDocuments({}),
-    Report.countDocuments({}),
-    Feedback.countDocuments({}),
+    Science2User.countDocuments({ isAdmin: false }),
+    Science2Class.countDocuments({}),
+    Science2Report.countDocuments({}),
+    Science2Feedback.countDocuments({}),
   ])
 
   return {
@@ -2420,6 +2699,23 @@ const createWebpImage = async (buffer, { width = 1200, height = 1200, fit = 'ins
     .toBuffer()
 }
 
+const convertQuestionImage = async (file, label) => {
+  if (!file?.buffer) return undefined
+
+  try {
+    return {
+      data: await createWebpImage(file.buffer),
+      contentType: 'image/webp',
+      updatedAt: new Date(),
+    }
+  } catch (error) {
+    const conversionError = new Error(`${label} could not be converted to WebP. Please choose a JPG, PNG, GIF, or WebP image.`)
+    conversionError.statusCode = 400
+    conversionError.cause = error
+    throw conversionError
+  }
+}
+
 const createToken = (user) => {
   return jwt.sign({ userId: user._id.toString() }, JWT_SECRET, {
     expiresIn: TOKEN_AGE,
@@ -2468,11 +2764,13 @@ const getUserFromAuthToken = async (token) => {
   if (!token) return null
   try {
     const payload = jwt.verify(token, JWT_SECRET)
-    return User.findById(payload.userId).populate('classId', 'name')
+    const user = await AccountUser.findById(payload.userId)
+    return user ? user.populate('classId', 'name') : null
   } catch (error) {
     const firebaseUser = await verifyFirebaseIdToken(token)
     if (!firebaseUser?.uid) return null
-    return User.findOne({ firebaseUid: firebaseUser.uid }).populate('classId', 'name')
+    const user = await AccountUser.findOne({ firebaseUid: firebaseUser.uid })
+    return user ? user.populate('classId', 'name') : null
   }
 }
 
@@ -2546,6 +2844,7 @@ BattleRoomModel = initBattleMode({
     ObjectiveQuestion,
     BattleReward,
   },
+  getScienceConnection,
   authRequired,
   optionalAuth,
 }).BattleRoom
@@ -2573,9 +2872,32 @@ const extractJsonFromText = (text = '') => {
   }
 }
 
-const requiresFourOptions = (type) => type === 'correlation'
+const requiresFourOptions = (type) => ['correlation', 'odd-man-out'].includes(type)
 const isMatchType = (type) => type === 'match-the-following'
 const isDoneOnlyType = (type) => type === 'complete-the-tables'
+const normalizeObjectiveType = (type) => {
+  const normalized = String(type || '').trim().toLowerCase()
+  return ['numerical', 'numerical-questions', 'numericals'].includes(normalized) ? 'numericals' : normalized
+}
+
+const normalizeNumericalQuestion = ({ question, solution, options, correctOption }) => {
+  const sourceOptions = Array.isArray(options) ? options : []
+  const cleanedOptions = sourceOptions
+    .map((option) => String(option || '').trim())
+    .filter(Boolean)
+  const sourceIndex = Number(correctOption)
+  const selectedOption = Number.isInteger(sourceIndex) ? String(sourceOptions[sourceIndex] || '').trim() : ''
+  const normalizedCorrectOption = selectedOption
+    ? cleanedOptions.indexOf(selectedOption)
+    : sourceIndex
+
+  return {
+    question: String(question || '').trim(),
+    solution: String(solution || '').trim(),
+    options: cleanedOptions,
+    correctOption: normalizedCorrectOption,
+  }
+}
 
 const normalizeMatchQuestionPayload = ({ question, pairs, options, correctOptions }) => {
   const cleanedPairs = Array.isArray(pairs)
@@ -2950,6 +3272,225 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' })
 })
 
+const dailyTimezone = (req) => {
+  const requested = String(req.headers['x-timezone'] || req.body?.timezone || 'Asia/Calcutta').trim()
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: requested }).format()
+    return requested
+  } catch (error) {
+    return 'Asia/Calcutta'
+  }
+}
+
+const localDateForTimezone = (timezone) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: timezone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date())
+
+const previousLocalDate = (localDate) => {
+  const [year, month, day] = String(localDate).split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10)
+}
+
+const shuffle = (items) => {
+  const result = [...items]
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1))
+    ;[result[index], result[swap]] = [result[swap], result[index]]
+  }
+  return result
+}
+
+const dailyQuestionView = (question, challenge) => {
+  const objectiveType = question.objectiveType || {}
+  const topic = objectiveType.topic || {}
+  const chapter = topic.chapter || {}
+  const answer = (challenge.answers || []).find((item) => String(item.questionId) === String(question._id))
+  return {
+    _id: question._id,
+    question: question.question || '',
+    options: Array.isArray(question.options) ? question.options : [],
+    pairs: Array.isArray(question.pairs) ? question.pairs : [],
+    imageUrl: publicQuestionImageUrl(question),
+    answerImageUrl: '',
+    solution: answer ? (question.solution || '') : '',
+    type: objectiveType.type || '',
+    topicName: topic.name || '',
+    chapterId: chapter._id,
+    chapterNumber: chapter.number,
+    chapterName: chapter.name || '',
+    objectiveTypeId: objectiveType._id,
+    submitted: Boolean(answer),
+    selectedAnswer: answer?.selectedAnswer,
+    isCorrect: answer?.isCorrect,
+  }
+}
+
+const dailyChallengePayload = (challenge, questions, streak) => ({
+  challenge: {
+    id: challenge._id,
+    localDate: challenge.localDate,
+    timezone: challenge.timezone,
+    questionCount: challenge.questionIds.length,
+    questions: questions.map((question) => dailyQuestionView(question, challenge)),
+    attemptedCount: challenge.attemptedCount,
+    correctCount: challenge.correctCount,
+    score: challenge.score,
+    accuracy: challenge.attemptedCount ? Math.round((challenge.correctCount / challenge.attemptedCount) * 100) : 0,
+    status: challenge.status,
+    completedAt: challenge.completedAt,
+    eligibleChapterIds: challenge.eligibleChapterIds,
+  },
+  streak: streak || { currentStreak: 0, longestStreak: 0, lastCreditedDate: null },
+})
+
+const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
+  const attempts = await PracticeAttempt.find({ user: userId, attemptType: 'practice' }).select('questionBreakdown').lean()
+  const eligibleChapterIds = [...new Set(attempts.flatMap((attempt) => (attempt.questionBreakdown || [])
+    .filter((item) => item.questionId && item.status !== 'skipped' && item.chapterId)
+    .map((item) => String(item.chapterId))))]
+  const candidates = eligibleChapterIds.length
+    ? await ObjectiveQuestion.find({}).populate({
+      path: 'objectiveType',
+      populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } },
+    }).lean()
+    : []
+  const filtered = candidates.filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
+  const byType = new Map()
+  const byChapter = new Map()
+  shuffle(filtered).forEach((question) => {
+    const type = question.objectiveType?.type || 'other'
+    const chapter = String(question.objectiveType?.topic?.chapter?._id || '')
+    if (!byType.has(type)) byType.set(type, [])
+    if (!byChapter.has(chapter)) byChapter.set(chapter, [])
+    byType.get(type).push(question)
+    byChapter.get(chapter).push(question)
+  })
+  const selected = []
+  const used = new Set()
+  const counts = new Map()
+  const take = (question) => {
+    if (!question || used.has(String(question._id))) return false
+    const type = question.objectiveType?.type || 'other'
+    const count = counts.get(type) || 0
+    if (type === 'diagram-based-question' && count >= 2) return false
+    if (type === 'complete-the-tables' && count >= 2) return false
+    used.add(String(question._id)); selected.push(question); counts.set(type, count + 1)
+    return true
+  }
+  // Round-robin chapters first, then fill from the remaining bank. This keeps
+  // a student's challenge broad without sacrificing the exact daily count.
+  const chapterQueues = [...byChapter.values()].map((queue) => shuffle(queue))
+  let cursor = 0
+  while (selected.length < 20 && chapterQueues.some((queue) => queue.length)) {
+    const queue = chapterQueues[cursor % chapterQueues.length]
+    cursor += 1
+    if (queue?.length) take(queue.shift())
+  }
+  if (selected.length < 20) shuffle(filtered).forEach((question) => { if (selected.length < 20) take(question) })
+  const challenge = await DailyChallenge.create({
+    user: userId,
+    subject: getActiveScience(),
+    localDate,
+    timezone,
+    questionIds: selected.map((question) => question._id),
+    eligibleChapterIds,
+    status: selected.length < 20 ? 'bank_insufficient' : 'in_progress',
+  })
+  return { challenge, questions: selected }
+}
+
+const getDailyChallenge = async (userId, localDate, timezone) => {
+  let challenge = await DailyChallenge.findOne({ user: userId, subject: getActiveScience(), localDate })
+  if (!challenge) {
+    try {
+      ({ challenge } = await generateDailyChallenge({ userId, localDate, timezone }))
+    } catch (error) {
+      if (error?.code !== 11000) throw error
+      challenge = await DailyChallenge.findOne({ user: userId, subject: getActiveScience(), localDate })
+    }
+  }
+  const questions = challenge?.questionIds?.length
+    ? await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds } }).populate({ path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } } }).lean()
+    : []
+  const questionMap = new Map(questions.map((question) => [String(question._id), question]))
+  const ordered = challenge.questionIds.map((id) => questionMap.get(String(id))).filter(Boolean)
+  const streak = await StudentStreak.findOne({ user: userId, subject: getActiveScience() }).lean()
+  return dailyChallengePayload(challenge, ordered, streak)
+}
+
+app.get('/api/daily-challenge', authRequired, async (req, res) => {
+  try {
+    const timezone = dailyTimezone(req)
+    res.json(await getDailyChallenge(req.user._id, localDateForTimezone(timezone), timezone))
+  } catch (error) {
+    console.error('Daily challenge load failed:', error.message)
+    res.status(500).json({ message: 'Could not load today\'s daily challenge.' })
+  }
+})
+
+app.get('/api/daily-challenge/history', authRequired, async (req, res) => {
+  try {
+    const challenges = await DailyChallenge.find({ user: req.user._id, subject: getActiveScience() }).select('localDate status completedAt attemptedCount correctCount score').sort({ localDate: -1 }).limit(90).lean()
+    const streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() }).lean()
+    res.json({ challenges, streak: streak || { currentStreak: 0, longestStreak: 0, lastCreditedDate: null } })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load streak history.' })
+  }
+})
+
+app.post('/api/daily-challenge/:id/answer', authRequired, async (req, res) => {
+  try {
+    const challenge = await DailyChallenge.findOne({ _id: req.params.id, user: req.user._id, subject: getActiveScience() })
+    if (!challenge) return res.status(404).json({ message: 'Daily challenge not found.' })
+    if (challenge.status === 'completed') return res.status(409).json({ message: 'This challenge is already complete.' })
+    const questionId = String(req.body.questionId || '')
+    if (!challenge.questionIds.some((id) => String(id) === questionId)) return res.status(400).json({ message: 'Question does not belong to this challenge.' })
+    const existing = challenge.answers.find((answer) => String(answer.questionId) === questionId)
+    if (existing) return res.json({ questionId, isCorrect: existing.isCorrect, attemptedCount: challenge.attemptedCount, correctCount: challenge.correctCount })
+    const question = await ObjectiveQuestion.findOne({ _id: questionId }).populate({ path: 'objectiveType', select: 'type' })
+    if (!question) return res.status(404).json({ message: 'Question no longer exists.' })
+    const selectedAnswer = req.body.selectedAnswer
+    const type = question.objectiveType?.type || ''
+    const isCorrect = type === 'match-the-following'
+      ? JSON.stringify(selectedAnswer) === JSON.stringify(question.correctOptions || [])
+      : Number(selectedAnswer) === Number(question.correctOption)
+    challenge.answers.push({ questionId, selectedAnswer, isCorrect })
+    challenge.attemptedCount += 1
+    if (isCorrect) challenge.correctCount += 1
+    challenge.score = challenge.correctCount
+    await challenge.save()
+    res.json({ questionId, isCorrect, solution: question.solution || '', attemptedCount: challenge.attemptedCount, correctCount: challenge.correctCount })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not save this answer.' })
+  }
+})
+
+app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => {
+  try {
+    const challenge = await DailyChallenge.findOne({ _id: req.params.id, user: req.user._id, subject: getActiveScience() })
+    if (!challenge) return res.status(404).json({ message: 'Daily challenge not found.' })
+    if (challenge.status === 'completed') return res.json(await getDailyChallenge(req.user._id, challenge.localDate, challenge.timezone))
+    // Streak credit is based on attempting the complete daily set. Correctness
+    // affects the score only; students do not need a perfect score.
+    if (challenge.attemptedCount < challenge.questionIds.length) return res.status(400).json({ message: 'Attempt every question before completing the challenge. Correctness does not affect streak credit.' })
+    challenge.status = 'completed'; challenge.completedAt = new Date(); await challenge.save()
+    let streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
+    if (!streak) streak = await StudentStreak.create({ user: req.user._id, subject: getActiveScience() })
+    if (challenge.questionIds.length > 0 && streak.lastCreditedDate !== challenge.localDate) {
+      streak.currentStreak = streak.lastCreditedDate === previousLocalDate(challenge.localDate) ? streak.currentStreak + 1 : 1
+      streak.longestStreak = Math.max(streak.longestStreak, streak.currentStreak)
+      streak.lastCreditedDate = challenge.localDate
+      await streak.save()
+    }
+    res.json(await getDailyChallenge(req.user._id, challenge.localDate, challenge.timezone))
+  } catch (error) {
+    res.status(500).json({ message: 'Could not complete the daily challenge.' })
+  }
+})
+
 // Firebase owns credentials. MongoDB stores only the Firebase UID and app profile data.
 app.post('/api/auth/firebase', async (req, res) => {
   try {
@@ -2979,10 +3520,10 @@ app.post('/api/auth/firebase', async (req, res) => {
       return res.status(400).json({ message: 'A verified email address is required.' })
     }
 
-    let user = await User.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
+    let user = await AccountUser.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
     let createdNewUser = false
     if (!user) {
-      user = await User.create({
+      user = await AccountUser.create({
         firebaseUid: firebaseUser.uid,
         name: String(firebaseUser.name || name || normalizedEmail.split('@')[0]).trim() || 'Student',
         email: normalizedEmail,
@@ -3026,7 +3567,7 @@ app.post('/api/auth/firebase', async (req, res) => {
         }
       })
       if (user.email !== normalizedEmail) {
-        const emailOwner = await User.findOne({
+        const emailOwner = await AccountUser.findOne({
           email: normalizedEmail,
           _id: { $ne: user._id },
         })
@@ -3073,7 +3614,7 @@ app.post('/api/auth/firebase/migrate-legacy', async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required.' })
     }
 
-    const user = await User.findOne({ email: normalizedEmail })
+    const user = await findAccountUser({ email: normalizedEmail })
     if (!user || !(await passwordMatches(password, user))) {
       return res.status(401).json({ message: 'Email or password is incorrect.' })
     }
@@ -3121,13 +3662,13 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 6 characters.' })
     }
 
-    const existingUser = await User.findOne({ email: normalizedEmail })
+    const existingUser = await findAccountUser({ email: normalizedEmail })
 
     if (existingUser) {
       return res.status(409).json({ message: 'An account with this email already exists.' })
     }
 
-    const user = await User.create({
+    const user = await AccountUser.create({
       name: name.trim(),
       email: normalizedEmail,
       phoneNumber: normalizedPhoneNumber,
@@ -3164,7 +3705,7 @@ app.post('/api/auth/signin', async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required.' })
     }
 
-    const user = await User.findOne({ email: normalizedEmail })
+    const user = await findAccountUser({ email: normalizedEmail })
 
     if (!user) {
       return res.status(404).json({ message: 'No account found with this email.' })
@@ -3203,7 +3744,7 @@ app.post('/api/auth/forgot-password/reset', async (req, res) => {
       return res.status(400).json({ message: 'New password must be at least 6 characters.' })
     }
 
-    const user = await User.findOne({ email: normalizedEmail })
+    const user = await findAccountUser({ email: normalizedEmail })
 
     if (!user) {
       return res.status(404).json({ message: 'No account found with this email.' })
@@ -3224,13 +3765,8 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
   res.json({ user: publicUser(req.user) })
 })
 
-app.delete('/api/auth/account', authRequired, async (req, res) => {
-  try {
-    if (req.user.isAdmin) {
-      return res.status(403).json({ message: 'Admin accounts cannot be deleted here.' })
-    }
-
-    const userId = req.user._id
+const permanentlyDeleteAccount = async (user) => {
+    const userId = user._id
     const userIdString = String(userId)
 
     await Promise.all([
@@ -3257,20 +3793,114 @@ app.delete('/api/auth/account', authRequired, async (req, res) => {
 
     await User.deleteOne({ _id: userId })
 
-    if (firebaseAdminAuth && req.user.firebaseUid) {
+    if (firebaseAdminAuth && user.firebaseUid) {
       try {
-        await firebaseAdminAuth.deleteUser(req.user.firebaseUid)
+        await firebaseAdminAuth.deleteUser(user.firebaseUid)
       } catch (error) {
         if (error.code !== 'auth/user-not-found') {
-          console.warn(`Firebase account cleanup failed for ${req.user.firebaseUid}: ${error.message}`)
+          console.warn(`Firebase account cleanup failed for ${user.firebaseUid}: ${error.message}`)
         }
       }
     }
 
     clearCachedResponses(`user:${userIdString}`)
-    return res.json({ message: 'Your account and associated data were deleted.' })
+}
+
+app.get('/api/auth/account-deletion-request', authRequired, async (req, res) => {
+  try {
+    const request = await AccountDeletionRequest.findOne({ user: req.user._id }).select('status requestedAt reviewedAt').lean()
+    res.json({ request: request || null })
   } catch (error) {
-    return res.status(500).json({ message: 'Could not delete your account.' })
+    res.status(500).json({ message: 'Could not load account deletion status.' })
+  }
+})
+
+app.post('/api/auth/account-deletion-request', authRequired, async (req, res) => {
+  try {
+    if (req.user.isAdmin) {
+      return res.status(403).json({ message: 'Admin accounts cannot request deletion here.' })
+    }
+
+    const existingRequest = await AccountDeletionRequest.findOne({ user: req.user._id })
+    if (existingRequest?.status === 'pending') {
+      return res.status(409).json({ message: 'Your account deletion request is already waiting for admin approval.', request: existingRequest })
+    }
+
+    const request = existingRequest
+      ? await AccountDeletionRequest.findOneAndUpdate(
+          { user: req.user._id },
+          { status: 'pending', requestedAt: new Date(), reviewedAt: null, reviewedBy: null },
+          { new: true },
+        )
+      : await AccountDeletionRequest.create({ user: req.user._id })
+
+    res.status(201).json({ message: 'Account deletion request sent to admin for approval.', request })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not send account deletion request.' })
+  }
+})
+
+// Keep the old endpoint safe for older clients: it now creates a request rather than deleting immediately.
+app.delete('/api/auth/account', authRequired, async (req, res) => {
+  try {
+    if (req.user.isAdmin) {
+      return res.status(403).json({ message: 'Admin accounts cannot request deletion here.' })
+    }
+    const existingRequest = await AccountDeletionRequest.findOne({ user: req.user._id })
+    if (existingRequest?.status === 'pending') {
+      return res.status(409).json({ message: 'Your account deletion request is already waiting for admin approval.', request: existingRequest })
+    }
+    const request = existingRequest
+      ? await AccountDeletionRequest.findOneAndUpdate(
+          { user: req.user._id },
+          { status: 'pending', requestedAt: new Date(), reviewedAt: null, reviewedBy: null },
+          { new: true },
+        )
+      : await AccountDeletionRequest.create({ user: req.user._id })
+    return res.status(201).json({ message: 'Account deletion request sent to admin for approval.', request })
+  } catch (error) {
+    return res.status(500).json({ message: 'Could not send account deletion request.' })
+  }
+})
+
+app.get('/api/admin/account-deletion-requests', authRequired, adminRequired, async (req, res) => {
+  try {
+    const requests = await AccountDeletionRequest.find({ status: 'pending' })
+      .populate('user', 'name email phoneNumber classId createdAt')
+      .sort({ requestedAt: 1 })
+      .lean()
+    res.json({ requests })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load account deletion requests.' })
+  }
+})
+
+app.patch('/api/admin/account-deletion-requests/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const nextStatus = String(req.body?.status || '').toLowerCase()
+    if (!['approved', 'rejected'].includes(nextStatus)) {
+      return res.status(400).json({ message: 'Choose approve or reject.' })
+    }
+
+    const request = await AccountDeletionRequest.findById(req.params.id)
+    if (!request || request.status !== 'pending') {
+      return res.status(404).json({ message: 'Pending deletion request not found.' })
+    }
+
+    if (nextStatus === 'approved') {
+      const user = await User.findById(request.user)
+      if (user) await permanentlyDeleteAccount(user)
+      await AccountDeletionRequest.deleteOne({ _id: request._id })
+      return res.json({ message: 'Account deletion approved and completed.' })
+    }
+
+    request.status = 'rejected'
+    request.reviewedAt = new Date()
+    request.reviewedBy = req.user._id
+    await request.save()
+    return res.json({ message: 'Account deletion request rejected.' })
+  } catch (error) {
+    return res.status(500).json({ message: 'Could not review account deletion request.' })
   }
 })
 
@@ -3483,24 +4113,23 @@ app.get('/api/chapters', optionalAuth, async (req, res) => {
     const topicIds = topics.map((topic) => topic._id)
     const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic').lean()
     const objectiveTypeIds = objectiveTypes.map((objectiveType) => objectiveType._id)
-    const questionCounts = await ObjectiveQuestion.aggregate([
-      { $match: { objectiveType: { $in: objectiveTypeIds } } },
-      { $group: { _id: '$objectiveType', count: { $sum: 1 }, questionIds: { $push: '$_id' } } },
+    const [questionCounts, scores] = await Promise.all([
+      ObjectiveQuestion.aggregate([
+        { $match: { objectiveType: { $in: objectiveTypeIds } } },
+        { $group: { _id: '$objectiveType', count: { $sum: 1 }, questionIds: { $push: '$_id' } } },
+      ]),
+      req.user && objectiveTypeIds.length > 0
+        ? PracticeScore.find({ user: req.user._id, objectiveType: { $in: objectiveTypeIds } })
+          .select('objectiveType bestScore questionResults').lean()
+        : Promise.resolve([]),
     ])
     const questionCountMap = new Map(questionCounts.map((item) => [String(item._id), Number(item.count || 0)]))
     const questionIdMap = new Map(questionCounts.map((item) => [String(item._id), (item.questionIds || []).map(String)]))
     const scoreMap = new Map()
 
-    if (req.user && objectiveTypeIds.length > 0) {
-      const scores = await PracticeScore.find({
-        user: req.user._id,
-        objectiveType: { $in: objectiveTypeIds },
-      }).select('objectiveType bestScore questionResults').lean()
-
-      scores.forEach((score) => {
-        scoreMap.set(String(score.objectiveType), score)
-      })
-    }
+    scores.forEach((score) => {
+      scoreMap.set(String(score.objectiveType), score)
+    })
 
     const topicChapterMap = new Map(topics.map((topic) => [String(topic._id), String(topic.chapter)]))
     const chapterProgressMap = new Map(chapters.map((chapter) => [String(chapter._id), { correctQuestions: 0, totalQuestions: 0 }]))
@@ -3641,7 +4270,7 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
       return res.status(404).json({ message: 'Chapter not found.' })
     }
 
-    const topics = await Topic.find({ chapter: chapter._id }).sort({ number: 1 })
+    const topics = await Topic.find({ chapter: chapter._id }).sort({ number: 1 }).lean()
     const topicIds = topics.map((topic) => topic._id)
     const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic').lean()
     const objectiveTypeIds = objectiveTypes.map((objectiveType) => objectiveType._id)
@@ -3952,7 +4581,7 @@ app.post('/api/topics/:id/objective-types', authRequired, adminRequired, async (
       return res.status(404).json({ message: 'Topic not found.' })
     }
 
-    const { type } = req.body
+    const type = normalizeObjectiveType(req.body.type)
 
     if (!type) {
       return res.status(400).json({ message: 'Objective type is required.' })
@@ -4002,10 +4631,35 @@ app.get('/api/topics/:topicId/objective-types/:type/practice', optionalAuth, asy
       return res.status(404).json({ message: 'Topic not found.' })
     }
 
-    const objectiveType = await ObjectiveType.findOne({
+    const requestedObjectiveType = normalizeObjectiveType(req.params.type)
+    const objectiveTypeAliases = requestedObjectiveType === 'numericals'
+      ? ['numericals', 'numerical', 'numerical-questions']
+      : [requestedObjectiveType]
+    let objectiveType = await ObjectiveType.findOne({
       topic: topic._id,
-      type: req.params.type,
+      type: { $in: objectiveTypeAliases },
     })
+
+    // Keep older records usable if Numericals was previously saved with a
+    // different capitalization or singular label.
+    if (!objectiveType && requestedObjectiveType === 'numericals') {
+      const topicObjectiveTypes = await ObjectiveType.find({ topic: topic._id }).lean()
+      const matchingType = topicObjectiveTypes.find((item) => normalizeObjectiveType(item.type) === 'numericals')
+      if (matchingType) {
+        objectiveType = matchingType
+      }
+    }
+
+    // Numericals may have been created in the other science database before
+    // science-specific content was separated. When an admin opens the page,
+    // repair that missing record in the currently selected database so all
+    // subsequent question uploads use a local objective id.
+    if (!objectiveType && requestedObjectiveType === 'numericals' && req.user?.isAdmin) {
+      objectiveType = await ObjectiveType.create({
+        topic: topic._id,
+        type: 'numericals',
+      })
+    }
 
     if (!objectiveType) {
       return res.status(404).json({ message: 'Objective type not found.' })
@@ -4061,7 +4715,7 @@ app.get('/api/topics/:topicId/objective-types/:type/practice', optionalAuth, asy
         options: Array.isArray(question.options) ? question.options : [],
         pairs: Array.isArray(question.pairs) ? question.pairs : [],
         imageUrl: publicQuestionImageUrl(question),
-        answerImageUrl: publicAnswerImageUrl(question),
+        answerImageUrl: isAdmin || objectiveType.type !== 'numericals' ? publicAnswerImageUrl(question) : '',
         chapterId: topic.chapter?._id,
         chapterNumber: topic.chapter?.number,
         chapterName: topic.chapter?.name,
@@ -4070,6 +4724,7 @@ app.get('/api/topics/:topicId/objective-types/:type/practice', optionalAuth, asy
         isBoardQuestion: Boolean(question.isBoardQuestion),
         ...(isAdmin ? { correctOption: question.correctOption } : {}),
         ...(isAdmin ? { correctOptions: question.correctOptions } : {}),
+        ...(isAdmin ? { solution: question.solution || '' } : {}),
       })),
     })
   } catch (error) {
@@ -4090,7 +4745,7 @@ app.get('/api/chapters/:chapterNumber/board-questions', optionalAuth, async (req
     const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic type').lean()
     const objectiveTypeIds = objectiveTypes.map((item) => item._id)
     const questions = await ObjectiveQuestion.find({ objectiveType: { $in: objectiveTypeIds }, isBoardQuestion: true })
-      .select('_id objectiveType question options pairs questionImage answerImage createdAt')
+      .select('_id objectiveType question solution options pairs questionImage answerImage createdAt')
       .sort({ createdAt: 1 })
       .lean()
 
@@ -4102,6 +4757,7 @@ app.get('/api/chapters/:chapterNumber/board-questions', optionalAuth, async (req
       return {
         _id: question._id,
         question: question.question,
+        solution: question.solution || '',
         options: question.options,
         pairs: question.pairs,
         imageUrl: publicQuestionImageUrl(question),
@@ -4169,33 +4825,51 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
   { name: 'answerImage', maxCount: 1 },
 ]), async (req, res) => {
   try {
-    const objectiveType = await ObjectiveType.findById(req.params.id)
+    let objectiveType = await ObjectiveType.findById(req.params.id)
+
+    // The objective id can be stale after switching Science 1/Science 2.
+    // Resolve it from the current science's topic and type instead of trying
+    // to write a Science 1 question under a Science 2 objective id.
+    const requestedObjectiveType = normalizeObjectiveType(req.body.objectiveType)
+    const objectiveTypeAliases = requestedObjectiveType === 'numericals'
+      ? ['numericals', 'numerical', 'numerical-questions']
+      : [requestedObjectiveType]
+
+    if (!objectiveType && req.body.topicId && requestedObjectiveType) {
+      objectiveType = await ObjectiveType.findOne({
+        topic: req.body.topicId,
+        type: { $in: objectiveTypeAliases },
+      })
+
+      if (!objectiveType) {
+        const topic = await Topic.findById(req.body.topicId).select('_id')
+        if (topic) {
+          objectiveType = await ObjectiveType.create({
+            topic: topic._id,
+            type: requestedObjectiveType,
+          })
+        }
+      }
+    }
 
     if (!objectiveType) {
       return res.status(404).json({ message: 'Objective type not found.' })
     }
 
-    const { question, options, correctOption, pairs, correctOptions } = req.body
+    const { question, solution, options, correctOption, pairs, correctOptions } = req.body
     const isBoardQuestion = ['true', '1', 'on'].includes(String(req.body.isBoardQuestion || '').toLowerCase())
     const parsedOptions = typeof options === 'string' ? JSON.parse(options || '[]') : options
     const parsedPairs = typeof pairs === 'string' ? JSON.parse(pairs || '[]') : pairs
     const parsedCorrectOptions = typeof correctOptions === 'string' ? JSON.parse(correctOptions || '[]') : correctOptions
     const questionImageFile = req.files?.questionImage?.[0]
     const answerImageFile = req.files?.answerImage?.[0]
-    const questionImage = questionImageFile
-      ? {
-          data: await createWebpImage(questionImageFile.buffer),
-          contentType: 'image/webp',
-          updatedAt: new Date(),
-        }
-      : undefined
-    const answerImage = answerImageFile
-      ? {
-          data: await createWebpImage(answerImageFile.buffer),
-          contentType: 'image/webp',
-          updatedAt: new Date(),
-        }
-      : undefined
+    const questionImage = await convertQuestionImage(questionImageFile, 'Question photo')
+    const answerImage = await convertQuestionImage(answerImageFile, 'Solution photo')
+    const normalizedSolution = String(solution || '').trim()
+    const isNumericalQuestion = normalizeObjectiveType(objectiveType.type) === 'numericals'
+    const numericalPayload = isNumericalQuestion
+      ? normalizeNumericalQuestion({ question, solution, options: parsedOptions, correctOption })
+      : null
 
     if (isMatchType(objectiveType.type)) {
       const matchPayload = normalizeMatchQuestionPayload({
@@ -4227,19 +4901,25 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
 
     const isDoneOnlyQuestion = isDoneOnlyType(objectiveType.type)
     const isIdentifySymbolQuestion = objectiveType.type === 'identify-symbol'
-    const cleanedOptions = isDoneOnlyQuestion
+    const cleanedOptions = isNumericalQuestion
+      ? numericalPayload.options
+      : isDoneOnlyQuestion
       ? ['Done', 'View answer']
       : objectiveType.type === 'true-or-false'
         ? ['True', 'False']
         : (parsedOptions || []).map((option) => String(option || '').trim()).filter(Boolean)
-    const correctIndex = isDoneOnlyQuestion ? 0 : Number(correctOption)
+    const correctIndex = isNumericalQuestion ? numericalPayload.correctOption : isDoneOnlyQuestion ? 0 : Number(correctOption)
 
     if ((requiresFourOptions(objectiveType.type) || isIdentifySymbolQuestion) && cleanedOptions.length !== 4) {
-      return res.status(400).json({ message: 'Correlation questions must have exactly four options.' })
+      return res.status(400).json({ message: `${objectiveType.type === 'odd-man-out' ? 'Odd Man Out' : objectiveType.type === 'correlation' ? 'Correlation' : 'Identify Symbol'} questions must have exactly four options.` })
     }
 
     if (isIdentifySymbolQuestion && !questionImage) {
       return res.status(400).json({ message: 'Please upload a symbol image.' })
+    }
+
+    if (isNumericalQuestion && !normalizedSolution && !answerImage) {
+      return res.status(400).json({ message: 'Please add solution text or upload a solution photo.' })
     }
 
     if ((!question?.trim() && !questionImage) || cleanedOptions.length < 2) {
@@ -4253,7 +4933,8 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
     const savedQuestion = await ObjectiveQuestion.create({
       objectiveType: objectiveType._id,
       isBoardQuestion,
-      question,
+      question: isNumericalQuestion ? numericalPayload.question : question,
+      solution: isNumericalQuestion ? numericalPayload.solution : normalizedSolution,
       options: cleanedOptions,
       correctOption: correctIndex,
       ...(questionImage ? { questionImage } : {}),
@@ -4272,7 +4953,8 @@ app.post('/api/objective-types/:id/questions', authRequired, adminRequired, uplo
 
     res.status(201).json({ question: savedQuestion })
   } catch (error) {
-    res.status(error.message?.startsWith('Match the following') || error.message?.startsWith('Please complete') ? 400 : 500).json({ message: error.message || 'Could not add question.' })
+    const statusCode = error.statusCode || (error.message?.startsWith('Match the following') || error.message?.startsWith('Please complete') ? 400 : 500)
+    res.status(statusCode).json({ message: error.message || 'Could not add question.' })
   }
 })
 
@@ -4301,7 +4983,9 @@ app.post('/api/objective-types/:id/questions/ai-draft', authRequired, adminRequi
 
     const questionRules = objectiveType.type === 'true-or-false'
       ? '- Return JSON object only: {"questions":[{"question":"...","options":["True","False"],"correctOption":0}]}\n- Write each question as a clear true-or-false statement.\n- Use only the options ["True","False"].\n- correctOption must be 0 for True or 1 for False.'
-      : objectiveType.type === 'correlation'
+      : objectiveType.type === 'odd-man-out'
+        ? '- Return JSON object only: {"questions":[{"question":"...","options":["...","...","...","..."],"correctOption":0}]}\n- Create odd-man-out questions where exactly one option does not belong with the other three.\n- Every question must have exactly 4 concise options.\n- Only one option must be correct.\n- correctOption must be the zero-based index of the odd option.'
+        : objectiveType.type === 'correlation'
         ? '- Return JSON object only: {"questions":[{"question":"...","options":["...","...","...","..."],"correctOption":0}]}\n- Create SSC-style analogy or word-correlation objective questions.\n- The question must ask the learner to complete or identify the same relationship between paired terms.\n- Every question must have exactly 4 concise options.\n- Only one option must be correct.\n- correctOption must be the zero-based index of the correct option.'
         : objectiveType.type === 'match-the-following'
           ? '- Return JSON object only: {"questions":[{"question":"Match the following","pairs":[{"left":"...","right":"..."},{"left":"...","right":"..."}]}]}\n- Create exactly one match-the-following question unless a different count is requested.\n- Include 3 to 5 directly related pairs.\n- Each pair must have a short left item and its exact matching right item.'
@@ -4369,11 +5053,12 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
   { name: 'answerImage', maxCount: 1 },
 ]), async (req, res) => {
   try {
-    const { question, options, correctOption, pairs, correctOptions } = req.body
+    const { question, solution, options, correctOption, pairs, correctOptions } = req.body
     const isBoardQuestion = ['true', '1', 'on'].includes(String(req.body.isBoardQuestion || '').toLowerCase())
     const parsedOptions = typeof options === 'string' ? JSON.parse(options || '[]') : options
     const parsedPairs = typeof pairs === 'string' ? JSON.parse(pairs || '[]') : pairs
     const parsedCorrectOptions = typeof correctOptions === 'string' ? JSON.parse(correctOptions || '[]') : correctOptions
+    const hasSolutionField = Object.prototype.hasOwnProperty.call(req.body || {}, 'solution')
     const existingQuestion = await ObjectiveQuestion.findById(req.params.id).populate({
       path: 'objectiveType',
       populate: { path: 'topic', populate: { path: 'chapter', select: 'number name' } },
@@ -4425,21 +5110,13 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
     const unsetFields = {}
 
     if (questionImageFile) {
-      imageUpdate.questionImage = {
-        data: await createWebpImage(questionImageFile.buffer),
-        contentType: 'image/webp',
-        updatedAt: new Date(),
-      }
+      imageUpdate.questionImage = await convertQuestionImage(questionImageFile, 'Question photo')
     } else if (String(req.body.removeImage || '') === 'true') {
       unsetFields.questionImage = 1
     }
 
     if (answerImageFile) {
-      imageUpdate.answerImage = {
-        data: await createWebpImage(answerImageFile.buffer),
-        contentType: 'image/webp',
-        updatedAt: new Date(),
-      }
+      imageUpdate.answerImage = await convertQuestionImage(answerImageFile, 'Solution photo')
     } else if (String(req.body.removeAnswerImage || '') === 'true') {
       unsetFields.answerImage = 1
     }
@@ -4467,19 +5144,38 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
     }
 
     const isDoneOnlyQuestion = isDoneOnlyType(existingQuestion.objectiveType?.type)
-    const cleanedOptions = isDoneOnlyQuestion
+    const isNumericalQuestion = normalizeObjectiveType(existingQuestion.objectiveType?.type) === 'numericals'
+    const numericalPayload = isNumericalQuestion
+      ? normalizeNumericalQuestion({
+          question,
+          solution: hasSolutionField ? solution : existingQuestion.solution,
+          options: parsedOptions,
+          correctOption,
+        })
+      : null
+    const cleanedOptions = isNumericalQuestion
+      ? numericalPayload.options
+      : isDoneOnlyQuestion
       ? ['Done', 'View answer']
       : (parsedOptions || []).map((option) => String(option || '').trim()).filter(Boolean)
-    const correctIndex = isDoneOnlyQuestion ? 0 : Number(correctOption)
+    const correctIndex = isNumericalQuestion ? numericalPayload.correctOption : isDoneOnlyQuestion ? 0 : Number(correctOption)
 
     if (requiresFourOptions(existingQuestion.objectiveType?.type) && cleanedOptions.length !== 4) {
-      return res.status(400).json({ message: 'Correlation questions must have exactly four options.' })
+      return res.status(400).json({ message: `${existingQuestion.objectiveType?.type === 'odd-man-out' ? 'Odd Man Out' : 'Correlation'} questions must have exactly four options.` })
     }
 
     const willHaveQuestionImage = Boolean(imageUpdate.questionImage || (existingQuestion.questionImage?.data && !imageUpdate.$unset?.questionImage))
+    const willHaveAnswerImage = Boolean(imageUpdate.answerImage || (existingQuestion.answerImage?.data && !imageUpdate.$unset?.answerImage))
+    const normalizedSolution = hasSolutionField
+      ? String(solution || '').trim()
+      : String(existingQuestion.solution || '').trim()
 
     if ((!question?.trim() && !willHaveQuestionImage) || cleanedOptions.length < 2) {
       return res.status(400).json({ message: isDoneOnlyQuestion ? 'Question text or question photo is required.' : 'Question and at least two options are required.' })
+    }
+
+    if (existingQuestion.objectiveType?.type === 'numericals' && !normalizedSolution && !willHaveAnswerImage) {
+      return res.status(400).json({ message: 'Please add solution text or upload a solution photo.' })
     }
 
     if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= cleanedOptions.length) {
@@ -4490,14 +5186,16 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
       req.params.id,
       imageUpdate.$unset ? {
         $set: {
-          question,
+          question: isNumericalQuestion ? numericalPayload.question : question,
+          solution: isNumericalQuestion ? numericalPayload.solution : normalizedSolution,
           isBoardQuestion,
           options: cleanedOptions,
           correctOption: correctIndex,
         },
         $unset: imageUpdate.$unset,
       } : {
-        question,
+        question: isNumericalQuestion ? numericalPayload.question : question,
+        solution: isNumericalQuestion ? numericalPayload.solution : normalizedSolution,
         isBoardQuestion,
         options: cleanedOptions,
         correctOption: correctIndex,
@@ -4510,7 +5208,8 @@ app.patch('/api/objective-questions/:id', authRequired, adminRequired, upload.fi
 
     res.json({ question: updatedQuestion })
   } catch (error) {
-    res.status(error.message?.startsWith('Match the following') || error.message?.startsWith('Please complete') ? 400 : 500).json({ message: error.message || 'Could not update question.' })
+    const statusCode = error.statusCode || (error.message?.startsWith('Match the following') || error.message?.startsWith('Please complete') ? 400 : 500)
+    res.status(statusCode).json({ message: error.message || 'Could not update question.' })
   }
 })
 
@@ -4728,18 +5427,30 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     )
-    const suggestion = await generateProgressSuggestion({
-      objectiveType: objectiveType.type,
-      topicName: objectiveType.topic?.name,
-      studyText: objectiveType.topic?.studyText,
-      previousScore: previousBestScore,
-      currentScore: score,
-      totalQuestions: questions.length,
-      correctCount: score,
-      wrongCount,
-      skippedCount,
-      questionBreakdown,
-    })
+    // Single-question submits need an immediate correctness response. The AI
+    // progress report is useful for a completed attempt, but waiting for the
+    // external provider on every answer makes practice feel unnecessarily slow.
+    const suggestion = answers.length === 1
+      ? createFallbackProgressReport({
+          previousScore: previousBestScore,
+          currentScore: score,
+          totalQuestions: questions.length,
+          correctCount: score,
+          wrongCount,
+          skippedCount,
+        })
+      : await generateProgressSuggestion({
+          objectiveType: objectiveType.type,
+          topicName: objectiveType.topic?.name,
+          studyText: objectiveType.topic?.studyText,
+          previousScore: previousBestScore,
+          currentScore: score,
+          totalQuestions: questions.length,
+          correctCount: score,
+          wrongCount,
+          skippedCount,
+          questionBreakdown,
+        })
     await PracticeAttempt.create({
       user: req.user._id,
       attemptType: 'practice',
@@ -4790,6 +5501,10 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
         questionId: question._id,
         correctOption: question.correctOption,
         correctOptions: question.correctOptions,
+        ...(objectiveType.type === 'numericals' ? {
+          solution: question.solution || '',
+          answerImageUrl: publicAnswerImageUrl(question),
+        } : {}),
       })),
     })
   } catch (error) {
@@ -4828,6 +5543,69 @@ app.get('/api/progress/me', authRequired, async (req, res) => {
   }
 })
 
+app.get('/api/progress/performance', authRequired, async (req, res) => {
+  try {
+    const [chapters, topics, objectiveTypes, questionCounts, attempts] = await Promise.all([
+      Chapter.find().select('_id number name').sort({ number: 1 }).lean(),
+      Topic.find().select('_id chapter number name').sort({ number: 1 }).lean(),
+      ObjectiveType.find().select('_id topic').lean(),
+      ObjectiveQuestion.aggregate([
+        { $group: { _id: '$objectiveType', count: { $sum: 1 } } },
+      ]),
+      PracticeAttempt.find({ user: req.user._id })
+        .sort({ createdAt: 1 })
+        .select('createdAt questionBreakdown')
+        .lean(),
+    ])
+
+    const topicById = new Map(topics.map((topic) => [String(topic._id), topic]))
+    const chapterById = new Map(chapters.map((chapter) => [String(chapter._id), chapter]))
+    const questionCountByObjective = new Map(questionCounts.map((item) => [String(item._id), Number(item.count || 0)]))
+    const availableByChapter = new Map(chapters.map((chapter) => [String(chapter._id), 0]))
+    const availableByTopic = new Map(topics.map((topic) => [String(topic._id), 0]))
+
+    objectiveTypes.forEach((objectiveType) => {
+      const count = questionCountByObjective.get(String(objectiveType._id)) || 0
+      const topic = topicById.get(String(objectiveType.topic))
+      if (!topic) return
+      availableByTopic.set(String(topic._id), (availableByTopic.get(String(topic._id)) || 0) + count)
+      availableByChapter.set(String(topic.chapter), (availableByChapter.get(String(topic.chapter)) || 0) + count)
+    })
+
+    res.set('Cache-Control', 'no-store')
+    res.json({
+      chapters: chapters.map((chapter) => ({
+        id: String(chapter._id),
+        number: chapter.number,
+        name: chapter.name,
+        availableQuestions: availableByChapter.get(String(chapter._id)) || 0,
+      })),
+      topics: topics.map((topic) => ({
+        id: String(topic._id),
+        number: topic.number,
+        name: topic.name,
+        chapterId: String(topic.chapter),
+        chapterNumber: chapterById.get(String(topic.chapter))?.number || 0,
+        chapterName: chapterById.get(String(topic.chapter))?.name || '',
+        availableQuestions: availableByTopic.get(String(topic._id)) || 0,
+      })),
+      attempts: attempts.map((attempt) => ({
+        createdAt: attempt.createdAt,
+        questions: (attempt.questionBreakdown || []).map((question) => ({
+          questionId: question.questionId ? String(question.questionId) : '',
+          chapterId: question.chapterId ? String(question.chapterId) : '',
+          chapterNumber: question.chapterNumber,
+          chapterName: question.chapterName || '',
+          topicName: question.topicName || '',
+          status: question.status,
+        })),
+      })),
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load academic performance.' })
+  }
+})
+
 app.get('/api/progress/improvement', authRequired, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).populate('classId', 'name')
@@ -4859,7 +5637,7 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
     ).trim()
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 20)
 
-    if (mongoose.connection.readyState !== 1) {
+    if (getScienceConnection().readyState !== 1) {
       return res.status(503).json({ message: 'Leaderboard is temporarily unavailable. Please try again shortly.' })
     }
 
@@ -4868,23 +5646,27 @@ app.get('/api/leaderboard', optionalAuth, async (req, res) => {
     }
 
     const classFilter = isClassScope && requestedClassId ? { classId: requestedClassId } : {}
-    const users = await User.find({
-      isAdmin: false,
-      ...classFilter,
-    })
-      .select('name classId totalScore totalMarks totalCorrect totalBrainCells totalAttempts')
-      .populate('classId', 'name')
-      .sort(leaderboardSort)
-      .limit(limit)
-      .lean()
+    const classNamePromise = isClassScope && requestedClassId
+      ? Class.findById(requestedClassId).select('name').lean()
+      : Promise.resolve(null)
+    const [users, selectedClass] = await Promise.all([
+      User.find({
+        isAdmin: false,
+        ...classFilter,
+      })
+        .select('name classId totalScore totalMarks totalCorrect totalBrainCells totalAttempts')
+        .populate('classId', 'name')
+        .sort(leaderboardSort)
+        .limit(limit)
+        .lean(),
+      classNamePromise,
+    ])
 
     const payload = {
       leaderboard: users.map((user) => formatLeaderboardUser(user)),
       scope,
       classId: requestedClassId,
-      className: isClassScope && requestedClassId
-        ? (await Class.findById(requestedClassId).select('name').lean())?.name || ''
-        : '',
+      className: selectedClass?.name || '',
     }
 
     res.set('Cache-Control', 'no-store')
@@ -6084,9 +6866,10 @@ app.delete('/api/admin/announcement', authRequired, adminRequired, async (req, r
 
 app.post('/api/admin/pyqs', authRequired, adminRequired, async (req, res) => {
   try {
-    const title = PYQ_FIXED_TITLE
+    const scienceLabel = getScienceLabel()
+    const title = `Class 10 ${scienceLabel}`
     const month = String(req.body.month || '').trim()
-    const subject = PYQ_FIXED_SUBJECT
+    const subject = scienceLabel
     const year = String(req.body.year || '').trim()
     const linkUrl = normalizeDocumentLink(req.body.link || req.body.linkUrl || req.body.pdfUrl)
 
@@ -6627,8 +7410,8 @@ app.post('/api/tests/generate', authRequired, async (req, res) => {
           question: question.question,
           options: question.options,
           pairs: question.pairs,
-          imageUrl: question.questionImage?.data ? `/api/objective-questions/${question._id}/image?v=${question.questionImage.updatedAt?.getTime() || Date.now()}` : '',
-          answerImageUrl: question.answerImage?.data ? `/api/objective-questions/${question._id}/answer-image?v=${question.answerImage.updatedAt?.getTime() || Date.now()}` : '',
+          imageUrl: question.questionImage?.data ? `/api/objective-questions/${question._id}/image?v=${question.questionImage.updatedAt?.getTime() || Date.now()}&science=${getActiveScience()}` : '',
+          answerImageUrl: question.answerImage?.data ? `/api/objective-questions/${question._id}/answer-image?v=${question.answerImage.updatedAt?.getTime() || Date.now()}&science=${getActiveScience()}` : '',
           hasAnswerImage: Boolean(question.answerImage?.data),
         }
       })
@@ -7369,6 +8152,37 @@ const ensureAdminUser = async () => {
   )
 }
 
+const ensureAcademicScienceFlags = async () => {
+  const academicCollections = [
+    'chapters',
+    'topics',
+    'objectivetypes',
+    'objectivequestions',
+    'practicescores',
+    'contentchanges',
+    'practiceattempts',
+    'pyqs',
+  ]
+
+  await Promise.all(academicCollections.map((collectionName) => (
+    mongoose.connection.db.collection(collectionName).updateMany(
+      { science: { $exists: false } },
+      { $set: { science: 'science2' } },
+    )
+  )))
+
+  await Promise.all([
+    Science2Chapter,
+    Science2Topic,
+    Science2ObjectiveType,
+    Science2ObjectiveQuestion,
+    Science2PracticeScore,
+    Science2ContentChange,
+    Science2PracticeAttempt,
+    Science2Pyq,
+  ].map((model) => model.syncIndexes()))
+}
+
 const startServer = async () => {
   console.log(`Starting backend on http://localhost:${PORT}...`)
   server.listen(PORT, () => {
@@ -7382,9 +8196,14 @@ const startServer = async () => {
 
   try {
     console.log('Connecting to MongoDB...')
-    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 15000 })
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 15000,
+      maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 15),
+      minPoolSize: Number(process.env.MONGODB_MIN_POOL_SIZE || 2),
+    })
     console.log('MongoDB connected')
 
+    await ensureAcademicScienceFlags()
     await ensureAdminUser()
     await syncLeaderboardTotalsFromAttempts()
     scheduleNextPushSlot()

@@ -131,6 +131,8 @@ const Adminpage = () => {
   const [reports, setReports] = useState([])
   const [contacts, setContacts] = useState([])
   const [feedbacks, setFeedbacks] = useState([])
+  const [deletionRequests, setDeletionRequests] = useState([])
+  const [deletionRequestsLoading, setDeletionRequestsLoading] = useState(false)
   const [siteNotice, setSiteNotice] = useState(null)
   const [siteNoticeMessage, setSiteNoticeMessage] = useState('')
   const [siteNoticeColor, setSiteNoticeColor] = useState('amber')
@@ -555,6 +557,33 @@ const Adminpage = () => {
     }
   }
 
+  const loadDeletionRequests = async () => {
+    setDeletionRequestsLoading(true)
+    try {
+      const data = await apiRequest('/api/admin/account-deletion-requests')
+      setDeletionRequests(Array.isArray(data.requests) ? data.requests : [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setDeletionRequestsLoading(false)
+    }
+  }
+
+  const reviewDeletionRequest = async (requestId, status) => {
+    if (status === 'approved' && !window.confirm('Approve this request and permanently delete the student account?')) {
+      return
+    }
+    try {
+      await apiRequest(`/api/admin/account-deletion-requests/${requestId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+      await loadDeletionRequests()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   const loadSiteNotice = async () => {
     if (noticeLoading) {
       return
@@ -875,6 +904,12 @@ const Adminpage = () => {
       }
     }
   }, [isAdmin])
+
+  useEffect(() => {
+    if (isAdmin && activeTab === 'deletion-requests') {
+      loadDeletionRequests()
+    }
+  }, [activeTab, isAdmin])
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -1784,14 +1819,14 @@ const Adminpage = () => {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'class-board', 'reports', 'contacts', 'feedback', 'message'].map((tab) => (
+            {['students', 'classes', 'class-board', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
                 className={`rounded-full px-5 py-3 text-sm font-black capitalize transition ${activeTab === tab ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
               >
-                {tab === 'class-board' ? 'class board' : tab}
+                {tab === 'class-board' ? 'class board' : tab === 'deletion-requests' ? 'deletion requests' : tab}
               </button>
             ))}
           </div>
@@ -2446,6 +2481,60 @@ const Adminpage = () => {
                         No class uploads yet.
                       </div>
                     )}
+                  </div>
+                )}
+
+                {activeTab === 'deletion-requests' && (
+                  <div className="rounded-[1.75rem] border border-rose-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <Trash2 className="h-5 w-5 text-rose-700" />
+                      <h2 className="font-serif text-3xl text-slate-950">Account deletion requests</h2>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Accounts are deleted only after an admin approves a request.
+                    </p>
+
+                    <div className="mt-5 grid gap-3">
+                      {deletionRequestsLoading ? (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm font-semibold text-slate-500">
+                          Loading deletion requests...
+                        </div>
+                      ) : deletionRequests.length ? (
+                        deletionRequests.map((request) => (
+                          <article key={request._id} className="rounded-3xl border border-rose-100 bg-rose-50/50 p-4">
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <h3 className="text-lg font-black text-slate-950">{request.user?.name || 'Unknown student'}</h3>
+                                <p className="mt-1 text-sm text-slate-600">{request.user?.email || 'No email available'}</p>
+                                <p className="mt-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+                                  Requested {request.requestedAt ? new Date(request.requestedAt).toLocaleString() : 'recently'}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => reviewDeletionRequest(request._id, 'rejected')}
+                                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                                >
+                                  Reject
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => reviewDeletionRequest(request._id, 'approved')}
+                                  className="inline-flex h-10 items-center justify-center rounded-2xl bg-rose-600 px-4 text-sm font-bold text-white transition hover:bg-rose-700"
+                                >
+                                  Approve & delete
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        ))
+                      ) : (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm font-semibold text-slate-500">
+                          No pending account deletion requests.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 

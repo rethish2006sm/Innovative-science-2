@@ -6,12 +6,14 @@ import { getStoredAuth } from '../authStorage'
 
 export const objectiveOptions = [
   { type: 'mcqs', label: 'MCQs', description: 'Multiple choice objective questions.' },
+  { type: 'odd-man-out', label: 'Odd Man Out', description: 'Choose the one option that does not belong.' },
   { type: 'true-or-false', label: 'True or False', description: 'Mark each statement as true or false.' },
   { type: 'correlation', label: 'Correlation', description: 'Solve analogy and word-correlation questions.' },
   { type: 'match-the-following', label: 'Match the Following', description: 'Match terms with the correct answers.' },
   { type: 'complete-the-tables', label: 'Complete the Tables', description: 'Fill missing values in structured tables.' },
   { type: 'diagram-based-question', label: 'Diagram Based Question', description: 'Answer questions from labelled diagrams.' },
   { type: 'identify-symbol', label: 'Identify Symbol', description: 'Choose the correct symbol from the given image.' },
+  { type: 'numericals', label: 'Numericals', description: 'Solve numerical questions with an uploaded solution.' },
 ]
 
 const Objectivepage = () => {
@@ -19,6 +21,7 @@ const Objectivepage = () => {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const boardOnly = searchParams.get('boardOnly') === '1' || searchParams.get('boardOnly') === 'true'
+  const boardQuery = boardOnly ? '?boardOnly=1' : ''
   const [topic, setTopic] = useState(null)
   const [chapter, setChapter] = useState(null)
   const [objectiveTypes, setObjectiveTypes] = useState([])
@@ -110,7 +113,7 @@ const Objectivepage = () => {
         <div className="max-w-md rounded-3xl border border-stone-200 bg-white p-8 text-center shadow-xl">
           <h1 className="font-serif text-3xl text-stone-900">Topic not found</h1>
           <p className="mt-3 text-sm text-stone-500">{error}</p>
-          <Link to={`/chapters/${chapterNumber}/topics`} className="mt-6 inline-flex rounded-xl bg-stone-900 px-5 py-3 text-sm font-bold text-white">
+          <Link to={`/chapters/${chapterNumber}/topics${boardQuery}`} className="mt-6 inline-flex rounded-xl bg-stone-900 px-5 py-3 text-sm font-bold text-white">
             Back to topics
           </Link>
         </div>
@@ -124,7 +127,7 @@ const Objectivepage = () => {
         <div className="mt-0 border-b border-stone-200 pb-5 sm:mt-2 sm:pb-6">
           <button
             type="button"
-            onClick={() => navigate(`/chapters/${chapterNumber}/topics`)}
+            onClick={() => navigate(`/chapters/${chapterNumber}/topics${boardQuery}`)}
             className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
             aria-label="Back to topics"
             title="Back to topics"

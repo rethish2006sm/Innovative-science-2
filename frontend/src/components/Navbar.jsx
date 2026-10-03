@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import {
   ArrowLeft,
   BarChart3,
   BookOpen,
+  Check,
   ChevronDown,
   Flame,
   Info,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 import { assetUrl } from '../api';
 import { authEvents, getStoredAuth } from '../authStorage';
+import { getActiveScience, SCIENCE_CHANGED_EVENT, setActiveScience } from '../science';
 import logo from '../assets/logo.svg';
 
 const navItems = [
@@ -58,6 +60,11 @@ const navItems = [
     name: 'Leaderboard',
     path: '/leaderboard',
     icon: <Trophy size={18} />,
+  },
+  {
+    name: 'Daily Streak',
+    path: '/daily-streak',
+    icon: <Flame size={18} />,
   },
   {
     name: 'Battle Mode',
@@ -118,11 +125,49 @@ const drawerItemVariants = {
   visible: { y: 0, opacity: 1 },
 };
 
+const scienceNumberVariants = {
+  enter: (direction) => ({ opacity: 0, y: direction * 16, scale: 0.9 }),
+  center: { opacity: 1, y: 0, scale: 1 },
+  exit: (direction) => ({ opacity: 0, y: direction * -16, scale: 0.9 }),
+};
+
+const ScienceNumber = ({ science }) => {
+  const shouldReduceMotion = useReducedMotion();
+  const number = science === 'Science 1' ? '1' : '2';
+  const previousNumber = useRef(number);
+  const direction = Number(number) > Number(previousNumber.current) ? -1 : 1;
+
+  useEffect(() => {
+    previousNumber.current = number;
+  }, [number]);
+
+  return (
+    <span className="relative inline-block h-[1.1em] w-[0.7em] overflow-hidden text-center align-middle" aria-live="polite">
+      <AnimatePresence initial={false} mode="sync" custom={direction}>
+        <motion.span
+          key={number}
+          custom={direction}
+          variants={shouldReduceMotion ? undefined : scienceNumberVariants}
+          initial={shouldReduceMotion ? { opacity: 0 } : 'enter'}
+          animate={shouldReduceMotion ? { opacity: 1 } : 'center'}
+          exit={shouldReduceMotion ? { opacity: 0 } : 'exit'}
+          transition={{ duration: shouldReduceMotion ? 0.08 : 0.44, ease: [0.22, 1, 0.36, 1] }}
+          className="science-number-animation absolute inset-0 inline-flex items-center justify-center"
+        >
+          {number}
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
+};
+
 const Navbar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isScienceMenuOpen, setIsScienceMenuOpen] = useState(false);
-  const [selectedScience, setSelectedScience] = useState('Science 2');
+  const [selectedScience, setSelectedScience] = useState(() => getActiveScience() === 'science1' ? 'Science 1' : 'Science 2');
+  const [scienceToast, setScienceToast] = useState('');
+  const scienceToastTimerRef = useRef(null);
   const moreMenuRef = useRef(null);
   const scienceMenuRef = useRef(null);
   const mobileScienceMenuRef = useRef(null);
@@ -136,6 +181,7 @@ const Navbar = () => {
   const profileInitial = (auth?.user?.name || auth?.user?.email || 'U').trim().charAt(0).toUpperCase();
   const hasClassButton = Boolean(classButtonPath);
   const hideContactForStudent = Boolean(auth?.user?.classId) && !auth?.user?.isAdmin;
+  const shouldReduceMotion = useReducedMotion();
   const homeNavItem = navItems.find((item) => item.name === 'Home');
   const battleModeNavItem = navItems.find((item) => item.name === 'Battle Mode');
   const desktopNavItems = navItems.filter(
@@ -145,11 +191,11 @@ const Navbar = () => {
       item.name !== 'Feedback' &&
       (!hideContactForStudent || item.name !== 'Contact'),
   );
-  const primaryDesktopNavItems = desktopNavItems.filter((item) => ['Chapters', 'PYQs', 'Battle Mode'].includes(item.name));
+  const primaryDesktopNavItems = desktopNavItems.filter((item) => ['Chapters', 'PYQs', 'Daily Streak', 'Battle Mode'].includes(item.name));
   const moreDesktopNavItems = [
     aboutNavItem,
     ...navItems.filter(
-      (item) => !['Chapters', 'PYQs', 'Battle Mode'].includes(item.name)
+      (item) => !['Chapters', 'PYQs', 'Daily Streak', 'Battle Mode'].includes(item.name)
         && (!hideContactForStudent || item.name !== 'Contact'),
     ),
   ];
@@ -225,6 +271,28 @@ const Navbar = () => {
     return () => document.removeEventListener('click', handleOutsideClick);
   }, [isScienceMenuOpen]);
 
+  useEffect(() => () => window.clearTimeout(scienceToastTimerRef.current), []);
+
+  useEffect(() => {
+    const syncScience = () => {
+      setSelectedScience(getActiveScience() === 'science1' ? 'Science 1' : 'Science 2');
+    };
+    window.addEventListener(SCIENCE_CHANGED_EVENT, syncScience);
+    return () => window.removeEventListener(SCIENCE_CHANGED_EVENT, syncScience);
+  }, []);
+
+  const handleScienceChange = (science) => {
+    setIsScienceMenuOpen(false);
+
+    if (science === selectedScience) return;
+
+    setSelectedScience(science);
+    setActiveScience(science === 'Science 1' ? 'science1' : 'science2');
+    setScienceToast(`Switched to ${science} ✓`);
+    window.clearTimeout(scienceToastTimerRef.current);
+    scienceToastTimerRef.current = window.setTimeout(() => setScienceToast(''), 2300);
+  };
+
   return (
     <>
       <motion.nav
@@ -234,7 +302,7 @@ const Navbar = () => {
           duration: 0.8,
           ease: [0.22, 1, 0.36, 1],
         }}
-        className="fixed top-0 left-0 z-[100] w-full overflow-visible border-b border-teal-500/10 bg-[#0a0c1a]/70 backdrop-blur-2xl"
+        className="navbar-shell fixed top-0 left-0 z-[100] w-full overflow-visible border-b border-teal-500/10 bg-[#0a0c1a]/70 backdrop-blur-3xl"
       >
         {/* Animated Gradient Background */}
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
@@ -308,14 +376,14 @@ const Navbar = () => {
                 <img
                   src={logo}
                   alt="Innovative Science 2 Logo"
-                  className="relative h-10 w-10 rounded-full border border-white/10 object-cover shadow-2xl transition-all duration-500 group-hover:border-teal-400/50 sm:h-12 sm:w-12 md:h-16 md:w-16"
+                  className="relative h-10 w-10 rounded-full border border-slate-200 object-cover shadow-2xl transition-all duration-500 group-hover:border-teal-400/50 sm:h-12 sm:w-12 md:h-16 md:w-16 lg:border-white/10"
                 />
               </motion.div>
 
               {/* Website title now remains visible in mobile views with adjusted sizing */}
               <div className="min-w-0">
                 <h1 className="flex min-w-0 items-center gap-1 truncate text-sm font-black tracking-tight text-white sm:text-lg md:text-2xl">
-                  Innovative Science 2
+                  Innovative Science <ScienceNumber science={selectedScience} />
                   <motion.span
                     animate={{ rotate: [0, 10, -10, 0] }}
                     transition={{ duration: 4, repeat: Infinity, delay: 2 }}
@@ -362,8 +430,7 @@ const Navbar = () => {
                             key={science}
                             type="button"
                             onClick={() => {
-                              setSelectedScience(science);
-                              setIsScienceMenuOpen(false);
+                              handleScienceChange(science);
                             }}
                             className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left text-[10px] font-semibold transition ${selectedScience === science ? 'bg-teal-500/20 text-teal-300' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
                             role="menuitem"
@@ -394,7 +461,7 @@ const Navbar = () => {
               className={`relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full border backdrop-blur-xl transition-all duration-300 lg:hidden ${
                 isProfilePage
                   ? 'border-teal-400/70 bg-teal-500/20 text-teal-300 shadow-[0_0_18px_rgba(20,184,166,0.45)]'
-                  : 'border-white/10 bg-white/5 text-slate-300 hover:border-teal-400/40 hover:bg-white/10 hover:text-teal-300'
+                : 'border-white/10 bg-white/5 text-slate-300 hover:border-teal-400/40 hover:bg-white/10 hover:text-teal-300'
               }`}
               aria-label={isProfilePage ? 'Go back' : auth ? 'Open profile' : 'Sign in'}
             >
@@ -503,8 +570,7 @@ const Navbar = () => {
                           key={science}
                           type="button"
                           onClick={() => {
-                            setSelectedScience(science);
-                            setIsScienceMenuOpen(false);
+                            handleScienceChange(science);
                           }}
                           className={`flex w-full items-center rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${selectedScience === science ? 'bg-teal-500/20 text-teal-300' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
                           role="menuitem"
@@ -670,7 +736,7 @@ const Navbar = () => {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.16, ease: 'linear' }}
               onClick={() => setIsMenuOpen(false)}
-              className="mobile-menu-backdrop fixed inset-0 z-[190] bg-black/60 backdrop-blur-md"
+              className="mobile-menu-backdrop fixed inset-0 z-[190] bg-black/60"
             />
 
             {/* Drawer */}
@@ -679,7 +745,7 @@ const Navbar = () => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.94 }}
               transition={{ type: 'tween', duration: 0.18, ease: 'ease-out' }}
-              className="mobile-drawer fixed inset-0 z-[200] m-auto flex h-[min(42rem,calc(100dvh-1.5rem))] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[2rem] border border-teal-500/20 bg-gradient-to-b from-[#0a0c1a] to-[#0f1225] shadow-2xl shadow-black/40 backdrop-blur-xl"
+              className="mobile-drawer fixed inset-0 z-[200] m-auto flex h-[min(42rem,calc(100dvh-1.5rem))] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[2rem] border border-teal-500/20 bg-gradient-to-b from-[#0a0c1a] to-[#0f1225] shadow-2xl shadow-black/40"
             >
               {/* Drawer Header */}
               <div className="flex shrink-0 items-center justify-between border-b border-white/10 p-5">
@@ -833,13 +899,25 @@ const Navbar = () => {
                   )}
                 </div>
 
-                <div className="mt-5 border-t border-white/10 pt-4 text-center">
-                  <p className="text-xs text-slate-500">Innovative Science 2</p>
-                  <p className="text-xs text-slate-600">by Rethish Sir</p>
-                </div>
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {scienceToast && (
+          <motion.div
+            initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
+            animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+            exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            transition={{ duration: shouldReduceMotion ? 0.08 : 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="fixed left-1/2 top-[6.5rem] z-[130] flex -translate-x-1/2 items-center gap-2 rounded-full border border-teal-300/20 bg-[#101426]/90 px-3.5 py-2 text-xs font-semibold text-teal-100 shadow-[0_12px_35px_rgba(8,145,178,0.2)] backdrop-blur-xl sm:text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <Check className="h-4 w-4 text-teal-300" strokeWidth={2.5} />
+            <span>{scienceToast}</span>
+          </motion.div>
         )}
       </AnimatePresence>
     </>

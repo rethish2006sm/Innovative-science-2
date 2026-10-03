@@ -11,6 +11,7 @@ import { Link, useNavigate } from 'react-router-dom'
 
 import {
   AlertCircle,
+  Award,
   BellRing,
   Camera,
   CalendarDays,
@@ -39,6 +40,7 @@ import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth, updateStoredUser } from '../authStorage'
 import { useAuth } from '../context/AuthContext'
 import { getWebPushSubscription, registerWebPush, unregisterWebPush } from '../lib/webPush'
+import AcademicPerformanceDashboard from '../components/AcademicPerformanceDashboard'
 
 /* =========================================================
    CONSTANTS
@@ -483,9 +485,6 @@ const Profilepage = () => {
     useState(true)
 
   const [isSaving, setIsSaving] =
-    useState(false)
-
-  const [isDeleting, setIsDeleting] =
     useState(false)
 
   const [locatingField, setLocatingField] =
@@ -1002,48 +1001,6 @@ const Profilepage = () => {
     }, [logout, navigate])
 
   /* =========================================================
-     DELETE ACCOUNT
-  ========================================================= */
-
-  const handleDeleteAccount =
-    useCallback(async () => {
-      const confirmed =
-        window.confirm(
-          'Delete your account and all saved progress, attempts, reports, feedback, battles, and profile data? This cannot be undone.',
-        )
-
-      if (!confirmed) {
-        return
-      }
-
-      setIsDeleting(true)
-
-      setError('')
-
-      try {
-        await apiRequest(
-          '/api/auth/account',
-          {
-            method: 'DELETE',
-          },
-        )
-
-        await logout()
-
-        navigate('/signup', {
-          replace: true,
-        })
-      } catch (err) {
-        setError(
-          err.message ||
-            'Could not delete your account.',
-        )
-
-        setIsDeleting(false)
-      }
-    }, [logout, navigate])
-
-  /* =========================================================
      PASSWORD
   ========================================================= */
 
@@ -1348,6 +1305,7 @@ const Profilepage = () => {
             user={user}
             initials={initials}
             lastLogin={lastLogin}
+            onLogout={handleLogout}
             onSettings={() => navigate('/settings')}
             onChangePhoto={() => {
               setPhotoError('')
@@ -1370,7 +1328,14 @@ const Profilepage = () => {
 
           <ProfileTabs
             activeTab={activeTab}
-            onChange={setActiveTab}
+            onChange={(tab) => {
+              const scrollPosition = window.scrollY
+              setActiveTab(tab)
+
+              window.requestAnimationFrame(() => {
+                window.scrollTo(0, scrollPosition)
+              })
+            }}
           />
 
           {/* =================================================
@@ -1403,7 +1368,7 @@ const Profilepage = () => {
               CONTENT
           ================================================= */}
 
-          {activeTab === 'Info' ? (
+          {activeTab === 'Info' && (
             <div className="divide-y divide-slate-200">
 
               {/* BASIC INFORMATION */}
@@ -1797,23 +1762,14 @@ const Profilepage = () => {
                 )}
               </ProfileSection>
             </div>
-          ) : (
-            <EmptyTab
-              tab={activeTab}
-            />
           )}
 
-          {/* =================================================
-              FOOTER
-          ================================================= */}
+          {activeTab === 'Performance' && (
+            <section className="border-t border-slate-200">
+              <AcademicPerformanceDashboard />
+            </section>
+          )}
 
-          <ProfileFooter
-            onLogout={handleLogout}
-            onDelete={
-              handleDeleteAccount
-            }
-            deleting={isDeleting}
-          />
         </div>
       </div>
 
@@ -2035,6 +1991,7 @@ const ProfileHeader = memo(
     user,
     initials,
     lastLogin,
+    onLogout,
     onSettings,
     onChangePhoto,
   }) => {
@@ -2043,7 +2000,7 @@ const ProfileHeader = memo(
         <button
           type="button"
           onClick={onSettings}
-          className="group absolute right-4 top-4 z-10 grid h-11 w-11 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-lg shadow-slate-200/60 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600 active:scale-95 sm:right-6 lg:right-10"
+          className="group fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-5 z-40 grid h-12 w-12 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-xl shadow-slate-300/50 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600 active:scale-95"
           aria-label="Open settings"
           title="Settings"
         >
@@ -2088,10 +2045,21 @@ const ProfileHeader = memo(
             </div>
 
             <div className="min-w-0">
-              <h1 className="truncate text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
-                {user?.name ||
-                  'Student'}
-              </h1>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="truncate text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
+                  {user?.name ||
+                    'Student'}
+                </h1>
+
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 py-1.5 text-xs font-bold text-red-600 transition hover:bg-red-100 sm:px-3 sm:text-sm"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  Logout
+                </button>
+              </div>
 
               <p className="mt-1 text-sm text-slate-500">
                 Student Profile
@@ -2104,6 +2072,13 @@ const ProfileHeader = memo(
           </div>
 
           <div className="flex items-center gap-3">
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-left sm:px-5">
+              <div className="flex items-center gap-2 text-emerald-700">
+                <Award className="h-4 w-4" />
+                <p className="text-xs font-bold">Brain cells</p>
+              </div>
+              <p className="mt-1 text-lg font-black text-emerald-900">{user?.totalBrainCells || 0}</p>
+            </div>
             <div className="rounded-xl bg-slate-50 px-4 py-3 text-left sm:px-5 lg:hidden">
               <p className="text-xs font-medium text-slate-400">Last login</p>
               <p className="mt-1 text-sm font-semibold text-slate-700">{lastLogin}</p>
@@ -2786,47 +2761,6 @@ const EmptyTab = memo(
           </p>
         </div>
       </div>
-    )
-  },
-)
-
-/* =========================================================
-   FOOTER
-========================================================= */
-
-const ProfileFooter = memo(
-  ({
-    onLogout,
-    onDelete,
-    deleting,
-  }) => {
-    return (
-      <footer className="border-t border-slate-200 bg-slate-50/60 px-4 py-5 sm:px-7 lg:px-9">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-
-          <button
-            type="button"
-            onClick={onLogout}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-600 transition hover:bg-red-100 sm:w-auto"
-          >
-            <LogOut className="h-4 w-4" />
-            Logout
-          </button>
-
-          <button
-            type="button"
-            onClick={onDelete}
-            disabled={deleting}
-            className="inline-flex items-center justify-center gap-2 text-xs font-bold text-rose-600 underline underline-offset-4 transition hover:text-rose-700 disabled:opacity-50"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-
-            {deleting
-              ? 'Deleting account...'
-              : 'Delete account permanently'}
-          </button>
-        </div>
-      </footer>
     )
   },
 )

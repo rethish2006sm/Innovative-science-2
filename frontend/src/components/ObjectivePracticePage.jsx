@@ -8,6 +8,7 @@ import { hasFeedbackFlowBeenSubmitted } from '../lib/feedbackFlow'
 
 const emptyQuestionForm = {
   question: '',
+  solution: '',
   options: ['', '', '', ''],
   pairs: [
     { left: '', right: '' },
@@ -23,6 +24,20 @@ const emptyQuestionForm = {
 }
 
 const trueFalseOptions = ['True', 'False']
+
+const prepareNumericalAnswer = (options = [], correctOption = '') => {
+  const sourceOptions = Array.isArray(options) ? options : []
+  const cleanedOptions = sourceOptions
+    .map((option) => String(option || '').trim())
+    .filter(Boolean)
+  const selectedText = String(sourceOptions[Number(correctOption)] || '').trim()
+
+  return {
+    options: cleanedOptions,
+    correctOption: selectedText ? cleanedOptions.indexOf(selectedText) : -1,
+  }
+}
+
 const matchColors = [
   'border-red-300 bg-red-100 text-red-950',
   'border-amber-300 bg-amber-100 text-amber-950',
@@ -167,6 +182,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [answers, setAnswers] = useState({})
   const [submittedQuestions, setSubmittedQuestions] = useState({})
   const [correctAnswersByQuestion, setCorrectAnswersByQuestion] = useState({})
+  const [questionFeedback, setQuestionFeedback] = useState({})
   const [markedLater, setMarkedLater] = useState({})
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [isSingleQuestionFlow, setIsSingleQuestionFlow] = useState(false)
@@ -204,14 +220,17 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const isSignedIn = Boolean(auth?.token)
   const boardOnly = searchParams.get('boardOnly') === '1' || searchParams.get('boardOnly') === 'true'
+  const boardQuery = boardOnly ? '?boardOnly=1' : ''
   const isTrueFalse = objectiveType === 'true-or-false'
   const isCorrelation = objectiveType === 'correlation'
+  const isOddManOut = objectiveType === 'odd-man-out'
   const isMatching = objectiveType === 'match-the-following'
   const isCompleteTable = objectiveType === 'complete-the-tables'
   const isDiagram = objectiveType === 'diagram-based-question'
   const isIdentifySymbol = objectiveType === 'identify-symbol'
-  const supportsQuestionImage = isCompleteTable || isDiagram || isIdentifySymbol
-  const supportsAiDrafts = !isCompleteTable && !isDiagram && !isIdentifySymbol
+  const isNumerical = objectiveType === 'numericals'
+  const supportsQuestionImage = isCompleteTable || isDiagram || isIdentifySymbol || isNumerical
+  const supportsAiDrafts = !isCompleteTable && !isDiagram && !isIdentifySymbol && !isNumerical
   const savedQuestionTotal = Number(bestScore?.totalQuestions || 0)
   const savedAttemptedQuestions = Number(bestScore?.attemptedQuestions ?? (bestScore?.isDone && savedQuestionTotal >= questions.length ? questions.length : 0))
   const isDoneOnlyDone = (isCompleteTable || isDiagram)
@@ -240,6 +259,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const currentQuestion = questions[currentQuestionIndex]
   const currentQuestionSubmitted = Boolean(currentQuestion && submittedQuestions[currentQuestion._id])
   const currentCorrectAnswer = currentQuestion ? correctAnswersByQuestion[currentQuestion._id] : null
+  const currentFeedback = currentQuestion ? questionFeedback[currentQuestion._id] : ''
   const topicParagraph = topic?.studyText || topic?.description || ''
   const progressPercent = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0
   const totalQuestionCount = questions.length
@@ -396,6 +416,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       setEditingQuestion(question)
       setForm({
         question: question.question,
+        solution: question.solution || '',
         options: questionOptions,
         pairs: nextPairs,
         correctOption: '0',
@@ -412,6 +433,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       setEditingQuestion(question)
       setForm({
         question: question.question,
+        solution: question.solution || '',
         options: ['Done', 'Show answer'],
         pairs: emptyQuestionForm.pairs,
         correctOption: '0',
@@ -437,6 +459,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setEditingQuestion(question)
     setForm({
       question: question.question,
+      solution: question.solution || '',
       options: nextOptions,
       pairs: emptyQuestionForm.pairs,
       correctOption: String(question.correctOption),
@@ -632,12 +655,28 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
         }
       }
 
+      if (isNumerical) {
+        const hasQuestionText = Boolean(String(form.question || '').trim())
+        const hasQuestionImage = Boolean(form.imageFile || (editingQuestion?.imageUrl && !form.removeImage))
+        const hasExistingSolutionImage = Boolean(editingQuestion?.answerImageUrl && !form.removeAnswerImage)
+        const hasSolutionText = Boolean(String(form.solution || '').trim())
+        const hasSolutionImage = Boolean(form.answerImageFile || hasExistingSolutionImage)
+
+        if (!hasQuestionText && !hasQuestionImage) {
+          throw new Error('Add the numerical question as text, a photo, or both.')
+        }
+
+        if (!hasSolutionText && !hasSolutionImage) {
+          throw new Error('Add the solution as text, a photo, or both.')
+        }
+      }
+
       if (!isMatching && !isCompleteTable && !isDiagram && form.correctOption === '') {
         throw new Error('Please select the correct answer.')
       }
 
-      if (isCorrelation && (form.options || []).map((option) => option.trim()).filter(Boolean).length !== 4) {
-        throw new Error('Correlation questions must have exactly four options.')
+      if ((isCorrelation || isOddManOut) && (form.options || []).map((option) => option.trim()).filter(Boolean).length !== 4) {
+        throw new Error(`${isOddManOut ? 'Odd Man Out' : 'Correlation'} questions must have exactly four options.`)
       }
 
       const cleanedPairs = (form.pairs || [])
@@ -655,6 +694,8 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
         ? `/api/objective-questions/${editingQuestion._id}`
         : `/api/objective-types/${objective._id}/questions`
       const method = editingQuestion ? 'PATCH' : 'POST'
+
+      const numericalAnswer = prepareNumericalAnswer(form.options, form.correctOption)
 
       const payload = isMatching ? {
           question: form.question,
@@ -698,6 +739,18 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           imageFile: form.imageFile,
           isBoardQuestion: form.isBoardQuestion,
           removeImage: form.removeImage,
+        } : isNumerical ? {
+          objectiveType: objectiveType,
+          topicId,
+          question: form.question,
+          solution: form.solution,
+          options: numericalAnswer.options,
+          correctOption: numericalAnswer.correctOption,
+          imageFile: form.imageFile,
+          isBoardQuestion: form.isBoardQuestion,
+          removeImage: form.removeImage,
+          answerImageFile: form.answerImageFile,
+          removeAnswerImage: form.removeAnswerImage,
         } : form
 
       await apiRequest(path, {
@@ -909,11 +962,19 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
       if (currentAnswer.includes(optionIndex) || currentAnswer.length >= pairCount) return
 
-      setAnswers({ ...answers, [questionId]: [...currentAnswer, optionIndex] })
+      const nextAnswer = [...currentAnswer, optionIndex]
+      setAnswers({ ...answers, [questionId]: nextAnswer })
+      if (isSingleQuestionFlow && nextAnswer.length === pairCount && !submittedQuestions[questionId]) {
+        submitCurrentQuestion(nextAnswer)
+      }
       return
     }
 
-    setAnswers({ ...answers, [questionId]: optionIndex })
+    const nextAnswers = { ...answers, [questionId]: optionIndex }
+    setAnswers(nextAnswers)
+    if (isSingleQuestionFlow && !submittedQuestions[questionId]) {
+      submitCurrentQuestion(optionIndex)
+    }
   }
 
   const markQuestionDone = async (questionId) => {
@@ -1057,10 +1118,10 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     }
   }
 
-  const submitCurrentQuestion = async () => {
+  const submitCurrentQuestion = async (selectedOptionOverride) => {
     if (!currentQuestion || isCompleteTable || isDiagram) return
 
-    const selectedOption = answers[currentQuestion._id]
+    const selectedOption = selectedOptionOverride ?? answers[currentQuestion._id]
     const hasAnswer = isMatching
       ? Array.isArray(selectedOption) && selectedOption.length > 0
       : selectedOption !== undefined
@@ -1089,8 +1150,15 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
         }),
       })
       const correctAnswer = (data.correctAnswers || []).find((item) => String(item.questionId) === String(currentQuestion._id))
+      const isAnswerCorrect = isMatching
+        ? Array.isArray(selectedOption)
+          && Array.isArray(correctAnswer?.correctOptions)
+          && selectedOption.length === correctAnswer.correctOptions.length
+          && selectedOption.every((optionIndex, pairIndex) => optionIndex === correctAnswer.correctOptions[pairIndex])
+        : selectedOption === correctAnswer?.correctOption
       setCorrectAnswersByQuestion((current) => ({ ...current, [currentQuestion._id]: correctAnswer }))
       setSubmittedQuestions((current) => ({ ...current, [currentQuestion._id]: true }))
+      setQuestionFeedback((current) => ({ ...current, [currentQuestion._id]: isAnswerCorrect ? 'correct' : 'incorrect' }))
       setBestScore(data.bestScore)
       window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
     } catch (err) {
@@ -1139,7 +1207,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
         <div className="max-w-md rounded-3xl border border-stone-200 bg-white p-8 text-center shadow-xl">
           <h1 className="font-serif text-3xl text-stone-900">Practice not found</h1>
           <p className="mt-3 text-sm text-stone-500">{error}</p>
-          <Link to={`/chapters/${chapterNumber}/topics/${topicId}/objectives`} className="mt-6 inline-flex rounded-xl bg-stone-900 px-5 py-3 text-sm font-bold text-white">
+          <Link to={`/chapters/${chapterNumber}/topics/${topicId}/objectives${boardQuery}`} className="mt-6 inline-flex rounded-xl bg-stone-900 px-5 py-3 text-sm font-bold text-white">
             Back to objective types
           </Link>
         </div>
@@ -1148,11 +1216,11 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   }
 
   return (
-    <section className={`min-h-screen bg-[#fbfbfa] text-stone-800 ${mode === 'practice' ? 'px-2 py-1 sm:px-3 lg:px-4' : 'px-3 py-2 sm:px-5 sm:py-3 lg:px-6'}`}>
+    <section className={`practice-feedback-screen min-h-screen text-stone-800 ${mode === 'practice' && currentFeedback ? `is-${currentFeedback}` : ''} ${mode === 'practice' ? 'px-2 py-1 sm:px-3 lg:px-4' : 'px-3 py-2 sm:px-5 sm:py-3 lg:px-6'}`}>
       <div className={`mx-auto w-full ${mode === 'practice' || mode === 'dashboard' ? 'max-w-[1180px]' : 'max-w-6xl'}`}>
         {mode === 'dashboard' ? (
           <Link
-            to={`/chapters/${chapterNumber}/topics/${topicId}/objectives`}
+            to={`/chapters/${chapterNumber}/topics/${topicId}/objectives${boardQuery}`}
             className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
           >
             <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
@@ -1236,6 +1304,13 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                           />
                         </div>
                       )}
+                      {isNumerical && (question.solution || question.answerImageUrl) && (
+                        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+                          <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Solution</p>
+                          {question.solution && <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-stone-700">{question.solution}</p>}
+                          {question.answerImageUrl && <img src={assetUrl(question.answerImageUrl)} alt="" className="mt-3 max-h-[420px] w-full rounded-xl object-contain" />}
+                        </div>
+                      )}
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button
@@ -1310,7 +1385,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                 <label className="mt-4 grid gap-2 text-sm font-bold text-stone-600">
                   Question
                   <textarea
-                    required={!isMatching}
+                    required={!isMatching && !isNumerical}
                     rows={4}
                     value={form.question}
                     onChange={(event) => setForm({ ...form, question: event.target.value })}
@@ -1346,10 +1421,10 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                     )}
                   </>
                 )}
-                {(isCompleteTable || isDiagram) && (
+                {(isCompleteTable || isDiagram || isNumerical) && (
                   <>
                     <label className="mt-4 grid gap-2 text-sm font-bold text-stone-600">
-                      Answer photo
+                      {isNumerical ? 'Solution photo' : 'Answer photo'}
                       <input
                         type="file"
                         accept="image/*"
@@ -1369,11 +1444,23 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                           onClick={() => setForm({ ...form, removeAnswerImage: true })}
                           className="mt-3 h-10 w-full rounded-xl border border-red-100 bg-white text-sm font-bold text-red-500 transition hover:bg-red-50"
                         >
-                          Remove answer photo
+                          {isNumerical ? 'Remove solution photo' : 'Remove answer photo'}
                         </button>
                       </div>
                     )}
                   </>
+                )}
+                {isNumerical && (
+                  <label className="mt-4 grid gap-2 text-sm font-bold text-stone-600">
+                    Solution text
+                    <textarea
+                      rows={5}
+                      value={form.solution}
+                      onChange={(event) => setForm({ ...form, solution: event.target.value })}
+                      placeholder="Explain the steps or final solution..."
+                      className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-stone-900 outline-none transition focus:border-stone-500 focus:bg-white"
+                    />
+                  </label>
                 )}
                 {isMatching ? (
                   <div className="mt-4 grid gap-3">
@@ -1865,6 +1952,21 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                         </div>
                       )}
 
+                      {isNumerical && currentQuestionSubmitted && currentCorrectAnswer && (
+                        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                          <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Correct answer and solution</p>
+                          <p className="mt-2 text-sm font-black text-emerald-950">
+                            {currentQuestion.options?.[currentCorrectAnswer.correctOption] || 'Answer unavailable'}
+                          </p>
+                          {currentCorrectAnswer.solution && (
+                            <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-stone-700">{currentCorrectAnswer.solution}</p>
+                          )}
+                          {currentCorrectAnswer.answerImageUrl && (
+                            <img src={assetUrl(currentCorrectAnswer.answerImageUrl)} alt="Numerical solution" className="mt-3 max-h-[58vh] w-full rounded-xl object-contain" />
+                          )}
+                        </div>
+                      )}
+
                       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-[1fr_1.3fr_1fr]">
                         <button
                           type="button"
@@ -1875,16 +1977,6 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                           <ChevronLeft className="h-4 w-4" />
                           Previous
                         </button>
-                        {isSingleQuestionFlow && !isCompleteTable && !isDiagram && (
-                          <button
-                            type="button"
-                            onClick={submitCurrentQuestion}
-                            disabled={isSaving || currentQuestionSubmitted}
-                            className="order-3 col-span-2 h-11 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 sm:order-none sm:col-span-1 sm:rounded-2xl sm:text-base"
-                          >
-                            {isSaving ? 'Submitting...' : currentQuestionSubmitted ? 'Submitted' : 'Submit'}
-                          </button>
-                        )}
                         {!isSingleQuestionFlow && !isCompleteTable && !isDiagram && currentQuestionIndex === questions.length - 1 && (
                           <button
                             type="button"
@@ -2217,6 +2309,14 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                               )
                             })}
                           </div>
+                          )}
+                          {isNumerical && correctAnswer && (
+                            <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                              <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Solution</p>
+                              <p className="mt-1 text-sm font-black text-emerald-950">Correct answer: {question.options?.[correctAnswer.correctOption] || 'Unavailable'}</p>
+                              {correctAnswer.solution && <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-stone-700">{correctAnswer.solution}</p>}
+                              {correctAnswer.answerImageUrl && <img src={assetUrl(correctAnswer.answerImageUrl)} alt="Numerical solution" className="mt-3 max-h-80 w-full rounded-xl object-contain" />}
+                            </div>
                           )}
                         </article>
                       )
