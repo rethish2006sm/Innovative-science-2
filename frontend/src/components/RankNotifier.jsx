@@ -122,37 +122,43 @@ const RankNotifier = () => {
       {notification && (
         <motion.div
           key={`${notification.rank}-${notification.previousRank || 'first'}`}
-          initial={{ opacity: 0, y: 18, scale: 0.96 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.96 }}
-          className="fixed bottom-5 right-5 z-[210] w-[min(92vw,420px)] rounded-[1.75rem] border border-emerald-100 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.18)]"
+          className="fixed inset-0 z-[210]"
+          onMouseDown={() => setNotification(null)}
         >
-          <div className="flex items-start gap-4">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
-              <Trophy className="h-6 w-6" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">Ranking update</p>
-              <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950">{title}</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Hi {notification.currentUser?.name || auth?.user?.name || 'Student'}, {notification.rankImproved && notification.previousRank
-                  ? `You moved from #${notification.previousRank} to #${notification.rank}. Keep the streak going.`
-                  : `You are currently ranked #${notification.rank}. Great job, keep pushing forward.`}
-              </p>
-              <div className="mt-4 flex items-center gap-2 rounded-2xl bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
-                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                {notification.totalStudents ? `${notification.totalStudents} students are ranked right now.` : 'Your progress is being tracked.'}
+          <motion.div
+            initial={{ opacity: 0, y: 18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 18, scale: 0.96 }}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="fixed bottom-5 right-5 w-[min(92vw,420px)] rounded-[1.75rem] border border-emerald-100 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.18)]"
+          >
+            <div className="flex items-start gap-4">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
+                <Trophy className="h-6 w-6" />
               </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">Ranking update</p>
+                <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950">{title}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Hi {notification.currentUser?.name || auth?.user?.name || 'Student'}, {notification.rankImproved && notification.previousRank
+                    ? `You moved from #${notification.previousRank} to #${notification.rank}. Keep the streak going.`
+                    : `You are currently ranked #${notification.rank}. Great job, keep pushing forward.`}
+                </p>
+                <div className="mt-4 flex items-center gap-2 rounded-2xl bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  {notification.totalStudents ? `${notification.totalStudents} students are ranked right now.` : 'Your progress is being tracked.'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNotification(null)}
+                className="grid h-9 w-9 place-items-center rounded-full bg-red-50 text-red-600 transition hover:bg-red-100 hover:text-red-700"
+                aria-label="Close rank notification"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setNotification(null)}
-              className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200"
-              aria-label="Close rank notification"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          </motion.div>
         </motion.div>
       )}
     </AnimatePresence>

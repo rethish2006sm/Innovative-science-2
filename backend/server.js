@@ -537,6 +537,33 @@ const objectiveQuestionSchema = new mongoose.Schema(
 objectiveQuestionSchema.index({ objectiveType: 1 })
 objectiveQuestionSchema.index({ objectiveType: 1, isBoardQuestion: 1 })
 
+const theoryTypeSchema = new mongoose.Schema(
+  {
+    chapter: { type: mongoose.Schema.Types.ObjectId, ref: 'Chapter', default: null },
+    name: { type: String, required: true, trim: true, maxlength: 120 },
+    questionMode: { type: String, enum: ['text', 'image', 'both', 'both-compulsory'], default: 'text' },
+    solutionMode: { type: String, enum: ['none', 'text', 'image', 'both', 'both-compulsory'], default: 'text' },
+  },
+  { timestamps: true },
+)
+
+theoryTypeSchema.index({ science: 1, name: 1 }, { unique: true })
+
+const theoryQuestionSchema = new mongoose.Schema(
+  {
+    theoryType: { type: mongoose.Schema.Types.ObjectId, ref: 'TheoryType', required: true },
+    chapter: { type: mongoose.Schema.Types.ObjectId, ref: 'Chapter', required: true },
+    topic: { type: mongoose.Schema.Types.ObjectId, ref: 'Topic', default: null },
+    question: { type: String, trim: true, default: '', maxlength: 4000 },
+    answer: { type: String, trim: true, default: '', maxlength: 12000 },
+    questionImage: { data: Buffer, contentType: String, updatedAt: Date },
+    answerImage: { data: Buffer, contentType: String, updatedAt: Date },
+  },
+  { timestamps: true },
+)
+
+theoryQuestionSchema.index({ science: 1, chapter: 1, theoryType: 1 })
+
 const practiceScoreSchema = new mongoose.Schema(
   {
     user: {
@@ -608,12 +635,16 @@ chapterSchema.index({ science: 1, number: 1 }, { unique: true })
 addScienceScope(topicSchema)
 addScienceScope(objectiveTypeSchema)
 addScienceScope(objectiveQuestionSchema)
+addScienceScope(theoryTypeSchema)
+addScienceScope(theoryQuestionSchema)
 addScienceScope(practiceScoreSchema)
 
 const Science2Chapter = mongoose.model('Chapter', chapterSchema)
 const Science2Topic = mongoose.model('Topic', topicSchema)
 const Science2ObjectiveType = mongoose.model('ObjectiveType', objectiveTypeSchema)
 const Science2ObjectiveQuestion = mongoose.model('ObjectiveQuestion', objectiveQuestionSchema)
+const Science2TheoryType = mongoose.model('TheoryType', theoryTypeSchema)
+const Science2TheoryQuestion = mongoose.model('TheoryQuestion', theoryQuestionSchema)
 const Science2PracticeScore = mongoose.model('PracticeScore', practiceScoreSchema)
 
 // Immutable content history used by the fact-checked notification generator.
@@ -1184,6 +1215,7 @@ const giftSchema = new mongoose.Schema(
   },
   { timestamps: true },
 )
+
 const Science2Gift = mongoose.model('Gift', giftSchema)
 
 const auditSnapshot = (value) => {
@@ -1687,6 +1719,8 @@ const science2Models = {
   Topic: Science2Topic,
   ObjectiveType: Science2ObjectiveType,
   ObjectiveQuestion: Science2ObjectiveQuestion,
+  TheoryType: Science2TheoryType,
+  TheoryQuestion: Science2TheoryQuestion,
   PracticeScore: Science2PracticeScore,
   ContentChange: Science2ContentChange,
   ClassPost: Science2ClassPost,
@@ -1750,6 +1784,8 @@ const Chapter = scienceModel('Chapter')
 const Topic = scienceModel('Topic')
 const ObjectiveType = scienceModel('ObjectiveType')
 const ObjectiveQuestion = scienceModel('ObjectiveQuestion')
+const TheoryType = scienceModel('TheoryType')
+const TheoryQuestion = scienceModel('TheoryQuestion')
 const PracticeScore = scienceModel('PracticeScore')
 const ContentChange = scienceModel('ContentChange')
 const ClassPost = scienceModel('ClassPost')
@@ -1884,6 +1920,41 @@ const publicAnswerImageUrl = (question) => (
       }&science=${getActiveScience()}`
     : ''
 )
+
+const publicTheoryImageUrl = (question, kind = 'question') => {
+  const image = kind === 'answer' ? question.answerImage : question.questionImage
+  return image?.data
+    ? `/api/theory-questions/${question._id}/${kind}-image?v=${image.updatedAt?.getTime() || Date.now()}&science=${getActiveScience()}`
+    : ''
+}
+
+// Mongoose can expose a stored image as a Node Buffer, BSON Binary, or a
+// serialized { type: 'Buffer', data: [] } value depending on whether the
+// query is hydrated or uses lean(). Always normalize it before sending it as
+// an HTTP image response.
+const normalizeStoredImageBuffer = (value) => {
+  if (!value) return null
+  if (Buffer.isBuffer(value)) return value
+  if (typeof value.value === 'function') {
+    try {
+      const binaryValue = value.value(true)
+      if (binaryValue) return normalizeStoredImageBuffer(binaryValue)
+    } catch (error) {
+      // Fall through to the other supported BSON/Buffer representations.
+    }
+  }
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+  if (value.buffer && ArrayBuffer.isView(value.buffer)) {
+    return Buffer.from(value.buffer.buffer, value.buffer.byteOffset, value.buffer.byteLength)
+  }
+  if (Array.isArray(value.data)) return Buffer.from(value.data)
+  if (Array.isArray(value)) return Buffer.from(value)
+  try {
+    return Buffer.from(value)
+  } catch (error) {
+    return null
+  }
+}
 
 const publicPyq = (pyq, { exposeLinks = true } = {}) => ({
   id: String(pyq._id),
@@ -3576,15 +3647,41 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
 
   // A student may practise after first opening the daily-streak page. Refresh
   // an untouched challenge so the newly unlocked chapter is usable today.
-  if (challenge && challenge.status !== 'completed' && !challenge.answers?.length) {
+  if (challenge && challenge.status !== 'completed') {
     const eligibleChapterIds = await getEligibleDailyChapterIds(userId)
     const storedChapterIds = (challenge.eligibleChapterIds || []).map((id) => String(id)).sort()
     const currentChapterIds = [...eligibleChapterIds].sort()
-    if (hasDailyExcludedQuestion || JSON.stringify(storedChapterIds) !== JSON.stringify(currentChapterIds)) {
+    const chaptersChanged = JSON.stringify(storedChapterIds) !== JSON.stringify(currentChapterIds)
+    const shouldRefreshUntouched = !challenge.answers?.length && chaptersChanged
+    if (hasDailyExcludedQuestion || shouldRefreshUntouched) {
       const selected = await selectDailyQuestions(userId, eligibleChapterIds, localDate)
-      challenge.questionIds = selected.map((question) => question._id)
+      if (hasDailyExcludedQuestion) {
+        const excludedQuestionIds = new Set(
+          existingQuestionDocs
+            .filter((question) => dailyExcludedObjectiveTypes.has(question.objectiveType?.type))
+            .map((question) => String(question._id))
+        )
+        const retainedQuestionIds = (challenge.questionIds || []).filter(
+          (questionId) => !excludedQuestionIds.has(String(questionId))
+        )
+        const retainedAnswerIds = new Set(retainedQuestionIds.map((questionId) => String(questionId)))
+        const retainedAnswers = (challenge.answers || []).filter((answer) => (
+          retainedAnswerIds.has(String(answer.questionId))
+        ))
+        const replacementCount = Math.max(0, (challenge.questionIds || []).length - retainedQuestionIds.length)
+        const replacementIds = selected
+          .slice(0, replacementCount)
+          .map((question) => question._id)
+        challenge.questionIds = [...retainedQuestionIds, ...replacementIds]
+        challenge.answers = retainedAnswers
+        challenge.attemptedCount = retainedAnswers.length
+        challenge.correctCount = retainedAnswers.filter((answer) => answer.isCorrect).length
+        challenge.score = challenge.correctCount
+      } else {
+        challenge.questionIds = selected.map((question) => question._id)
+      }
       challenge.eligibleChapterIds = eligibleChapterIds
-      challenge.status = selected.length < 20 ? 'bank_insufficient' : 'in_progress'
+      challenge.status = challenge.questionIds.length < 20 ? 'bank_insufficient' : 'in_progress'
       await challenge.save()
     }
   }
@@ -4277,14 +4374,16 @@ app.get('/api/auth/users/:id/avatar', async (req, res) => {
 app.get('/api/objective-questions/:id/image', async (req, res) => {
   try {
     const question = await ObjectiveQuestion.findById(req.params.id).select('questionImage')
+    const imageBuffer = normalizeStoredImageBuffer(question?.questionImage?.data)
 
-    if (!question?.questionImage?.data) {
+    if (!imageBuffer?.length) {
       return res.status(404).json({ message: 'Question image not found.' })
     }
 
     res.set('Content-Type', question.questionImage.contentType || 'image/webp')
+    res.set('Content-Length', String(imageBuffer.length))
     res.set('Cache-Control', 'no-store')
-    res.send(question.questionImage.data)
+    res.send(imageBuffer)
   } catch (error) {
     res.status(404).json({ message: 'Question image not found.' })
   }
@@ -4293,17 +4392,181 @@ app.get('/api/objective-questions/:id/image', async (req, res) => {
 app.get('/api/objective-questions/:id/answer-image', async (req, res) => {
   try {
     const question = await ObjectiveQuestion.findById(req.params.id).select('answerImage')
+    const imageBuffer = normalizeStoredImageBuffer(question?.answerImage?.data)
 
-    if (!question?.answerImage?.data) {
+    if (!imageBuffer?.length) {
       return res.status(404).json({ message: 'Answer image not found.' })
     }
 
     res.set('Content-Type', question.answerImage.contentType || 'image/webp')
+    res.set('Content-Length', String(imageBuffer.length))
     res.set('Cache-Control', 'no-store')
-    res.send(question.answerImage.data)
+    res.send(imageBuffer)
   } catch (error) {
     res.status(404).json({ message: 'Answer image not found.' })
   }
+})
+
+const serveTheoryImage = async (req, res, kind) => {
+  try {
+    const question = await TheoryQuestion.findById(req.params.id).select('questionImage answerImage').lean()
+    const image = kind === 'answer' ? question?.answerImage : question?.questionImage
+    const imageBuffer = normalizeStoredImageBuffer(image?.data)
+    if (!imageBuffer?.length) return res.status(404).json({ message: 'Image not found.' })
+    res.set('Content-Type', image.contentType || 'image/webp')
+    res.set('Content-Length', String(imageBuffer.length))
+    res.set('Cache-Control', 'no-store')
+    res.send(imageBuffer)
+  } catch (error) {
+    res.status(404).json({ message: 'Image not found.' })
+  }
+}
+
+app.get('/api/theory-questions/:id/question-image', optionalAuth, (req, res) => serveTheoryImage(req, res, 'question'))
+app.get('/api/theory-questions/:id/answer-image', optionalAuth, (req, res) => serveTheoryImage(req, res, 'answer'))
+
+app.get('/api/chapters/:chapterNumber/theory-types', optionalAuth, async (req, res) => {
+  try {
+    const chapter = await Chapter.findOne({ number: Number(req.params.chapterNumber) }).lean()
+    if (!chapter) return res.status(404).json({ message: 'Chapter not found.' })
+    const theoryTypes = await TheoryType.find().sort({ createdAt: 1 }).lean()
+    const counts = await TheoryQuestion.aggregate([
+      { $match: { chapter: chapter._id } },
+      { $group: { _id: '$theoryType', count: { $sum: 1 } } },
+    ])
+    const countMap = new Map(counts.map((item) => [String(item._id), Number(item.count || 0)]))
+    res.json({ chapter, theoryTypes: theoryTypes.map((item) => ({
+      ...item,
+      questionMode: item.questionMode || (item.questionImageRequired ? 'image' : 'text'),
+      solutionMode: item.solutionMode || (item.solutionEnabled === false ? 'none' : item.solutionImageEnabled ? 'both' : 'text'),
+      questionCount: countMap.get(String(item._id)) || 0,
+    })) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not load theory question types.' })
+  }
+})
+
+app.post('/api/chapters/:chapterNumber/theory-types', authRequired, adminRequired, async (req, res) => {
+  try {
+    const chapter = await Chapter.findOne({ number: Number(req.params.chapterNumber) })
+    if (!chapter) return res.status(404).json({ message: 'Chapter not found.' })
+    const name = String(req.body.name || '').trim()
+    if (!name) return res.status(400).json({ message: 'Theory question name is required.' })
+    const theoryType = await TheoryType.create({
+      name,
+      chapter: null,
+      questionMode: ['text', 'image', 'both', 'both-compulsory'].includes(req.body.questionMode) ? req.body.questionMode : 'text',
+      solutionMode: ['none', 'text', 'image', 'both', 'both-compulsory'].includes(req.body.solutionMode) ? req.body.solutionMode : 'text',
+    })
+    res.status(201).json({ theoryType })
+  } catch (error) {
+    if (error.code === 11000) return res.status(409).json({ message: 'This theory question type already exists in this chapter.' })
+    res.status(500).json({ message: 'Could not create theory question type.' })
+  }
+})
+
+app.patch('/api/theory-types/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const type = await TheoryType.findByIdAndUpdate(req.params.id, {
+      name: String(req.body.name || '').trim(),
+      questionMode: req.body.questionMode,
+      solutionMode: req.body.solutionMode,
+    }, { new: true, runValidators: true })
+    if (!type) return res.status(404).json({ message: 'Theory question type not found.' })
+    res.json({ theoryType: type })
+  } catch (error) {
+    if (error.code === 11000) return res.status(409).json({ message: 'This theory question type already exists.' })
+    res.status(500).json({ message: error.message || 'Could not edit theory question type.' })
+  }
+})
+
+app.delete('/api/theory-types/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const type = await TheoryType.findByIdAndDelete(req.params.id)
+    if (!type) return res.status(404).json({ message: 'Theory question type not found.' })
+    await TheoryQuestion.deleteMany({ theoryType: type._id })
+    res.json({ message: 'Theory question type deleted.' })
+  } catch (error) { res.status(500).json({ message: 'Could not delete theory question type.' }) }
+})
+
+app.post('/api/theory-types/:id/questions', authRequired, adminRequired, upload.fields([
+  { name: 'questionImage', maxCount: 1 },
+  { name: 'answerImage', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    const theoryType = await TheoryType.findById(req.params.id)
+    if (!theoryType) return res.status(404).json({ message: 'Theory question type not found.' })
+    const question = String(req.body.question || '').trim()
+    const answer = String(req.body.answer || '').trim()
+    const questionImage = await convertQuestionImage(req.files?.questionImage?.[0], 'Question image')
+    const answerImage = await convertQuestionImage(req.files?.answerImage?.[0], 'Answer image')
+    const questionMode = theoryType.questionMode || (theoryType.questionImageRequired ? 'both-compulsory' : 'text')
+    const solutionMode = theoryType.solutionMode || (theoryType.solutionEnabled === false ? 'none' : theoryType.solutionImageEnabled ? 'both' : 'text')
+    if (questionMode === 'text' && !question) return res.status(400).json({ message: 'Question text is required.' })
+    if (questionMode === 'image' && !questionImage) return res.status(400).json({ message: 'Question image is required.' })
+    if (questionMode === 'both' && (!question || !questionImage)) return res.status(400).json({ message: 'Question text and image are required.' })
+    if (questionMode === 'both-compulsory' && (!question || !questionImage)) return res.status(400).json({ message: 'Question text and image are compulsory.' })
+    if (solutionMode === 'text' && !answer) return res.status(400).json({ message: 'Solution text is required.' })
+    if (solutionMode === 'image' && !answerImage) return res.status(400).json({ message: 'Solution image is required.' })
+    if (['both', 'both-compulsory'].includes(solutionMode) && (!answer || !answerImage)) return res.status(400).json({ message: 'Solution text and image are required.' })
+    if (solutionMode === 'none' && (answer || answerImage)) return res.status(400).json({ message: 'This type does not allow a solution.' })
+    const chapter = await Chapter.findById(req.body.chapterId || theoryType.chapter)
+    if (!chapter) return res.status(400).json({ message: 'Chapter is required.' })
+    const topic = req.body.topicId ? await Topic.findOne({ _id: req.body.topicId, chapter: chapter._id }).select('_id') : null
+    const savedQuestion = await TheoryQuestion.create({
+      theoryType: theoryType._id,
+      chapter: chapter._id,
+      topic: topic?._id || null,
+      question,
+      answer: ['text', 'both', 'both-compulsory'].includes(solutionMode) ? answer : '',
+      ...(questionImage ? { questionImage } : {}),
+      ...(answerImage ? { answerImage } : {}),
+    })
+    res.status(201).json({ question: savedQuestion })
+  } catch (error) {
+    res.status(500).json({ message: error.message || 'Could not add theory question.' })
+  }
+})
+
+app.get('/api/chapters/:chapterNumber/theory-questions', authRequired, adminRequired, async (req, res) => {
+  try {
+    const chapter = await Chapter.findOne({ number: Number(req.params.chapterNumber) }).select('_id')
+    if (!chapter) return res.status(404).json({ message: 'Chapter not found.' })
+    const questions = await TheoryQuestion.find({ chapter: chapter._id })
+      .populate('theoryType', 'name questionMode solutionMode')
+      .populate('topic', 'name number')
+      .sort({ createdAt: -1 }).lean()
+    res.json({ questions: questions.map((item) => ({ ...item, imageUrl: publicTheoryImageUrl(item), answerImageUrl: publicTheoryImageUrl(item, 'answer') })) })
+  } catch (error) { res.status(500).json({ message: 'Could not load theory questions.' }) }
+})
+
+app.patch('/api/theory-questions/:id', authRequired, adminRequired, upload.fields([
+  { name: 'questionImage', maxCount: 1 },
+  { name: 'answerImage', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    const current = await TheoryQuestion.findById(req.params.id).populate('theoryType')
+    if (!current) return res.status(404).json({ message: 'Theory question not found.' })
+    const questionImageFile = req.files?.questionImage?.[0]
+    const answerImageFile = req.files?.answerImage?.[0]
+    const updates = {
+      question: String(req.body.question || '').trim(),
+      answer: String(req.body.answer || '').trim(),
+      topic: req.body.topicId || null,
+    }
+    if (questionImageFile) updates.questionImage = await convertQuestionImage(questionImageFile, 'Question image')
+    if (answerImageFile) updates.answerImage = await convertQuestionImage(answerImageFile, 'Answer image')
+    const saved = await TheoryQuestion.findByIdAndUpdate(req.params.id, updates, { new: true })
+    res.json({ question: saved })
+  } catch (error) { res.status(500).json({ message: error.message || 'Could not edit theory question.' }) }
+})
+
+app.delete('/api/theory-questions/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const question = await TheoryQuestion.findByIdAndDelete(req.params.id)
+    if (!question) return res.status(404).json({ message: 'Theory question not found.' })
+    res.json({ message: 'Theory question deleted.' })
+  } catch (error) { res.status(500).json({ message: 'Could not delete theory question.' }) }
 })
 
 app.get('/api/chapters', optionalAuth, async (req, res) => {
@@ -6062,7 +6325,10 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
     const loadAll = rawLimit === 'all' || req.query.all === '1'
     const limit = loadAll ? null : Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
     const page = Math.max(Number(req.query.page) || 1, 1)
-    const objectiveTypes = await ObjectiveType.find(objectiveTypeFilter ? { type: objectiveTypeFilter } : {})
+    const objectiveTypeQuery = objectiveTypeFilter
+      ? { $and: [{ type: objectiveTypeFilter }, { type: { $ne: 'match-the-following' } }] }
+      : { type: { $ne: 'match-the-following' } }
+    const objectiveTypes = await ObjectiveType.find(objectiveTypeQuery)
       .populate({ path: 'topic', select: 'name number chapter', populate: { path: 'chapter', select: 'name number' } })
       .sort({ 'topic.chapter.number': 1, 'topic.number': 1, type: 1 })
       .lean()
@@ -6093,6 +6359,23 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
 
     const questions = await questionQueryBuilder.lean()
 
+    const theoryTypes = await TheoryType.find({
+      ...(chapterId ? { $or: [{ chapter: chapterId }, { chapter: null }] } : {}),
+      ...(objectiveTypeFilter ? { name: { $regex: escapeRegex(objectiveTypeFilter), $options: 'i' } } : {}),
+    }).populate({ path: 'chapter', select: 'name number' }).lean()
+    const theoryTypeIds = theoryTypes.map((item) => item._id)
+    const theoryQuery = {
+      theoryType: { $in: theoryTypeIds },
+      ...(search ? { $or: [{ question: { $regex: escapeRegex(search), $options: 'i' } }, { answer: { $regex: escapeRegex(search), $options: 'i' } }] } : {}),
+    }
+    const theoryQuestions = await TheoryQuestion.find(theoryQuery)
+      .select('_id theoryType chapter topic question answer questionImage answerImage createdAt')
+      .populate({ path: 'theoryType', select: 'name' })
+      .populate({ path: 'topic', select: 'name number' })
+      .populate({ path: 'chapter', select: 'name number' })
+      .sort({ createdAt: 1, _id: 1 })
+      .lean()
+
     const formatQuestion = (question) => ({
       _id: question._id,
       question: question.question || '',
@@ -6113,6 +6396,24 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
       chapterNumber: question.objectiveType?.topic?.chapter?.number || null,
     })
 
+    const formatTheoryQuestion = (question) => ({
+      _id: question._id,
+      question: question.question || '',
+      answer: question.answer || '',
+      solution: question.answer || '',
+      options: [],
+      isTheoryQuestion: true,
+      objectiveType: question.theoryType?.name || 'Theory Question',
+      objectiveTypeId: question.theoryType?._id || null,
+      topicName: question.topic?.name || '',
+      topicNumber: question.topic?.number || null,
+      chapterId: question.chapter?._id || null,
+      chapterName: question.chapter?.name || '',
+      chapterNumber: question.chapter?.number || null,
+      imageUrl: publicTheoryImageUrl(question),
+      answerImageUrl: publicTheoryImageUrl(question, 'answer'),
+    })
+
     const chapters = [...new Map(objectiveTypes
       .filter((item) => item.topic?.chapter)
       .map((item) => [String(item.topic.chapter._id), {
@@ -6120,14 +6421,18 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
         name: item.topic.chapter.name || '',
         number: item.topic.chapter.number || null,
       }])).values()]
-    const objectiveTypesList = [...new Set(objectiveTypes.map((item) => item.type))]
+    const objectiveTypesList = [...new Set(objectiveTypes
+      .map((item) => item.type)
+      .filter((type) => type !== 'match-the-following'))]
+    const theoryTypesList = theoryTypes.map((item) => item.name)
+    const formattedQuestions = [...questions.map(formatQuestion), ...theoryQuestions.map(formatTheoryQuestion)]
     res.set('Cache-Control', 'no-store')
     res.json({
-      questions: questions.map(formatQuestion),
+      questions: formattedQuestions,
       chapters,
-      objectiveTypes: objectiveTypesList,
-      totalQuestions,
-      totalPages,
+      objectiveTypes: [...objectiveTypesList, ...theoryTypesList],
+      totalQuestions: totalQuestions + theoryQuestions.length,
+      totalPages: loadAll ? ((totalQuestions + theoryQuestions.length) ? 1 : 0) : (totalQuestions + theoryQuestions.length ? Math.ceil((totalQuestions + theoryQuestions.length) / limit) : 0),
       page: safePage,
       limit: loadAll ? 'all' : limit,
       search,
@@ -8593,6 +8898,8 @@ const ensureAcademicScienceFlags = async () => {
     'topics',
     'objectivetypes',
     'objectivequestions',
+    'theorytypes',
+    'theoryquestions',
     'practicescores',
     'contentchanges',
     'practiceattempts',
@@ -8611,6 +8918,8 @@ const ensureAcademicScienceFlags = async () => {
     Science2Topic,
     Science2ObjectiveType,
     Science2ObjectiveQuestion,
+    Science2TheoryType,
+    Science2TheoryQuestion,
     Science2PracticeScore,
     Science2ContentChange,
     Science2PracticeAttempt,

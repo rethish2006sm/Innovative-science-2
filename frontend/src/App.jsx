@@ -16,6 +16,7 @@ const Diagrams = lazy(() => import('./pages/diagrams'))
 const Adminpage = lazy(() => import('./pages/Adminpage'))
 const AdminAnalysisPage = lazy(() => import('./pages/AdminAnalysisPage'))
 const AdminQuestionListPage = lazy(() => import('./pages/AdminQuestionListPage'))
+const AddTheoryQuestion = lazy(() => import('./pages/AddTheoryQuestion'))
 const Classpage = lazy(() => import('./pages/Classpage'))
 const Feedbackpage = lazy(() => import('./pages/Feedbackpage'))
 const BattleModeHome = lazy(() => import('./pages/BattleModeHome'))
@@ -658,6 +659,8 @@ const AppLayout = () => {
           <Route path="/admin/analysis" element={<AdminAnalysisPage />} />
           <Route path="/admin/questions" element={<AdminQuestionListPage />} />
           <Route path="/questions" element={<AdminQuestionListPage />} />
+          <Route path="/chapters/:chapterNumber/theory-questions" element={<AddTheoryQuestion />} />
+          <Route path="/chapters/:chapterNumber/topics/:topicId/theory-questions" element={<AddTheoryQuestion />} />
           <Route path="/chapter-weightage" element={<ChapterWeightage />} />
           <Route path="/chapters" element={<Chapters />} />
           <Route path="/class/:classId" element={<Classpage />} />

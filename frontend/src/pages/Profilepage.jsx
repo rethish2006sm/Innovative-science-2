@@ -1995,6 +1995,9 @@ const ProfileHeader = memo(
     onSettings,
     onChangePhoto,
   }) => {
+    const className = String(user?.className || '').trim()
+    const hasClassName = className && className.toLowerCase() !== 'not assigned'
+
     return (
       <header className="relative border-b border-slate-200 bg-white">
         <button
@@ -2060,6 +2063,12 @@ const ProfileHeader = memo(
                   Logout
                 </button>
               </div>
+
+              {hasClassName && (
+                <p className="mt-1 max-w-full truncate text-sm font-semibold text-sky-700 sm:text-base">
+                  Class: {className}
+                </p>
+              )}
 
               <p className="mt-1 text-sm text-slate-500">
                 Student Profile

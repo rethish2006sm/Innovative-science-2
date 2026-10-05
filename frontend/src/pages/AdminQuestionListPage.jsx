@@ -13,6 +13,9 @@ import {
   RotateCcw,
   CircleHelp,
   BarChart3,
+  Download,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Link } from 'react-router-dom'
@@ -22,7 +25,6 @@ import { getStoredAuth } from '../authStorage'
 const labels = {
   mcqs: 'MCQs',
   'true-or-false': 'True or False',
-  'match-the-following': 'Match the following',
   'odd-man-out': 'Odd man out',
   correlation: 'Correlation',
   'complete-the-tables': 'Complete the tables',
@@ -37,7 +39,6 @@ const formatType = (type) =>
 const objectiveTypeOrder = [
   'mcqs',
   'true-or-false',
-  'match-the-following',
   'odd-man-out',
   'correlation',
   'complete-the-tables',
@@ -102,9 +103,9 @@ const AdminQuestionListPage = () => {
 
       const data = await apiRequest(`/api/questions?${params}`)
 
-      setQuestions(data.questions || [])
+      setQuestions((data.questions || []).filter((question) => question.objectiveType !== 'match-the-following'))
       setChapters(data.chapters || [])
-      setObjectiveTypes(data.objectiveTypes || [])
+      setObjectiveTypes((data.objectiveTypes || []).filter((type) => type !== 'match-the-following'))
       setTotalQuestions(Number(data.totalQuestions || 0))
     } catch (err) {
       setError(err.message || 'Could not load questions.')
@@ -613,6 +614,115 @@ const FilterSelect = ({ value, onChange, options, ariaLabel, tone = 'cyan' }) =>
   )
 }
 
+const ImageViewer = ({ src, alt, onClose }) => {
+  const [zoomed, setZoomed] = useState(false)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isDragging, setIsDragging] = useState(false)
+  const lastTapRef = useRef(0)
+  const dragRef = useRef(null)
+
+  const toggleZoom = () => {
+    setZoomed((current) => !current)
+    setPan({ x: 0, y: 0 })
+  }
+
+  const handlePointerDown = (event) => {
+    if (!zoomed) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: pan.x,
+      originY: pan.y,
+    }
+    setIsDragging(true)
+  }
+
+  const handlePointerMove = (event) => {
+    if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return
+    setPan({
+      x: dragRef.current.originX + event.clientX - dragRef.current.startX,
+      y: dragRef.current.originY + event.clientY - dragRef.current.startY,
+    })
+  }
+
+  const handlePointerUp = (event) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    setIsDragging(false)
+  }
+
+  const handleTouchEnd = () => {
+    const now = Date.now()
+    if (now - lastTapRef.current < 320) {
+      toggleZoom()
+      lastTapRef.current = 0
+      return
+    }
+    lastTapRef.current = now
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[1200] flex flex-col bg-slate-950/95 p-3 sm:p-5"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Fullscreen image viewer"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        <a
+          href={src}
+          download
+          aria-label="Download image"
+          className="grid h-11 w-11 place-items-center rounded-xl bg-white/10 text-white transition hover:bg-white/20"
+        >
+          <Download size={19} />
+        </a>
+        <button
+          type="button"
+          onClick={toggleZoom}
+          aria-label={zoomed ? 'Zoom out' : 'Zoom in'}
+          className="grid h-11 w-11 place-items-center rounded-xl bg-white/10 text-white transition hover:bg-white/20"
+        >
+          {zoomed ? <ZoomOut size={19} /> : <ZoomIn size={19} />}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close fullscreen image"
+          className="grid h-11 w-11 place-items-center rounded-xl bg-white text-slate-900 transition hover:bg-slate-200"
+        >
+          <X size={19} />
+        </button>
+      </div>
+
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto py-3 sm:py-5">
+        <img
+          src={src}
+          alt={alt}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onDoubleClick={toggleZoom}
+          onTouchEnd={handleTouchEnd}
+          style={zoomed ? { transform: `scale(1.5) translate3d(${pan.x / 1.5}px, ${pan.y / 1.5}px, 0)` } : undefined}
+          className={`max-h-full max-w-full select-none object-contain ${!isDragging ? 'transition-transform duration-200' : ''} ${zoomed ? 'max-h-none max-w-none cursor-grab touch-none' : 'cursor-zoom-in'} ${isDragging ? 'cursor-grabbing' : ''}`}
+        />
+      </div>
+
+      <p className="shrink-0 text-center text-xs text-white/60">
+        Double tap or double click to zoom
+      </p>
+    </div>
+  )
+}
+
 const QuestionModal = ({
   question,
   isAdmin,
@@ -627,10 +737,12 @@ const QuestionModal = ({
   const [correct, setCorrect] = useState(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [imageViewer, setImageViewer] = useState(null)
 
   const options = question.options || []
 
   const correctAnswerText = useMemo(() => {
+    if (question.isTheoryQuestion) return question.answer || 'No answer text provided'
     if (question.correctOption === undefined || question.correctOption === null) {
       return 'Not specified'
     }
@@ -644,6 +756,7 @@ const QuestionModal = ({
     setCorrect(null)
     setError('')
     setSaving(false)
+    setImageViewer(null)
   }, [question._id])
 
   useEffect(() => {
@@ -651,7 +764,14 @@ const QuestionModal = ({
     document.body.style.overflow = 'hidden'
 
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        if (imageViewer) {
+          setImageViewer(null)
+        } else {
+          onClose()
+        }
+        return
+      }
 
       if (
         event.key === 'ArrowLeft' &&
@@ -681,7 +801,7 @@ const QuestionModal = ({
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [onClose, onPrevious, onNext, index, count])
+  }, [onClose, onPrevious, onNext, index, count, imageViewer])
 
   const submit = async (optionOverride = selected) => {
     if (optionOverride === null || saving) return
@@ -867,16 +987,40 @@ const QuestionModal = ({
 
           {question.imageUrl && (
             <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-2 sm:p-4">
-              <img
-                src={assetUrl(question.imageUrl)}
-                alt="Question illustration"
-                loading="lazy"
-                className="mx-auto max-h-[45vh] w-full object-contain"
-              />
+              <button
+                type="button"
+                onClick={() => setImageViewer({ src: assetUrl(question.imageUrl), alt: 'Question illustration' })}
+                className="block w-full cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-cyan-200"
+                aria-label="Open question image fullscreen"
+              >
+                <img
+                  src={assetUrl(question.imageUrl)}
+                  alt="Question illustration"
+                  loading="lazy"
+                  className="mx-auto max-h-[45vh] w-full object-contain"
+                />
+              </button>
             </div>
           )}
 
-          {options.length > 0 ? (
+          {question.isTheoryQuestion && (
+            <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <p className="text-xs font-extrabold uppercase tracking-wider text-emerald-800">Answer / solution</p>
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-emerald-950">{question.answer || 'No answer text provided.'}</p>
+              {question.answerImageUrl && (
+                <button
+                  type="button"
+                  onClick={() => setImageViewer({ src: assetUrl(question.answerImageUrl), alt: 'Answer solution' })}
+                  className="mt-4 block w-full cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+                  aria-label="Open answer solution image fullscreen"
+                >
+                  <img src={assetUrl(question.answerImageUrl)} alt="Answer solution" className="max-h-[45vh] w-full object-contain" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {!question.isTheoryQuestion && options.length > 0 ? (
             <div className="mt-5 space-y-2.5">
               <p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-400">
                 {isAdmin ? 'Answer options' : 'Choose your answer'}
@@ -918,7 +1062,7 @@ const QuestionModal = ({
                 )
               })}
             </div>
-          ) : (
+          ) : question.isTheoryQuestion ? null : (
             <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
               {question.imageUrl
                 ? 'Review the question image above.'
@@ -986,6 +1130,17 @@ const QuestionModal = ({
           </p>
         </div>
       </motion.section>
+
+      <AnimatePresence>
+        {imageViewer && (
+          <ImageViewer
+            key={imageViewer.src}
+            src={imageViewer.src}
+            alt={imageViewer.alt}
+            onClose={() => setImageViewer(null)}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
   )
 }

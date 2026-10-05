@@ -323,9 +323,10 @@ const Topicspage = () => {
             <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
             <span>Back</span>
           </button>
-          <h1 className="font-serif text-3xl tracking-tight text-stone-950 sm:text-4xl lg:text-5xl">
-            {chapter.name}
-          </h1>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-3xl tracking-tight text-stone-950 sm:text-4xl lg:text-5xl">{chapter.name}</h1>
+            {isAdmin && <button type="button" onClick={() => navigate(`/chapters/${chapterNumber}/theory-questions`)} className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2 text-xs font-bold text-white transition hover:bg-cyan-800 sm:text-sm"><Plus className="h-4 w-4" /> Theory question</button>}
+          </div>
           <p className="mt-2 font-mono text-xs uppercase tracking-widest text-stone-400 sm:text-sm">
             Chapter {chapter.number.toString().padStart(2, '0')} · Topics
           </p>

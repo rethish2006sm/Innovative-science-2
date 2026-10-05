@@ -964,9 +964,6 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
       const nextAnswer = [...currentAnswer, optionIndex]
       setAnswers({ ...answers, [questionId]: nextAnswer })
-      if (isSingleQuestionFlow && nextAnswer.length === pairCount && !submittedQuestions[questionId]) {
-        submitCurrentQuestion(nextAnswer)
-      }
       return
     }
 
@@ -1903,8 +1900,18 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                             disabled={currentQuestionSubmitted}
                             className="col-span-2 h-10 rounded-xl border border-stone-200 bg-white text-xs font-bold text-stone-600 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:rounded-2xl sm:text-sm"
                           >
-                            Clear option
+                            Clear answer
                           </button>
+                          {isSingleQuestionFlow && (
+                            <button
+                              type="button"
+                              onClick={() => submitCurrentQuestion()}
+                              disabled={isSaving || currentQuestionSubmitted}
+                              className="col-span-2 h-11 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 sm:rounded-2xl sm:text-base"
+                            >
+                              {isSaving ? 'Submitting...' : 'Submit answer'}
+                            </button>
+                          )}
                         </div>
                       ) : isCompleteTable || isDiagram ? (
                         <div className="mt-4 grid gap-3">

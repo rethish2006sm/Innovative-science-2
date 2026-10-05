@@ -42,6 +42,16 @@ const ChapterCard = ({ chapter, index, isAdmin, onEdit, onDelete }) => {
             type="button"
             onClick={(event) => {
               event.stopPropagation()
+              navigate(`/chapters/${chapter.number}/theory-questions`)
+            }}
+            className="inline-flex h-10 items-center gap-1 rounded-full bg-cyan-700 px-3 text-xs font-black text-white shadow-sm transition hover:bg-cyan-800"
+          >
+            <Plus className="h-4 w-4" /> Theory question
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
               onEdit(chapter)
             }}
             className="grid h-10 w-10 place-items-center rounded-full border border-stone-200 bg-white text-stone-600 shadow-sm transition hover:bg-stone-100 hover:text-stone-950"
