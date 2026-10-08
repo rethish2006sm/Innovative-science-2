@@ -977,13 +977,20 @@ const classPostSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: CLASS_POST_CATEGORIES,
+      trim: true,
+      maxlength: 120,
       default: 'assignment',
     },
     message: {
       type: String,
       trim: true,
       maxlength: 4000,
+      default: '',
+    },
+    chapterName: {
+      type: String,
+      trim: true,
+      maxlength: 200,
       default: '',
     },
     documentLink: {
@@ -1011,9 +1018,53 @@ const classPostSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+classPostSchema.add({
+  science: {
+    type: String,
+    enum: ['science1', 'science2'],
+    default: 'science2',
+    index: true,
+  },
+})
+classPostSchema.pre('validate', function setClassPostScience() {
+  if (this.isNew || !this.science) this.science = getActiveScience()
+})
+const getClassPostScienceFilter = () => getActiveScience() === 'science2'
+  ? { $or: [{ science: 'science2' }, { science: { $exists: false } }] }
+  : { science: 'science1' }
+classPostSchema.pre([
+  'find',
+  'findOne',
+  'findOneAndUpdate',
+  'findOneAndDelete',
+  'findOneAndReplace',
+  'updateOne',
+  'updateMany',
+  'deleteOne',
+  'deleteMany',
+  'countDocuments',
+  'distinct',
+], function scopeClassPostScience() {
+  this.where(getClassPostScienceFilter())
+})
+classPostSchema.pre('aggregate', function scopeClassPostScienceAggregate() {
+  this.pipeline().unshift({ $match: getClassPostScienceFilter() })
+})
 classPostSchema.index({ classId: 1, createdAt: -1 })
 
 const Science2ClassPost = mongoose.model('ClassPost', classPostSchema)
+
+const classBoardCategorySchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 80 },
+    slug: { type: String, required: true, trim: true, maxlength: 100 },
+    science: { type: String, enum: ['science1', 'science2'], required: true, index: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  },
+  { timestamps: true },
+)
+classBoardCategorySchema.index({ science: 1, slug: 1 }, { unique: true })
+const ClassBoardCategory = mongoose.model('ClassBoardCategory', classBoardCategorySchema)
 
 const battleRewardSchema = new mongoose.Schema(
   {
@@ -1814,7 +1865,6 @@ const sharedScienceRoutePrefixes = [
   '/api/admin/notifications',
   '/api/admin/push',
   '/api/admin/announcement',
-  '/api/classes',
   '/api/messages',
   '/api/notifications',
   '/api/push',
@@ -2057,6 +2107,46 @@ const convertClassPhoto = async (file) => {
   }
 }
 
+const slugifyClassBoardCategory = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-|-$/g, '')
+  .slice(0, 90)
+const normalizeClassBoardCategory = (value, fallback = 'assignment') => String(value || '').trim().slice(0, 120) || fallback
+
+const getClassBoardCategories = async (classId) => {
+  const [customCategories, categoryCountsRaw] = await Promise.all([
+    ClassBoardCategory.find({ science: getActiveScience() }).sort({ createdAt: 1 }).lean(),
+    ClassPost.aggregate([
+      { $match: { classId: new mongoose.Types.ObjectId(classId) } },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+    ]),
+  ])
+  const countMap = new Map(categoryCountsRaw.map((entry) => [String(entry._id), Number(entry.count || 0)]))
+  const categories = CLASS_POST_CATEGORIES.map((value) => ({
+    id: value,
+    label: CLASS_POST_CATEGORY_LABELS[value] || value,
+    count: countMap.get(value) || 0,
+    editable: false,
+  }))
+  const knownIds = new Set(categories.map((category) => category.id))
+
+  customCategories.forEach((category) => {
+    if (!knownIds.has(category.slug)) {
+      categories.push({
+        id: category.slug,
+        label: category.name,
+        count: countMap.get(category.slug) || 0,
+        categoryId: String(category._id),
+        editable: true,
+      })
+    }
+  })
+
+  return categories
+}
+
 const publicClassPost = (post) => {
   const normalizedPost = typeof post.toObject === 'function' ? post.toObject() : post
   const classIdValue = String(normalizedPost.classId?._id || normalizedPost.classId || '')
@@ -2067,8 +2157,9 @@ const publicClassPost = (post) => {
     classId: classIdValue,
     groupId: String(normalizedPost.shareGroupId?._id || normalizedPost.shareGroupId || ''),
     category: normalizedPost.category || 'assignment',
-    categoryLabel: CLASS_POST_CATEGORY_LABELS[normalizedPost.category || 'assignment'] || 'Assignment',
+    categoryLabel: CLASS_POST_CATEGORY_LABELS[normalizedPost.category || 'assignment'] || String(normalizedPost.category || 'Assignment').replaceAll('-', ' '),
     message: normalizedPost.message || '',
+    chapterName: normalizedPost.chapterName || '',
     documentLink: normalizedPost.documentLink || '',
     createdAt: normalizedPost.createdAt,
     createdBy: normalizedPost.createdBy
@@ -2596,9 +2687,7 @@ const buildAdminStudentQuery = async ({ search = '', classId = '' } = {}) => {
   }
 
   const escapedSearch = escapeRegex(trimmedSearch)
-  const classMatches = await Class.find({
-    name: { $regex: escapedSearch, $options: 'i' },
-  })
+  const classMatches = await Class.find({ name: { $regex: escapedSearch, $options: 'i' } })
     .select('_id')
     .lean()
 
@@ -2621,8 +2710,6 @@ const buildAdminStudentQuery = async ({ search = '', classId = '' } = {}) => {
 }
 
 const buildAdminDashboardCounts = async () => {
-  // These dashboard totals are operational account metrics and intentionally
-  // Stay identical because account and class records are shared.
   const [totalStudents, totalClasses, totalReports, totalFeedback] = await Promise.all([
     Science2User.countDocuments({ isAdmin: false }),
     Science2Class.countDocuments({}),
@@ -3709,7 +3796,18 @@ app.get('/api/daily-challenge/history', authRequired, async (req, res) => {
   try {
     const challenges = await DailyChallenge.find({ user: req.user._id, subject: getActiveScience() }).select('localDate status completedAt attemptedCount correctCount score').sort({ localDate: -1 }).limit(90).lean()
     const streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() }).lean()
-    res.json({ challenges, streak: streak || { currentStreak: 0, longestStreak: 0, lastCreditedDate: null } })
+    const timezone = dailyTimezone(req)
+    const today = localDateForTimezone(timezone)
+    const streakLastDate = String(streak?.lastCreditedDate || '')
+    const streakIsActive = streakLastDate === today || streakLastDate === previousLocalDate(today)
+    const currentStreak = streakIsActive ? Number(streak?.currentStreak || 0) : 0
+
+    res.json({
+      challenges,
+      streak: streak
+        ? { ...streak, currentStreak }
+        : { currentStreak: 0, longestStreak: 0, lastCreditedDate: null },
+    })
   } catch (error) {
     res.status(500).json({ message: 'Could not load streak history.' })
   }
@@ -6265,12 +6363,16 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
 
     const streakMap = new Map(streaks.map((streak) => [String(streak.user), streak]))
     const dailyMap = new Map(dailyStats.map((item) => [String(item._id), item]))
+    const timezone = dailyTimezone(req)
+    const today = localDateForTimezone(timezone)
     const onlineCutoff = Date.now() - (15 * 60 * 1000)
     const students = users.map((user) => {
       const row = buildAdminStudentRow(user)
       const streak = streakMap.get(String(user._id)) || {}
       const daily = dailyMap.get(String(user._id)) || {}
       const lastLoginAt = user.lastLoginAt || null
+      const lastCreditedDate = String(streak.lastCreditedDate || '')
+      const currentStreakIsActive = lastCreditedDate === today || lastCreditedDate === previousLocalDate(today)
 
       return {
         ...row,
@@ -6278,7 +6380,7 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
         lastLoginAt,
         createdAt: user.createdAt || null,
         online: Boolean(lastLoginAt && new Date(lastLoginAt).getTime() >= onlineCutoff),
-        currentStreak: Number(streak.currentStreak || 0),
+        currentStreak: currentStreakIsActive ? Number(streak.currentStreak || 0) : 0,
         longestStreak: Number(streak.longestStreak || 0),
         lastCreditedDate: streak.lastCreditedDate || null,
         completedDailyChallenges: Number(daily.completedDays || 0),
@@ -6325,15 +6427,16 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
     const loadAll = rawLimit === 'all' || req.query.all === '1'
     const limit = loadAll ? null : Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
     const page = Math.max(Number(req.query.page) || 1, 1)
-    const objectiveTypeQuery = objectiveTypeFilter
-      ? { $and: [{ type: objectiveTypeFilter }, { type: { $ne: 'match-the-following' } }] }
-      : { type: { $ne: 'match-the-following' } }
+    const objectiveTypeQuery = { type: { $ne: 'match-the-following' } }
     const objectiveTypes = await ObjectiveType.find(objectiveTypeQuery)
       .populate({ path: 'topic', select: 'name number chapter', populate: { path: 'chapter', select: 'name number' } })
       .sort({ 'topic.chapter.number': 1, 'topic.number': 1, type: 1 })
       .lean()
 
-    const matchingTypes = objectiveTypes.filter((item) => !chapterId || String(item.topic?.chapter?._id || '') === chapterId)
+    const matchingTypes = objectiveTypes.filter((item) => (
+      (!objectiveTypeFilter || item.type === objectiveTypeFilter) &&
+      (!chapterId || String(item.topic?.chapter?._id || '') === chapterId)
+    ))
     const objectiveTypeIds = matchingTypes.map((item) => item._id)
     const questionQuery = {
       objectiveType: { $in: objectiveTypeIds },
@@ -6361,9 +6464,10 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
 
     const theoryTypes = await TheoryType.find({
       ...(chapterId ? { $or: [{ chapter: chapterId }, { chapter: null }] } : {}),
-      ...(objectiveTypeFilter ? { name: { $regex: escapeRegex(objectiveTypeFilter), $options: 'i' } } : {}),
     }).populate({ path: 'chapter', select: 'name number' }).lean()
-    const theoryTypeIds = theoryTypes.map((item) => item._id)
+    const theoryTypeIds = theoryTypes
+      .filter((item) => !objectiveTypeFilter || item.name === objectiveTypeFilter)
+      .map((item) => item._id)
     const theoryQuery = {
       theoryType: { $in: theoryTypeIds },
       ...(search ? { $or: [{ question: { $regex: escapeRegex(search), $options: 'i' } }, { answer: { $regex: escapeRegex(search), $options: 'i' } }] } : {}),
@@ -8330,7 +8434,7 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
     const limit = loadAll ? null : Math.min(Math.max(Number(req.query.limit) || 20, 1), 50)
     const queryLimit = loadAll ? null : Math.min((limit || 20) + 1, 51)
     const category = String(req.query.category || '').trim()
-    const normalizedCategory = category && category !== 'all' && CLASS_POST_CATEGORIES.includes(category) ? category : ''
+    const normalizedCategory = category && category !== 'all' ? category : ''
 
     const classDoc = await Class.findById(classId).select('name description grade').lean()
 
@@ -8355,7 +8459,7 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
     let postFinder = ClassPost.find(postQuery)
       .populate('createdBy', 'name isAdmin')
       .sort({ createdAt: -1 })
-      .select('classId shareGroupId createdBy category message documentLink createdAt photos pdf')
+      .select('classId shareGroupId createdBy category chapterName message documentLink createdAt photos pdf')
       .select('-photos.data -pdf.data')
       .lean()
 
@@ -8365,19 +8469,11 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
 
     const posts = await postFinder
     const visiblePosts = loadAll ? posts : posts.slice(0, limit)
-    const categoryCountsRaw = await ClassPost.aggregate([
-      { $match: { classId: classDoc._id } },
-      { $group: { _id: '$category', count: { $sum: 1 } } },
-    ])
-    const categoryCounts = CLASS_POST_CATEGORIES.reduce((accumulator, item) => {
-      accumulator[item] = 0
+    const categories = await getClassBoardCategories(classDoc._id)
+    const categoryCounts = categories.reduce((accumulator, item) => {
+      accumulator[item.id] = item.count
       return accumulator
     }, {})
-    categoryCountsRaw.forEach((entry) => {
-      if (CLASS_POST_CATEGORIES.includes(entry._id)) {
-        categoryCounts[entry._id] = Number(entry.count || 0)
-      }
-    })
 
     const payload = {
       classItem: {
@@ -8389,6 +8485,7 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
       posts: visiblePosts.map(publicClassPost),
       hasMore: loadAll ? false : posts.length > limit,
       categoryCounts,
+      categories,
       canPost: Boolean(req.user.isAdmin),
     }
 
@@ -8396,6 +8493,87 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
     res.json(payload)
   } catch (error) {
     res.status(500).json({ message: 'Could not load class feed.' })
+  }
+})
+
+app.post('/api/admin/class-board/categories', authRequired, adminRequired, async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim()
+    const slug = slugifyClassBoardCategory(name)
+
+    if (!name || !slug) {
+      return res.status(400).json({ message: 'Enter a valid menu name.' })
+    }
+
+    const category = await ClassBoardCategory.create({
+      name,
+      slug,
+      science: getActiveScience(),
+      createdBy: req.user._id,
+    })
+
+    res.status(201).json({
+      category: {
+        id: category.slug,
+        label: category.name,
+        count: 0,
+      },
+    })
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: 'This menu already exists for the selected science.' })
+    }
+    res.status(500).json({ message: 'Could not create class-board menu.' })
+  }
+})
+
+app.patch('/api/admin/class-board/categories/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim()
+    if (!name) {
+      return res.status(400).json({ message: 'Enter a valid menu name.' })
+    }
+
+    const category = await ClassBoardCategory.findOneAndUpdate(
+      { _id: req.params.id, science: getActiveScience() },
+      { name: name.slice(0, 80) },
+      { new: true, runValidators: true },
+    ).lean()
+
+    if (!category) {
+      return res.status(404).json({ message: 'Menu page not found.' })
+    }
+
+    res.json({
+      category: {
+        id: category.slug,
+        label: category.name,
+        count: await ClassPost.countDocuments({ category: category.slug }),
+        categoryId: String(category._id),
+        editable: true,
+      },
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not edit class-board menu.' })
+  }
+})
+
+app.delete('/api/admin/class-board/categories/:id', authRequired, adminRequired, async (req, res) => {
+  try {
+    const category = await ClassBoardCategory.findOne({ _id: req.params.id, science: getActiveScience() }).lean()
+    if (!category) {
+      return res.status(404).json({ message: 'Menu page not found.' })
+    }
+
+    const materialCount = await ClassPost.countDocuments({ category: category.slug })
+    if (materialCount > 0) {
+      return res.status(409).json({ message: 'Move or delete this menu’s materials before deleting the menu.' })
+    }
+
+    await ClassBoardCategory.deleteOne({ _id: category._id, science: getActiveScience() })
+    res.json({ message: 'Menu page deleted.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete class-board menu.' })
   }
 })
 
@@ -8431,16 +8609,15 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
     }
 
     const message = typeof req.body.message === 'string' ? req.body.message.trim() : post.message
+    const chapterName = typeof req.body.chapterName === 'string' ? req.body.chapterName.trim() : String(post.chapterName || '')
     const hasDocumentLinkField = Object.prototype.hasOwnProperty.call(req.body, 'documentLink')
     const documentLink = hasDocumentLinkField ? normalizeDocumentLink(req.body.documentLink) : String(post.documentLink || '')
     const classMessages = parseJsonValue(req.body.classMessages, {})
-    const category = typeof req.body.category === 'string' && CLASS_POST_CATEGORIES.includes(req.body.category)
-      ? req.body.category
-      : post.category || 'assignment'
+    const category = normalizeClassBoardCategory(req.body.category, post.category || 'assignment')
     const photos = Array.isArray(req.files?.photos) ? req.files.photos : null
     const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
 
-    if (!message && (!photos || !photos.length) && !pdfFile && !post.pdf?.data && !(post.photos || []).length && !documentLink && !post.documentLink) {
+    if (!chapterName && !message && (!photos || !photos.length) && !pdfFile && !post.pdf?.data && !(post.photos || []).length && !documentLink && !post.documentLink) {
       return res.status(400).json({ message: 'Post cannot be empty.' })
     }
 
@@ -8493,6 +8670,7 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
         existingPost.classId = classItem._id
         existingPost.shareGroupId = groupId
         existingPost.message = resolvedMessage
+        existingPost.chapterName = chapterName
         if (hasDocumentLinkField) {
           existingPost.documentLink = documentLink
         }
@@ -8513,6 +8691,7 @@ app.patch('/api/classes/:classId/posts/:postId', authRequired, classShareUpload.
         createdBy: req.user._id,
         category,
         message: resolvedMessage,
+        chapterName,
         documentLink,
         photos: nextAttachments.photos.map((photo) => ({ ...photo })),
         pdf: nextAttachments.pdf
@@ -8684,14 +8863,13 @@ app.post(
       }
 
       const message = String(req.body.message || '').trim()
+      const chapterName = String(req.body.chapterName || '').trim()
       const documentLink = normalizeDocumentLink(req.body.documentLink)
-      const category = CLASS_POST_CATEGORIES.includes(String(req.body.category || 'assignment'))
-        ? String(req.body.category || 'assignment')
-        : 'assignment'
+      const category = normalizeClassBoardCategory(req.body.category)
       const photos = Array.isArray(req.files?.photos) ? req.files.photos : []
       const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
 
-      if (!message && !photos.length && !pdfFile && !documentLink) {
+      if (!chapterName && !message && !photos.length && !pdfFile && !documentLink) {
         return res.status(400).json({ message: 'Add a message, a photo, a PDF, or a link before sharing.' })
       }
 
@@ -8720,6 +8898,7 @@ app.post(
         createdBy: req.user._id,
         category,
         message,
+        chapterName,
         documentLink,
         photos: await Promise.all(photos.map(convertClassPhoto)),
         pdf: pdfFile
@@ -8765,10 +8944,9 @@ app.post(
         : []
       const classMessages = parseJsonValue(req.body.classMessages, {})
       const defaultMessage = String(req.body.message || '').trim()
+      const chapterName = String(req.body.chapterName || '').trim()
       const documentLink = normalizeDocumentLink(req.body.documentLink)
-      const category = CLASS_POST_CATEGORIES.includes(String(req.body.category || 'assignment'))
-        ? String(req.body.category || 'assignment')
-        : 'assignment'
+      const category = normalizeClassBoardCategory(req.body.category)
       const photos = Array.isArray(req.files?.photos) ? req.files.photos : []
       const pdfFile = Array.isArray(req.files?.pdf) ? req.files.pdf[0] : null
       const selectedClassIds = [...new Set(classIds.map((value) => String(value || '').trim()).filter(Boolean))]
@@ -8803,6 +8981,7 @@ app.post(
       }
 
       const hasAnyMessage =
+        chapterName ||
         defaultMessage ||
         selectedClassIds.some((classId) => String(classMessages?.[classId] || '').trim())
 
@@ -8823,7 +9002,7 @@ app.post(
 
         const classMessage = String(classMessages?.[classId] || defaultMessage || '').trim()
 
-        if (!classMessage && !convertedPhotos.length && !pdfFile && !documentLink) {
+        if (!chapterName && !classMessage && !convertedPhotos.length && !pdfFile && !documentLink) {
           continue
         }
 
@@ -8834,6 +9013,7 @@ app.post(
           createdBy: req.user._id,
           category,
           message: classMessage,
+          chapterName,
           documentLink,
           photos: attachmentBundle.photos,
           pdf: attachmentBundle.pdf,

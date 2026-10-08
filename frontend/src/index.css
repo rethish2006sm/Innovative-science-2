@@ -10,12 +10,23 @@
 html {
   -webkit-tap-highlight-color: transparent;
   text-rendering: optimizeLegibility;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 body {
   margin: 0;
   overflow-x: hidden;
   overscroll-behavior-x: none;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 /* Question content is intentionally difficult to copy from the practice UI. */

@@ -27,11 +27,33 @@ const CACHE_TTL = 15_000
 const cacheablePaths = ['/api/chapters', '/api/classes', '/api/feedback/featured', '/api/announcement']
 
 export const assetUrl = (path) => {
-  if (!path) {
+  const rawPath = String(path || '').trim()
+
+  if (!rawPath) {
     return ''
   }
 
-  return path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+  if (rawPath.startsWith('data:') || rawPath.startsWith('blob:')) {
+    return rawPath
+  }
+
+  // API responses normally contain relative paths. If an older response or
+  // a proxy has prefixed one with the frontend origin, still move it to the
+  // backend; otherwise Vite returns index.html instead of image bytes.
+  if (/^https?:\/\//i.test(rawPath)) {
+    try {
+      const parsed = new URL(rawPath)
+      if (parsed.pathname.startsWith('/api/')) {
+        return `${API_BASE_URL}${parsed.pathname}${parsed.search}${parsed.hash}`
+      }
+    } catch (error) {
+      return rawPath
+    }
+
+    return rawPath
+  }
+
+  return `${API_BASE_URL}${rawPath.startsWith('/') ? '' : '/'}${rawPath}`
 }
 
 export const apiRequest = async (path, options = {}) => {

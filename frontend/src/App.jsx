@@ -14,6 +14,7 @@ const Contactpage = lazy(() => import('./pages/Contactpage'))
 const Correlation = lazy(() => import('./pages/Correlation'))
 const Diagrams = lazy(() => import('./pages/diagrams'))
 const Adminpage = lazy(() => import('./pages/Adminpage'))
+const AdminClassMaterialsPage = lazy(() => import('./pages/AdminClassMaterialsPage'))
 const AdminAnalysisPage = lazy(() => import('./pages/AdminAnalysisPage'))
 const AdminQuestionListPage = lazy(() => import('./pages/AdminQuestionListPage'))
 const AddTheoryQuestion = lazy(() => import('./pages/AddTheoryQuestion'))
@@ -292,9 +293,9 @@ const getSeoFromPathname = (pathname) => {
     }
   }
 
-  if (normalizedPath === '/questions' || normalizedPath === '/admin' || normalizedPath === '/dashboard' || normalizedPath === '/admin/analysis' || normalizedPath === '/admin/questions') {
+  if (normalizedPath === '/questions' || normalizedPath === '/admin' || normalizedPath === '/dashboard' || normalizedPath === '/admin/analysis' || normalizedPath === '/admin/questions' || normalizedPath === '/admin/class-materials') {
     return {
-      title: normalizedPath === '/questions' ? 'Question Bank' : normalizedPath === '/admin/analysis' ? 'Student Analysis | Admin' : normalizedPath === '/admin/questions' ? 'Question List | Admin' : 'Admin Dashboard',
+      title: normalizedPath === '/questions' ? 'Question Bank' : normalizedPath === '/admin/analysis' ? 'Student Analysis | Admin' : normalizedPath === '/admin/questions' ? 'Question List | Admin' : normalizedPath === '/admin/class-materials' ? 'Study Materials | Admin' : 'Admin Dashboard',
       description: normalizedPath === '/questions' || normalizedPath === '/admin/questions' ? 'Browse and review science questions.' : 'Review student activity, brain cells, daily streaks, and performance.',
       noindex: true,
     }
@@ -656,6 +657,7 @@ const AppLayout = () => {
           />
           <Route path="/admin" element={<Adminpage />} />
           <Route path="/dashboard" element={<Adminpage />} />
+          <Route path="/admin/class-materials" element={<AdminClassMaterialsPage />} />
           <Route path="/admin/analysis" element={<AdminAnalysisPage />} />
           <Route path="/admin/questions" element={<AdminQuestionListPage />} />
           <Route path="/questions" element={<AdminQuestionListPage />} />

@@ -23,9 +23,10 @@ import {
 } from 'lucide-react'
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
+import { getActiveScience, SCIENCE_CHANGED_EVENT, setActiveScience } from '../science'
 
 const emptyClassForm = { name: '', description: '', grade: '' }
-const emptyClassShareForm = { message: '', category: 'assignment', documentLink: '' }
+const emptyClassShareForm = { chapterName: '', message: '', category: 'assignment', documentLink: '' }
 
 const formatFeedbackSourceLabel = (item = {}) => {
   if (item.sourceType === 'topic') {
@@ -108,6 +109,7 @@ const Adminpage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const [activeTab, setActiveTab] = useState('students')
+  const [science, setScience] = useState(() => getActiveScience())
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [studentClassFilter, setStudentClassFilter] = useState('')
@@ -184,6 +186,10 @@ const Adminpage = () => {
   const [classPosts, setClassPosts] = useState([])
   const [classFeedLoading, setClassFeedLoading] = useState(false)
   const [classFeedError, setClassFeedError] = useState('')
+  const [classBoardCategories, setClassBoardCategories] = useState([])
+  const [newClassBoardCategory, setNewClassBoardCategory] = useState('')
+  const [editingClassBoardCategoryId, setEditingClassBoardCategoryId] = useState('')
+  const [classBoardCategoryCreating, setClassBoardCategoryCreating] = useState(false)
   const [classBoardCategoryFilter, setClassBoardCategoryFilter] = useState('all')
   const [classShareForm, setClassShareForm] = useState(emptyClassShareForm)
   const [classSharePhotos, setClassSharePhotos] = useState([])
@@ -202,6 +208,12 @@ const Adminpage = () => {
   const classesRequestRef = useRef(0)
   const adminMessagesRequestRef = useRef(0)
   const studentQueryRef = useRef(null)
+
+  useEffect(() => {
+    const syncScience = () => setScience(getActiveScience())
+    window.addEventListener(SCIENCE_CHANGED_EVENT, syncScience)
+    return () => window.removeEventListener(SCIENCE_CHANGED_EVENT, syncScience)
+  }, [])
 
   const filteredMessageRecipients = useMemo(() => {
     const query = messageRecipientSearch.trim().toLowerCase()
@@ -479,6 +491,7 @@ const Adminpage = () => {
       const data = await apiRequest(`/api/classes/${classId}/feed?limit=all&category=all`)
       const nextPosts = data.posts || []
       setClassPosts(nextPosts)
+      setClassBoardCategories(Array.isArray(data.categories) ? data.categories : [])
     } catch (err) {
       setClassFeedError(err.message)
       setClassPosts([])
@@ -1405,6 +1418,60 @@ const Adminpage = () => {
     )
   }
 
+  const createClassBoardCategory = async () => {
+    const name = newClassBoardCategory.trim()
+    if (!name) return
+
+    setClassBoardCategoryCreating(true)
+    setClassFeedError('')
+    try {
+      const isEditing = Boolean(editingClassBoardCategoryId)
+      const data = await apiRequest(
+        isEditing
+          ? `/api/admin/class-board/categories/${editingClassBoardCategoryId}`
+          : '/api/admin/class-board/categories',
+        {
+        method: isEditing ? 'PATCH' : 'POST',
+        body: JSON.stringify({ name }),
+        },
+      )
+      const category = data.category
+      setClassBoardCategories((current) => isEditing
+        ? current.map((item) => item.categoryId === category.categoryId ? category : item)
+        : [...current, category])
+      setClassShareForm((current) => ({ ...current, category: category.id }))
+      setNewClassBoardCategory('')
+      setEditingClassBoardCategoryId('')
+    } catch (err) {
+      setClassFeedError(err.message)
+    } finally {
+      setClassBoardCategoryCreating(false)
+    }
+  }
+
+  const startEditingClassBoardCategory = () => {
+    const category = classBoardCategories.find((item) => item.id === classShareForm.category && item.categoryId)
+    if (!category) return
+    setEditingClassBoardCategoryId(category.categoryId)
+    setNewClassBoardCategory(category.label)
+  }
+
+  const deleteClassBoardCategory = async () => {
+    const category = classBoardCategories.find((item) => item.id === classShareForm.category && item.categoryId)
+    if (!category || !window.confirm(`Delete the “${category.label}” menu page?`)) return
+
+    setClassFeedError('')
+    try {
+      await apiRequest(`/api/admin/class-board/categories/${category.categoryId}`, { method: 'DELETE' })
+      setClassBoardCategories((current) => current.filter((item) => item.categoryId !== category.categoryId))
+      setClassShareForm((current) => ({ ...current, category: 'assignment' }))
+      setEditingClassBoardCategoryId('')
+      setNewClassBoardCategory('')
+    } catch (err) {
+      setClassFeedError(err.message)
+    }
+  }
+
   const resetClassShareForm = () => {
     setClassShareForm(emptyClassShareForm)
     setClassSharePhotos([])
@@ -1430,6 +1497,7 @@ const Adminpage = () => {
     }
 
     const hasAnyMessage =
+      classShareForm.chapterName.trim() ||
       classShareForm.message.trim() ||
       classShareForm.documentLink.trim() ||
       selectedTargets.some((target) => target.message.trim())
@@ -1444,6 +1512,7 @@ const Adminpage = () => {
 
     try {
       const formData = new FormData()
+      formData.append('chapterName', classShareForm.chapterName.trim())
       formData.append('message', classShareForm.message)
       formData.append('category', classShareForm.category || 'assignment')
       formData.append('documentLink', classShareForm.documentLink.trim())
@@ -1602,6 +1671,7 @@ const Adminpage = () => {
     setEditingClassPostId(post.id)
     setSelectedClassFeedId(post.classId || selectedClassFeedId)
     setClassShareForm({
+      chapterName: post.chapterName || '',
       message: post.message || '',
       category: post.category || 'assignment',
       documentLink: post.documentLink || '',
@@ -1651,16 +1721,19 @@ const Adminpage = () => {
   const selectedClassTargetCount = classShareTargets.filter((target) => target.enabled).length
   const groupedClassPosts = useMemo(
     () => {
+      const menuCategories = classBoardCategories.length
+        ? classBoardCategories.map((category) => ({ value: category.id, label: category.label }))
+        : CLASS_POST_CATEGORIES
       const visibleCategories = classBoardCategoryFilter === 'all'
-        ? CLASS_POST_CATEGORIES
-        : CLASS_POST_CATEGORIES.filter((category) => category.value === classBoardCategoryFilter)
+        ? menuCategories
+        : menuCategories.filter((category) => category.value === classBoardCategoryFilter)
 
       return visibleCategories.map((category) => ({
         ...category,
         posts: classPosts.filter((post) => (post.category || 'assignment') === category.value),
       }))
     },
-    [classBoardCategoryFilter, classPosts],
+    [classBoardCategories, classBoardCategoryFilter, classPosts],
   )
   const visibleClassPostCount = useMemo(
     () => groupedClassPosts.reduce((sum, group) => sum + group.posts.length, 0),
@@ -1890,8 +1963,22 @@ const Adminpage = () => {
             </div>
           </div>
 
+          <div className="mt-5 flex justify-end">
+            <label className="grid gap-1.5 text-xs font-black uppercase tracking-[0.16em] text-slate-500">
+              Science filter
+              <select
+                value={science}
+                onChange={(event) => setActiveScience(event.target.value)}
+                className="h-11 min-w-40 rounded-xl border border-cyan-100 bg-white px-3 text-sm font-bold normal-case tracking-normal text-slate-800 shadow-sm outline-none focus:border-cyan-400"
+              >
+                <option value="science1">Science 1</option>
+                <option value="science2">Science 2</option>
+              </select>
+            </label>
+          </div>
+
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'class-board', 'gift', 'streak', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
+            {['students', 'classes', 'gift', 'streak', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -1906,6 +1993,12 @@ const Adminpage = () => {
               className="rounded-full border border-cyan-200 bg-cyan-50 px-5 py-3 text-sm font-black text-cyan-700 transition hover:bg-cyan-100"
             >
               analysis
+            </Link>
+            <Link
+              to="/admin/class-materials"
+              className="rounded-full border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-black text-emerald-700 transition hover:bg-emerald-100"
+            >
+              study materials
             </Link>
           </div>
 
@@ -2252,21 +2345,116 @@ const Adminpage = () => {
                       </p>
 
                       <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
-                        Category
-                        <select
-                          value={classShareForm.category}
-                          onChange={(event) => setClassShareForm({ ...classShareForm, category: event.target.value })}
+                        <span className="flex items-center justify-between gap-2">
+                          Menu page
+                          <span className="text-xs font-medium text-slate-400">Create a new page below</span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={classShareForm.category}
+                            onChange={(event) => setClassShareForm({ ...classShareForm, category: event.target.value })}
+                            className="h-12 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-emerald-400"
+                          >
+                            {(classBoardCategories.length ? classBoardCategories : CLASS_POST_CATEGORIES.map((item) => ({ id: item.value, label: item.label }))).map((category) => (
+                              <option key={category.id} value={category.id}>
+                                {category.label}
+                              </option>
+                            ))}
+                          </select>
+                          {classBoardCategories.find((item) => item.id === classShareForm.category)?.categoryId && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={startEditingClassBoardCategory}
+                                className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-cyan-200 bg-cyan-50 text-cyan-700 transition hover:bg-cyan-100"
+                                aria-label="Edit selected menu"
+                                title="Edit selected menu"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={deleteClassBoardCategory}
+                                className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100"
+                                aria-label="Delete selected menu"
+                                title="Delete selected menu"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <input
+                            value={newClassBoardCategory}
+                            onChange={(event) => setNewClassBoardCategory(event.target.value)}
+                            placeholder={editingClassBoardCategoryId ? 'Rename selected menu' : 'New menu name, e.g. Revision notes'}
+                            className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-400"
+                          />
+                          <button
+                            type="button"
+                            onClick={createClassBoardCategory}
+                            disabled={classBoardCategoryCreating || !newClassBoardCategory.trim()}
+                            className="inline-flex h-11 shrink-0 items-center gap-1 rounded-2xl bg-emerald-600 px-4 text-sm font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <BadgePlus className="h-4 w-4" />
+                            {editingClassBoardCategoryId ? 'Save' : 'Add'}
+                          </button>
+                        </div>
+                        {classBoardCategories.some((item) => item.categoryId) && (
+                          <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 p-3">
+                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-700">Manage custom menus</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {classBoardCategories.filter((item) => item.categoryId).map((category) => (
+                                <div key={category.categoryId} className="inline-flex items-center gap-1 rounded-xl border border-cyan-100 bg-white px-2 py-1.5">
+                                  <span className="px-1 text-xs font-bold text-slate-700">{category.label}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setClassShareForm((current) => ({ ...current, category: category.id }))
+                                      setEditingClassBoardCategoryId(category.categoryId)
+                                      setNewClassBoardCategory(category.label)
+                                    }}
+                                    className="rounded-lg p-1.5 text-cyan-700 transition hover:bg-cyan-50"
+                                    aria-label={`Edit ${category.label}`}
+                                    title="Edit menu"
+                                  >
+                                    <Edit3 className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      if (!window.confirm(`Delete the “${category.label}” menu page?`)) return
+                                      try {
+                                        await apiRequest(`/api/admin/class-board/categories/${category.categoryId}`, { method: 'DELETE' })
+                                        setClassBoardCategories((current) => current.filter((item) => item.categoryId !== category.categoryId))
+                                        setClassShareForm((current) => ({ ...current, category: 'assignment' }))
+                                      } catch (err) {
+                                        setClassFeedError(err.message)
+                                      }
+                                    }}
+                                    className="rounded-lg p-1.5 text-red-700 transition hover:bg-red-50"
+                                    aria-label={`Delete ${category.label}`}
+                                    title="Delete menu"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </label>
+
+                      <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
+                        Chapter name
+                        <input
+                          type="text"
+                          value={classShareForm.chapterName}
+                          onChange={(event) => setClassShareForm({ ...classShareForm, chapterName: event.target.value })}
+                          placeholder="e.g. CHAPTER 1 HEREDITY AND EVOLUTION"
                           className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-emerald-400"
-                        >
-                          {CLASS_POST_CATEGORIES.map((category) => (
-                            <option key={category.value} value={category.value}>
-                              {category.label}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-xs font-medium text-slate-400">
-                          Choose from Assignment, Practice Paper, Important Question, Chapter Wise Marking, Notes, or Test Paper.
-                        </p>
+                        />
                       </label>
 
                       <label className="mt-4 grid gap-2 text-sm font-bold text-slate-600">
@@ -2477,8 +2665,8 @@ const Adminpage = () => {
                           className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-cyan-400"
                         >
                           <option value="all">All categories</option>
-                          {CLASS_POST_CATEGORIES.map((category) => (
-                            <option key={category.value} value={category.value}>
+                          {(classBoardCategories.length ? classBoardCategories : CLASS_POST_CATEGORIES.map((item) => ({ id: item.value, label: item.label }))).map((category) => (
+                            <option key={category.id} value={category.id}>
                               {category.label}
                             </option>
                           ))}

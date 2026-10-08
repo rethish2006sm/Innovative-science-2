@@ -15,6 +15,17 @@ const getLocalDateKey = (date) => {
   return `${year}-${month}-${day}`
 }
 
+const formatTimeUntilTomorrow = () => {
+  const now = new Date()
+  const tomorrow = new Date(now)
+  tomorrow.setHours(24, 0, 0, 0)
+  const remainingSeconds = Math.max(0, Math.ceil((tomorrow - now) / 1000))
+  const hours = Math.floor(remainingSeconds / 3600)
+  const minutes = Math.floor((remainingSeconds % 3600) / 60)
+  const seconds = remainingSeconds % 60
+  return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s left`
+}
+
 const polarToCartesian = (center, radius, angle) => {
   const radians = ((angle - 90) * Math.PI) / 180
   return {
@@ -209,6 +220,7 @@ const Homepage = () => {
   const [selectedClassId, setSelectedClassId] = useState(() => getStoredAuth()?.user?.classId || '')
   const [chapters, setChapters] = useState([])
   const [dailyStreakData, setDailyStreakData] = useState(null)
+  const [timeUntilTomorrow, setTimeUntilTomorrow] = useState(formatTimeUntilTomorrow)
   const [featuredFeedback, setFeaturedFeedback] = useState([])
   const [feedbackForm, setFeedbackForm] = useState({ name: '', email: '', message: '' })
   const [feedbackRating, setFeedbackRating] = useState(5)
@@ -230,6 +242,13 @@ const Homepage = () => {
   ])
   const [isAiTeacherSending, setIsAiTeacherSending] = useState(false)
   const canViewClassLeaderboard = Boolean(auth?.user?.classId)
+
+  useEffect(() => {
+    const updateTimeUntilTomorrow = () => setTimeUntilTomorrow(formatTimeUntilTomorrow())
+    const intervalId = window.setInterval(updateTimeUntilTomorrow, 1000)
+
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -580,18 +599,23 @@ const Homepage = () => {
           >
             <motion.div variants={fadeUp} className="mt-3 rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 to-amber-50/70 p-3 min-[380px]:p-3.5 sm:mt-5 sm:rounded-3xl sm:p-5">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-orange-500 text-white shadow-sm sm:h-10 sm:w-10 sm:rounded-2xl">
                     <Flame className="h-5 w-5" fill="currentColor" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">Daily streak</p>
-                    <p className="mt-1 text-sm font-bold text-slate-900">
-                      {dailyStreakData?.streak?.currentStreak || 0} day{dailyStreakData?.streak?.currentStreak === 1 ? '' : 's'} in a row
-                    </p>
+                    <div
+                      className={`mt-1 inline-flex max-w-full items-center gap-1 whitespace-nowrap text-[11px] font-black tracking-tight sm:text-sm ${dailyStreakData?.streak?.currentStreak ? 'text-amber-500' : 'text-slate-400'}`}
+                      aria-label={`${dailyStreakData?.streak?.currentStreak || 0} day streak`}
+                    >
+                      <Flame className="h-4 w-4" fill="currentColor" />
+                      <span>{dailyStreakData?.streak?.currentStreak || 0}</span>
+                      <span className="ml-1 whitespace-nowrap text-[10px] font-bold text-slate-500 sm:text-xs">· {timeUntilTomorrow}</span>
+                    </div>
                   </div>
                 </div>
-                <Link to="/daily-streak" className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-2 text-xs font-bold text-orange-700 shadow-sm transition hover:bg-orange-100">
+                <Link to="/daily-streak" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white px-3 py-2 text-xs font-bold leading-none text-orange-700 shadow-sm transition hover:bg-orange-100">
                   Practice today
                   <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
