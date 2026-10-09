@@ -157,7 +157,7 @@ const AdminClassMaterialsPage = () => {
   const editMaterial = (post) => {
     setEditingPostId(post.id)
     setForm({ chapterName: post.chapterName || '', message: post.message || '', category: post.category || 'assignment', documentLink: post.documentLink || '' })
-    setSelectedClassIds([String(post.classId)])
+    setSelectedClassIds((post.sharedClassIds || [post.classId]).map(String))
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 

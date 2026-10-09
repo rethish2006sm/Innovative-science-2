@@ -52,6 +52,7 @@ const PyqsPage = () => {
   const [selectedMonth, setSelectedMonth] = useState('')
   const scienceLabel = science === 'science1' ? 'Science 1' : 'Science 2'
   const pageTitle = `Class 10 ${scienceLabel}`
+  const studentClassId = auth?.user?.classId?._id || auth?.user?.classId || ''
 
   const selectedPyq =
     pyqs.find((item) => item.id === selectedPyqId) || pyqs[0] || null
@@ -278,6 +279,16 @@ const PyqsPage = () => {
                 <h1 className="font-serif text-4xl font-medium leading-[1.05] tracking-[-0.035em] text-slate-950 sm:text-5xl lg:text-[4.5rem]">
                   {pageTitle}
                 </h1>
+
+                <button
+                  type="button"
+                  onClick={() => navigate(studentClassId ? `/class/${studentClassId}` : '/feedback')}
+                  className={`mt-5 inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-xs font-black transition hover:-translate-y-0.5 sm:text-sm ${studentClassId ? 'border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100' : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}
+                >
+                  {studentClassId ? <BookOpen className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                  {studentClassId ? 'My class' : 'Give feedback'}
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
 
               </div>
 

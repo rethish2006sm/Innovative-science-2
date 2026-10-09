@@ -171,6 +171,11 @@ body {
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
 }
 
+.homepage-action-link > * {
+  position: relative;
+  z-index: 1;
+}
+
 .homepage-action-link::after {
   position: absolute;
   inset: 0;
@@ -189,6 +194,14 @@ body {
 .action-violet:hover { background: #ede9fe; box-shadow: 0 10px 24px rgba(139, 92, 246, 0.16); }
 .action-emerald { border-color: #a7f3d0; background: rgba(236, 253, 245, 0.9); color: #047857; }
 .action-emerald:hover { background: #d1fae5; box-shadow: 0 10px 24px rgba(16, 185, 129, 0.16); }
+.action-cyan { border-color: #a5f3fc; background: rgba(236, 254, 255, 0.9); color: #0e7490; }
+.action-cyan:hover { background: #cffafe; box-shadow: 0 10px 24px rgba(6, 182, 212, 0.16); }
+.action-class-highlight { border-color: #f472b6; background: linear-gradient(100deg, #ec4899 0%, #8b5cf6 52%, #06b6d4 100%); box-shadow: 0 8px 24px rgba(99, 102, 241, 0.24); }
+.action-class-highlight:hover { background: linear-gradient(100deg, #db2777 0%, #7c3aed 52%, #0891b2 100%); box-shadow: 0 12px 30px rgba(99, 102, 241, 0.32); }
+.action-sky { border-color: #bae6fd; background: rgba(240, 249, 255, 0.9); color: #0369a1; }
+.action-sky:hover { background: #e0f2fe; box-shadow: 0 10px 24px rgba(14, 165, 233, 0.16); }
+.action-amber { border-color: #fde68a; background: rgba(255, 251, 235, 0.9); color: #b45309; }
+.action-amber:hover { background: #fef3c7; box-shadow: 0 10px 24px rgba(245, 158, 11, 0.16); }
 
 @keyframes question-bank-scan { 0%, 22% { transform: translateX(-120%); } 58%, 100% { transform: translateX(120%); } }
 @keyframes question-bank-orbit { to { transform: rotate(360deg); } }

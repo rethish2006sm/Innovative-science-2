@@ -2178,10 +2178,14 @@ const publicClassPost = (post) => {
     pdf: normalizedPost.pdf
       ? {
         name: normalizedPost.pdf.originalName || 'attachment.pdf',
+        fileName: normalizedPost.pdf.originalName || 'attachment.pdf',
         contentType: normalizedPost.pdf.contentType || 'application/pdf',
         pdfUrl: `/api/classes/${classIdValue}/posts/${postIdValue}/pdf?v=${normalizedPost.pdf.updatedAt?.getTime() || Date.now()}`,
       }
       : null,
+    ...(Array.isArray(normalizedPost.sharedClassIds)
+      ? { sharedClassIds: normalizedPost.sharedClassIds.map((id) => String(id)) }
+      : {}),
   }
 }
 
@@ -8469,6 +8473,22 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
 
     const posts = await postFinder
     const visiblePosts = loadAll ? posts : posts.slice(0, limit)
+    const shareGroupIds = [...new Set(visiblePosts.map((post) => String(post.shareGroupId || post._id)))]
+    const sharedClassRows = shareGroupIds.length
+      ? await ClassPost.find({
+          $or: [
+            { _id: { $in: shareGroupIds } },
+            { shareGroupId: { $in: shareGroupIds } },
+          ],
+        }).select('shareGroupId classId').lean()
+      : []
+    const sharedClassIdsByGroup = sharedClassRows.reduce((groups, post) => {
+      const groupId = String(post.shareGroupId || post._id)
+      const classIds = groups.get(groupId) || []
+      classIds.push(String(post.classId))
+      groups.set(groupId, classIds)
+      return groups
+    }, new Map())
     const categories = await getClassBoardCategories(classDoc._id)
     const categoryCounts = categories.reduce((accumulator, item) => {
       accumulator[item.id] = item.count
@@ -8482,7 +8502,10 @@ app.get('/api/classes/:classId/feed', authRequired, async (req, res) => {
         description: classDoc.description || '',
         grade: classDoc.grade || '',
       },
-      posts: visiblePosts.map(publicClassPost),
+      posts: visiblePosts.map((post) => publicClassPost({
+        ...post,
+        sharedClassIds: sharedClassIdsByGroup.get(String(post.shareGroupId || post._id)) || [post.classId],
+      })),
       hasMore: loadAll ? false : posts.length > limit,
       categoryCounts,
       categories,

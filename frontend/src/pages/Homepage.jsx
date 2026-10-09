@@ -242,6 +242,7 @@ const Homepage = () => {
   ])
   const [isAiTeacherSending, setIsAiTeacherSending] = useState(false)
   const canViewClassLeaderboard = Boolean(auth?.user?.classId)
+  const studentClassId = auth?.user?.classId?._id || auth?.user?.classId || ''
 
   useEffect(() => {
     const updateTimeUntilTomorrow = () => setTimeUntilTomorrow(formatTimeUntilTomorrow())
@@ -673,11 +674,21 @@ const Homepage = () => {
                 <span className="relative z-10">Question Bank</span>
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
+              <AnimatedActionLink to="/pyqs" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-sky group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+                <BookOpen className="h-4 w-4" />
+                PYQs
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </AnimatedActionLink>
               <AnimatedActionLink to="/chapters" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-neutral group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Browse chapters
               </AnimatedActionLink>
               <AnimatedActionLink to="/test-builder" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-dark group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl px-2.5 py-2.5 text-xs font-bold text-white transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
                 Create test
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </AnimatedActionLink>
+              <AnimatedActionLink to={studentClassId ? `/class/${studentClassId}` : '/feedback'} whileHover={{ scale: 1.03, y: -2 }} whileTap={{ scale: 0.98 }} className={`homepage-action-link group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm ${studentClassId ? 'action-class-highlight text-white' : 'action-amber'}`}>
+                {studentClassId ? <BookOpen className="h-4 w-4" /> : <MessageCircleMore className="h-4 w-4" />}
+                {studentClassId ? 'My class' : 'Feedback'}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
               <AnimatedActionLink to="/profile/performance" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-violet group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
