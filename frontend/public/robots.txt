@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /questions
+Disallow: /profile
+Disallow: /settings
+Disallow: /complete-profile
+Disallow: /daily-streak
+Disallow: /improvement
+Disallow: /test-builder
+Disallow: /signin
+Disallow: /signup
+Disallow: /class/
+Disallow: /battle-mode/create
+Disallow: /battle-mode/join
+Disallow: /battle-mode/room/
+
+Sitemap: https://innovativescience2.onrender.com/sitemap.xml
