@@ -1956,7 +1956,7 @@ const publicTopic = (topic, isAdmin = false) => {
 }
 
 const publicQuestionImageUrl = (question) => (
-  question.questionImage?.data
+  question.questionImage?.data || question.questionImage?.updatedAt
     ? `/api/objective-questions/${question._id}/image?v=${
         question.questionImage.updatedAt?.getTime() || Date.now()
       }&science=${getActiveScience()}`
@@ -1964,7 +1964,7 @@ const publicQuestionImageUrl = (question) => (
 )
 
 const publicAnswerImageUrl = (question) => (
-  question.answerImage?.data
+  question.answerImage?.data || question.answerImage?.updatedAt
     ? `/api/objective-questions/${question._id}/answer-image?v=${
         question.answerImage.updatedAt?.getTime() || Date.now()
       }&science=${getActiveScience()}`
@@ -1973,7 +1973,7 @@ const publicAnswerImageUrl = (question) => (
 
 const publicTheoryImageUrl = (question, kind = 'question') => {
   const image = kind === 'answer' ? question.answerImage : question.questionImage
-  return image?.data
+  return image?.data || image?.updatedAt
     ? `/api/theory-questions/${question._id}/${kind}-image?v=${image.updatedAt?.getTime() || Date.now()}&science=${getActiveScience()}`
     : ''
 }
@@ -6459,23 +6459,12 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
       ...(boardQuestionFilter === 'yes' ? { isBoardQuestion: true } : {}),
       ...(boardQuestionFilter === 'no' ? { isBoardQuestion: { $ne: true } } : {}),
     }
-    const totalQuestions = await ObjectiveQuestion.countDocuments(questionQuery)
-    const totalPages = loadAll
-      ? (totalQuestions ? 1 : 0)
-      : (totalQuestions ? Math.ceil(totalQuestions / limit) : 0)
-    const safePage = totalPages ? Math.min(page, totalPages) : 1
+    const objectiveQuestionCount = await ObjectiveQuestion.countDocuments(questionQuery)
+    const questionProjection = '_id objectiveType question solution options pairs correctOption correctOptions isBoardQuestion questionImage.updatedAt answerImage.updatedAt createdAt'
     let questionQueryBuilder = ObjectiveQuestion.find(questionQuery)
-      .select('_id objectiveType question solution options pairs correctOption correctOptions isBoardQuestion questionImage answerImage createdAt')
+      .select(questionProjection)
       .populate({ path: 'objectiveType', select: 'type topic', populate: { path: 'topic', select: 'name number chapter', populate: { path: 'chapter', select: 'name number' } } })
       .sort({ createdAt: 1, _id: 1 })
-
-    if (!loadAll) {
-      questionQueryBuilder = questionQueryBuilder
-        .skip((safePage - 1) * limit)
-        .limit(limit)
-    }
-
-    const questions = await questionQueryBuilder.lean()
 
     const theoryTypes = await TheoryType.find({
       ...(chapterId ? { $or: [{ chapter: chapterId }, { chapter: null }] } : {}),
@@ -6487,13 +6476,45 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
       theoryType: { $in: theoryTypeIds },
       ...(search ? { $or: [{ question: { $regex: escapeRegex(search), $options: 'i' } }, { answer: { $regex: escapeRegex(search), $options: 'i' } }] } : {}),
     }
-    const theoryQuestions = await TheoryQuestion.find(theoryQuery)
-      .select('_id theoryType chapter topic question answer questionImage answerImage createdAt')
+    const theoryQuestionCount = await TheoryQuestion.countDocuments(theoryQuery)
+    const totalQuestions = objectiveQuestionCount + theoryQuestionCount
+    const totalPages = loadAll
+      ? (totalQuestions ? 1 : 0)
+      : (totalQuestions ? Math.ceil(totalQuestions / limit) : 0)
+    const safePage = totalPages ? Math.min(page, totalPages) : 1
+    const offset = loadAll ? 0 : (safePage - 1) * limit
+    const requestedCount = loadAll ? null : limit
+
+    if (loadAll) {
+      questionQueryBuilder = questionQueryBuilder
+    } else if (offset < objectiveQuestionCount) {
+      questionQueryBuilder = questionQueryBuilder.skip(offset).limit(requestedCount)
+    } else {
+      questionQueryBuilder = null
+    }
+
+    const theoryProjection = '_id theoryType chapter topic question answer questionImage.updatedAt answerImage.updatedAt createdAt'
+    let theoryQueryBuilder = TheoryQuestion.find(theoryQuery)
+      .select(theoryProjection)
       .populate({ path: 'theoryType', select: 'name' })
       .populate({ path: 'topic', select: 'name number' })
       .populate({ path: 'chapter', select: 'name number' })
       .sort({ createdAt: 1, _id: 1 })
-      .lean()
+
+    if (!loadAll && offset < totalQuestions) {
+      const theoryOffset = Math.max(0, offset - objectiveQuestionCount)
+      const objectiveRowsOnPage = offset < objectiveQuestionCount ? Math.min(limit, objectiveQuestionCount - offset) : 0
+      theoryQueryBuilder = theoryQueryBuilder
+        .skip(theoryOffset)
+        .limit(Math.max(0, limit - objectiveRowsOnPage))
+    } else if (!loadAll) {
+      theoryQueryBuilder = null
+    }
+
+    const [questions, theoryQuestions] = await Promise.all([
+      questionQueryBuilder ? questionQueryBuilder.lean() : [],
+      theoryQueryBuilder ? theoryQueryBuilder.lean() : [],
+    ])
 
     const formatQuestion = (question) => ({
       _id: question._id,

@@ -84,6 +84,9 @@ const AdminQuestionListPage = () => {
   const [objectiveType, setObjectiveType] = useState('')
   const [boardQuestion, setBoardQuestion] = useState('')
   const [totalQuestions, setTotalQuestions] = useState(0)
+  const [page, setPage] = useState(1)
+  const pageSize = 30
+  const [totalPages, setTotalPages] = useState(0)
 
   const [selectedQuestion, setSelectedQuestion] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -98,7 +101,8 @@ const AdminQuestionListPage = () => {
 
     try {
       const params = new URLSearchParams({
-        limit: 'all',
+        limit: String(pageSize),
+        page: String(page),
       })
 
       if (search.trim()) params.set('search', search.trim())
@@ -112,12 +116,17 @@ const AdminQuestionListPage = () => {
       setChapters(data.chapters || [])
       setObjectiveTypes((data.objectiveTypes || []).filter((type) => type !== 'match-the-following'))
       setTotalQuestions(Number(data.totalQuestions || 0))
+      setTotalPages(Number(data.totalPages || 0))
     } catch (err) {
       setError(err.message || 'Could not load questions.')
       setQuestions([])
     } finally {
       setLoading(false)
     }
+  }, [boardQuestion, chapterId, objectiveType, page, search])
+
+  useEffect(() => {
+    setPage(1)
   }, [boardQuestion, chapterId, objectiveType, search])
 
   useEffect(() => {
@@ -445,21 +454,16 @@ const AdminQuestionListPage = () => {
               ))}
             </div>
           ) : questions.length > 0 ? (
-            <motion.div
-              layout
-              className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
-            >
-              <AnimatePresence mode="popLayout">
-                {questions.map((question, itemIndex) => (
-                  <QuestionCard
-                    key={question._id}
-                    question={question}
-                    index={itemIndex + 1}
-                    onOpen={() => openQuestion(question)}
-                  />
-                ))}
-              </AnimatePresence>
-            </motion.div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {questions.map((question, itemIndex) => (
+                <QuestionCard
+                  key={question._id}
+                  question={question}
+                  index={(page - 1) * pageSize + itemIndex + 1}
+                  onOpen={() => openQuestion(question)}
+                />
+              ))}
+            </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-12 text-center">
               <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400">
@@ -484,6 +488,30 @@ const AdminQuestionListPage = () => {
             </div>
           )}
         </section>
+
+        {totalPages > 1 && (
+          <nav className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Question pages">
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={loading || page <= 1}
+              className={`${buttonBase} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`}
+            >
+              <ChevronLeft size={17} /> Previous
+            </button>
+            <span className="text-xs font-bold tabular-nums text-slate-500 sm:text-sm">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={loading || page >= totalPages}
+              className={`${buttonBase} bg-slate-950 text-white hover:bg-slate-800`}
+            >
+              Next <ChevronRight size={17} />
+            </button>
+          </nav>
+        )}
 
       </div>
 
@@ -524,15 +552,9 @@ const AdminQuestionListPage = () => {
 }
 
 const QuestionCard = ({ question, index, onOpen }) => (
-  <motion.button
-    layout
+  <button
     type="button"
     onClick={onOpen}
-    whileTap={{ scale: 0.99 }}
-    initial={{ opacity: 0, y: 8 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, y: -5 }}
-    transition={{ duration: 0.18 }}
     className="group flex min-h-[150px] w-full flex-col rounded-2xl border border-slate-200/90 bg-white p-4 text-left shadow-sm transition-colors duration-200 hover:border-cyan-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-cyan-100 sm:min-h-[165px] sm:p-5"
   >
     <div className="flex w-full items-start gap-3">
@@ -556,6 +578,17 @@ const QuestionCard = ({ question, index, onOpen }) => (
         <p className="mt-3 line-clamp-3 break-words text-sm font-bold leading-6 text-slate-800 sm:text-[15px]">
           {getQuestionTitle(question)}
         </p>
+
+        {question.imageUrl && ['diagram-based-question', 'complete-the-tables'].includes(question.objectiveType) && (
+          <div className="mt-3 h-16 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-1.5 sm:h-20">
+            <img
+              src={assetUrl(question.imageUrl)}
+              alt="Question preview"
+              loading="lazy"
+              className="h-full w-full object-contain"
+            />
+          </div>
+        )}
       </div>
 
       <Eye
@@ -579,7 +612,7 @@ const QuestionCard = ({ question, index, onOpen }) => (
         </>
       )}
     </div>
-  </motion.button>
+  </button>
 )
 
 const FilterSelect = ({ value, onChange, options, ariaLabel, tone = 'cyan' }) => {
