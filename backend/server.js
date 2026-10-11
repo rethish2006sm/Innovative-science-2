@@ -3585,19 +3585,33 @@ const dailyChallengePayload = (challenge, questions, streak) => {
 
 const getEligibleDailyChapterIds = async (userId) => {
   const attempts = await PracticeAttempt.find({ user: userId, attemptType: 'practice' })
-    .select('createdAt questionBreakdown')
+    .select('createdAt chapterIds questionBreakdown')
     .sort({ createdAt: -1 })
     .lean()
   const latestAttemptByChapter = new Map()
 
   attempts.forEach((attempt) => {
-    ;(attempt.questionBreakdown || []).forEach((item) => {
+    const answeredItems = (attempt.questionBreakdown || []).filter((item) => (
+      item.questionId && ['correct', 'wrong'].includes(item.status)
+    ))
+
+    answeredItems.forEach((item) => {
       // Only answered regular-practice questions unlock a chapter. A skipped
       // question must never make its chapter eligible for the daily challenge.
-      if (!item.questionId || !['correct', 'wrong'].includes(item.status) || !item.chapterId) return
+      if (!item.chapterId) return
       const chapterId = String(item.chapterId)
       if (!latestAttemptByChapter.has(chapterId)) latestAttemptByChapter.set(chapterId, attempt.createdAt)
     })
+
+    // Some older attempts have the chapter on the attempt but not on each
+    // question row. If at least one question was answered and the attempt
+    // belongs to one chapter, preserve that chapter's eligibility.
+    if (answeredItems.length && attempt.chapterIds?.length === 1) {
+      const chapterId = String(attempt.chapterIds[0])
+      if (chapterId && !latestAttemptByChapter.has(chapterId)) {
+        latestAttemptByChapter.set(chapterId, attempt.createdAt)
+      }
+    }
   })
 
   // Newer practised chapters are considered first by the daily selector.
@@ -3626,36 +3640,23 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
       populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } },
     }).lean()
     : []
-  const chapterRank = new Map(eligibleChapterIds.map((chapterId, index) => [chapterId, index]))
   const filtered = candidates
     .filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
     .filter((question) => !dailyExcludedObjectiveTypes.has(question.objectiveType?.type))
     // Do not repeat a question within the same calendar month. Questions
     // become eligible again automatically when the next month starts.
     .filter((question) => !usedQuestionIds.has(String(question._id)))
-  const byType = new Map()
   const byChapter = new Map()
-  const rankQuestion = (question) => {
+  shuffle(filtered).forEach((question) => {
     const chapter = String(question.objectiveType?.topic?.chapter?._id || '')
-    return {
-      question,
-      chapterRank: chapterRank.get(chapter) ?? eligibleChapterIds.length,
-    }
-  }
-  const ranked = shuffle(filtered).map(rankQuestion).sort((first, second) => (
-    first.chapterRank - second.chapterRank
-  ))
-  ranked.forEach(({ question }) => {
-    const type = question.objectiveType?.type || 'other'
-    const chapter = String(question.objectiveType?.topic?.chapter?._id || '')
-    if (!byType.has(type)) byType.set(type, [])
     if (!byChapter.has(chapter)) byChapter.set(chapter, [])
-    byType.get(type).push(question)
     byChapter.get(chapter).push(question)
   })
+
   const selected = []
   const used = new Set()
   const counts = new Map()
+  const targetQuestionCount = 20
   const take = (question) => {
     if (!question || used.has(String(question._id))) return false
     const type = question.objectiveType?.type || 'other'
@@ -3665,39 +3666,49 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
     used.add(String(question._id)); selected.push(question); counts.set(type, count + 1)
     return true
   }
-  const takeMixed = (pool, limit) => {
-    const queues = [...pool.reduce((groups, question) => {
-      const type = question.objectiveType?.type || 'other'
-      if (!groups.has(type)) groups.set(type, [])
-      groups.get(type).push(question)
-      return groups
-    }, new Map()).values()]
-    let cursor = 0
-    while (selected.length < limit && queues.some((queue) => queue.length)) {
-      const queue = queues[cursor % queues.length]
-      cursor += 1
-      if (queue?.length) take(queue.shift())
+
+  /*
+   * Build one shuffled queue per chapter and take one question from each
+   * queue in turn. This gives every solved chapter the same quota (within
+   * one question), while chapters with fewer questions naturally give their
+   * unused slots to the remaining chapters.
+   */
+  const chapterQueues = eligibleChapterIds
+    .map((chapterId) => shuffle(byChapter.get(chapterId) || []))
+    .filter((queue) => queue.length)
+
+  let cursor = 0
+  while (selected.length < targetQuestionCount && chapterQueues.length) {
+    const queue = chapterQueues[cursor % chapterQueues.length]
+    cursor += 1
+
+    // Find the first question that still satisfies the existing type caps.
+    // Removing rejected questions prevents a chapter with only capped types
+    // from blocking the round-robin loop.
+    let selectedFromQueue = false
+    while (queue.length && !selectedFromQueue) {
+      const question = queue.shift()
+      selectedFromQueue = take(question)
+    }
+
+    if (!queue.length) {
+      chapterQueues.splice((cursor - 1) % chapterQueues.length, 1)
+      cursor = chapterQueues.length ? cursor % chapterQueues.length : 0
     }
   }
 
-  const boardQuestions = ranked.filter(({ question }) => question.isBoardQuestion).map(({ question }) => question)
-  const regularQuestions = ranked.filter(({ question }) => !question.isBoardQuestion).map(({ question }) => question)
-  // Prefer board questions, but retain a mixed set and use regular questions
-  // to complete the challenge when the board bank is smaller.
-  takeMixed(boardQuestions, Math.min(14, boardQuestions.length))
-  takeMixed(regularQuestions, 20)
-  takeMixed(boardQuestions, 20)
-
-  /* Keep chapter coverage broad when the preferred pools contain enough data. */
-  const chapterQueues = [...byChapter.values()].map((queue) => shuffle(queue))
-  let cursor = 0
-  while (selected.length < 20 && chapterQueues.some((queue) => queue.length)) {
-    const queue = chapterQueues[cursor % chapterQueues.length]
-    cursor += 1
-    if (queue?.length) take(queue.shift())
+  // If type caps or a small question bank prevent a complete set, fill from
+  // any remaining eligible question without sacrificing the monthly no-repeat
+  // rule. The normal case already has balanced chapter coverage above.
+  if (selected.length < targetQuestionCount) {
+    shuffle(filtered).forEach((question) => {
+      if (selected.length < targetQuestionCount) take(question)
+    })
   }
-  if (selected.length < 20) shuffle(filtered).forEach((question) => { if (selected.length < 20) take(question) })
-  return selected
+
+  // Selection is chapter-balanced; presentation is still fully shuffled so
+  // users do not see a predictable chapter sequence.
+  return shuffle(selected)
 }
 
 const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
