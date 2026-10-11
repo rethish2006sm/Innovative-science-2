@@ -6510,6 +6510,7 @@ app.get('/api/questions', optionalAuth, async (req, res) => {
       objectiveTypeId: question.objectiveType?._id || null,
       topicName: question.objectiveType?.topic?.name || '',
       topicNumber: question.objectiveType?.topic?.number || null,
+      topicId: question.objectiveType?.topic?._id || null,
       chapterId: question.objectiveType?.topic?.chapter?._id || null,
       chapterName: question.objectiveType?.topic?.chapter?.name || '',
       chapterNumber: question.objectiveType?.topic?.chapter?.number || null,

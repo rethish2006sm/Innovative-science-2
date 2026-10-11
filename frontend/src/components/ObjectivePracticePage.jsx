@@ -221,6 +221,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const isSignedIn = Boolean(auth?.token)
   const boardOnly = searchParams.get('boardOnly') === '1' || searchParams.get('boardOnly') === 'true'
+  const editQuestionId = searchParams.get('editQuestion') || ''
   const boardQuery = boardOnly ? '?boardOnly=1' : ''
   const isTrueFalse = objectiveType === 'true-or-false'
   const isCorrelation = objectiveType === 'correlation'
@@ -471,6 +472,18 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       isBoardQuestion: Boolean(question.isBoardQuestion),
     })
   }
+
+  useEffect(() => {
+    if (!isAdmin || isLoading || !editQuestionId || editingQuestion) return
+
+    const questionToEdit = questions.find((question) => String(question._id) === String(editQuestionId))
+    if (!questionToEdit) return
+
+    startEditQuestion(questionToEdit)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('editQuestion')
+    setSearchParams(nextParams, { replace: true })
+  }, [editQuestionId, editingQuestion, isAdmin, isLoading, questions])
 
   const resetQuestionForm = () => {
     setEditingQuestion(null)

@@ -16,9 +16,12 @@ import {
   Download,
   ZoomIn,
   ZoomOut,
+  Edit3,
+  Trash2,
+  Award,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 
@@ -70,6 +73,7 @@ const buttonBase =
 const AdminQuestionListPage = () => {
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
+  const navigate = useNavigate()
 
   const [questions, setQuestions] = useState([])
   const [chapters, setChapters] = useState([])
@@ -85,6 +89,7 @@ const AdminQuestionListPage = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [actionQuestionId, setActionQuestionId] = useState('')
   const searchInputRef = useRef(null)
 
   const loadQuestions = useCallback(async () => {
@@ -140,6 +145,60 @@ const AdminQuestionListPage = () => {
 
   const openQuestion = (question) => {
     setSelectedQuestion(question)
+  }
+
+  const updateBoardStatus = async (question) => {
+    if (!isAdmin || actionQuestionId) return
+
+    setActionQuestionId(question._id)
+    setError('')
+    const nextIsBoardQuestion = !question.isBoardQuestion
+
+    try {
+      await apiRequest(`/api/objective-questions/${question._id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isBoardQuestion: nextIsBoardQuestion }),
+      })
+
+      setQuestions((current) => current.map((item) => (
+        item._id === question._id ? { ...item, isBoardQuestion: nextIsBoardQuestion } : item
+      )))
+      setSelectedQuestion((current) => current?._id === question._id
+        ? { ...current, isBoardQuestion: nextIsBoardQuestion }
+        : current)
+    } catch (err) {
+      setError(err.message || 'Could not update board-question status.')
+    } finally {
+      setActionQuestionId('')
+    }
+  }
+
+  const deleteQuestion = async (question) => {
+    if (!isAdmin || actionQuestionId) return
+    if (!window.confirm('Delete this question permanently?')) return
+
+    setActionQuestionId(question._id)
+    setError('')
+
+    try {
+      await apiRequest(`/api/objective-questions/${question._id}`, { method: 'DELETE' })
+      setQuestions((current) => current.filter((item) => item._id !== question._id))
+      setSelectedQuestion(null)
+      setTotalQuestions((current) => Math.max(0, current - 1))
+    } catch (err) {
+      setError(err.message || 'Could not delete question.')
+    } finally {
+      setActionQuestionId('')
+    }
+  }
+
+  const editQuestion = (question) => {
+    if (!isAdmin || !question.topicId || !question.chapterNumber || !question.objectiveType) {
+      setError('This question is missing its topic details, so it cannot be edited here.')
+      return
+    }
+
+    navigate(`/chapters/${question.chapterNumber}/topics/${question.topicId}/objectives/${question.objectiveType}?editQuestion=${question._id}`)
   }
 
   const navigateQuestion = (direction) => {
@@ -453,6 +512,10 @@ const AdminQuestionListPage = () => {
             onClose={() => setSelectedQuestion(null)}
             onPrevious={() => navigateQuestion(-1)}
             onNext={() => navigateQuestion(1)}
+            actionQuestionId={actionQuestionId}
+            onEdit={() => editQuestion(selectedQuestion)}
+            onDelete={() => deleteQuestion(selectedQuestion)}
+            onToggleBoard={() => updateBoardStatus(selectedQuestion)}
           />
         )}
       </AnimatePresence>
@@ -731,6 +794,10 @@ const QuestionModal = ({
   onClose,
   onPrevious,
   onNext,
+  actionQuestionId,
+  onEdit,
+  onDelete,
+  onToggleBoard,
 }) => {
   const [selected, setSelected] = useState(null)
   const [submitted, setSubmitted] = useState(false)
@@ -1083,7 +1150,23 @@ const QuestionModal = ({
 
           {/* Admin answer key */}
           {isAdmin && (
-            <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="mt-5 space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={onEdit} disabled={Boolean(actionQuestionId)} className={`${buttonBase} flex-1 border border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100 sm:flex-none`}>
+                  <Edit3 size={16} />
+                  Edit
+                </button>
+                <button type="button" onClick={onDelete} disabled={Boolean(actionQuestionId)} className={`${buttonBase} flex-1 border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 sm:flex-none`}>
+                  <Trash2 size={16} />
+                  Delete
+                </button>
+                <button type="button" onClick={onToggleBoard} disabled={Boolean(actionQuestionId)} className={`${buttonBase} flex-1 border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 sm:flex-none`}>
+                  <Award size={16} />
+                  {actionQuestionId ? 'Saving...' : question.isBoardQuestion ? 'Remove board status' : 'Make board question'}
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
               <div className="flex items-center gap-2">
                 <CheckCircle2
                   size={18}
@@ -1097,6 +1180,7 @@ const QuestionModal = ({
               <p className="mt-2 break-words text-sm font-bold leading-6 text-emerald-950">
                 {correctAnswerText}
               </p>
+              </div>
             </div>
           )}
         </div>
