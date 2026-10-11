@@ -212,6 +212,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [doneStates, setDoneStates] = useState({})
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [boardSavingQuestionId, setBoardSavingQuestionId] = useState('')
   const [error, setError] = useState('')
   const practiceHistoryEntry = useRef(false)
   const [pendingResult, setPendingResult] = useState(null)
@@ -901,19 +902,27 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   }
 
   const toggleBoardQuestion = async (question) => {
-    setIsSaving(true)
+    const nextIsBoardQuestion = !question.isBoardQuestion
+    setBoardSavingQuestionId(question._id)
     setError('')
 
     try {
       await apiRequest(`/api/objective-questions/${question._id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ isBoardQuestion: !question.isBoardQuestion }),
+        body: JSON.stringify({ isBoardQuestion: nextIsBoardQuestion }),
       })
-      await loadPractice()
+
+      // Keep the admin question list in place instead of reloading the whole
+      // practice set and resetting the dashboard/practice state.
+      setQuestions((current) => current.map((item) => (
+        item._id === question._id
+          ? { ...item, isBoardQuestion: nextIsBoardQuestion }
+          : item
+      )))
     } catch (err) {
       setError(err.message)
     } finally {
-      setIsSaving(false)
+      setBoardSavingQuestionId('')
     }
   }
 
@@ -1320,15 +1329,6 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                       </button>
                       <button
                         type="button"
-                        onClick={() => toggleBoardQuestion(question)}
-                        disabled={isSaving}
-                        className={`rounded-full border px-3 text-[10px] font-black uppercase tracking-wide transition disabled:cursor-not-allowed disabled:opacity-50 ${question.isBoardQuestion ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-stone-200 bg-white text-stone-500 hover:bg-stone-100 hover:text-stone-900'}`}
-                        aria-label={question.isBoardQuestion ? 'Remove board question status' : 'Mark as board question'}
-                      >
-                        {question.isBoardQuestion ? 'Board' : 'Make board'}
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => deleteQuestion(question._id)}
                         className="grid h-10 w-10 place-items-center rounded-full border border-red-100 bg-white text-red-500 transition hover:bg-red-50"
                         aria-label="Delete question"
@@ -1353,6 +1353,19 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                       </div>
                     ))}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleBoardQuestion(question)}
+                    disabled={boardSavingQuestionId === question._id}
+                    className={`mt-4 h-11 w-full rounded-2xl border text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${question.isBoardQuestion ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-stone-300 bg-white text-stone-700 hover:border-amber-400 hover:bg-amber-50 hover:text-amber-900'}`}
+                    aria-label={question.isBoardQuestion ? 'Remove board question status' : 'Mark as board question'}
+                  >
+                    {boardSavingQuestionId === question._id
+                      ? 'Saving...'
+                      : question.isBoardQuestion
+                        ? 'Remove board question'
+                        : 'Make this a board question'}
+                  </button>
                 </article>
               )) : (
                 <div className="rounded-2xl border border-dashed border-stone-200 bg-stone-50/50 p-12 text-center">
