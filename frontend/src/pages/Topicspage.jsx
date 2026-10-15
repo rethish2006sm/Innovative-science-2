@@ -5,6 +5,7 @@ import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 import { getFeedbackClientKey } from '../lib/feedbackClient'
 import { sendCurrentDevicePush } from '../lib/webPush'
+import PageBreadcrumbs from '../components/PageBreadcrumbs'
 
 const emptyForm = { name: '', description: '', studyText: '' }
 
@@ -313,16 +314,10 @@ const Topicspage = () => {
     <section className="min-h-[calc(100vh-6rem)] w-full bg-[#fbfbfa] px-4 py-2 text-stone-800 sm:px-6 sm:py-5 lg:px-10">
       <div className="mx-auto w-full max-w-none">
         <div className="mt-0 border-b border-stone-200 pb-5 sm:mt-2 sm:pb-6">
-          <button
-            type="button"
-            onClick={() => navigate('/chapters')}
-            className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
-            aria-label="Back to chapters"
-            title="Back to chapters"
-          >
-            <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
-            <span>Back</span>
-          </button>
+          <div className="mb-3 flex flex-col items-start gap-1.5">
+            <button type="button" onClick={() => navigate('/chapters')} className="group inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700" aria-label="Back to chapters" title="Back to chapters"><ArrowLeft className="h-4 w-4" /><span>Back</span></button>
+            <PageBreadcrumbs items={[{ label: 'Chapters', to: '/chapters' }, { label: chapter.name }]} />
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="font-serif text-3xl tracking-tight text-stone-950 sm:text-4xl lg:text-5xl">{chapter.name}</h1>
             {isAdmin && <button type="button" onClick={() => navigate(`/chapters/${chapterNumber}/theory-questions`)} className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2 text-xs font-bold text-white transition hover:bg-cyan-800 sm:text-sm"><Plus className="h-4 w-4" /> Theory question</button>}

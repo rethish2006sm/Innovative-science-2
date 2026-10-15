@@ -5,6 +5,7 @@ import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 import StarFeedbackModal from './StarFeedbackModal'
 import { hasFeedbackFlowBeenSubmitted } from '../lib/feedbackFlow'
+import PageBreadcrumbs from './PageBreadcrumbs'
 
 const emptyQuestionForm = {
   question: '',
@@ -1238,22 +1239,22 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     <section className={`practice-feedback-screen min-h-screen text-stone-800 ${mode === 'practice' && currentFeedback ? `is-${currentFeedback}` : ''} ${mode === 'practice' ? 'px-2 py-1 sm:px-3 lg:px-4' : 'px-3 py-2 sm:px-5 sm:py-3 lg:px-6'}`}>
       <div className={`mx-auto w-full ${mode === 'practice' || mode === 'dashboard' ? 'max-w-[1180px]' : 'max-w-6xl'}`}>
         {mode === 'dashboard' ? (
-          <Link
+          <div className="mb-3 flex flex-col items-start gap-1.5"><Link
             to={`/chapters/${chapterNumber}/topics/${topicId}/objectives${boardQuery}`}
-            className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
+            className="group inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700"
           >
             <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
             <span>Back</span>
-          </Link>
+          </Link><PageBreadcrumbs items={[{ label: 'Chapters', to: '/chapters' }, { label: chapter?.name || `Chapter ${chapterNumber}`, to: `/chapters/${chapterNumber}/topics` }, { label: topic?.name || 'Topic', to: `/chapters/${chapterNumber}/topics/${topicId}/objectives${boardQuery}` }, { label: objective?.name || objective?.type || 'Objective' }]} /></div>
         ) : (
-          <button
+          <div className="mb-3 flex flex-col items-start gap-1.5"><button
             type="button"
             onClick={returnToQuestionList}
-            className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
+            className="group inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700"
           >
             <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
             <span>Back</span>
-          </button>
+          </button><PageBreadcrumbs items={[{ label: 'Chapters', to: '/chapters' }, { label: chapter?.name || `Chapter ${chapterNumber}`, to: `/chapters/${chapterNumber}/topics` }, { label: topic?.name || 'Topic', to: `/chapters/${chapterNumber}/topics/${topicId}/objectives${boardQuery}` }, { label: objective?.name || objective?.type || 'Objective' }]} /></div>
         )}
         <div className={`${mode === 'practice' ? 'mt-3' : 'mt-4 sm:mt-5'} flex items-center gap-3 border-b border-stone-200 pb-3 sm:gap-4 sm:pb-4`}>
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-stone-900 text-white sm:h-14 sm:w-14">

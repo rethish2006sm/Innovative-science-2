@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, BookOpen, Plus, Trash2 } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
+import PageBreadcrumbs from '../components/PageBreadcrumbs'
 
 export const objectiveOptions = [
   { type: 'mcqs', label: 'MCQs', description: 'Multiple choice objective questions.' },
@@ -125,16 +126,10 @@ const Objectivepage = () => {
     <section className="min-h-[calc(100vh-6rem)] w-full bg-[#fbfbfa] px-4 py-2 text-stone-800 sm:px-6 sm:py-5 lg:px-10">
       <div className="mx-auto w-full max-w-none">
         <div className="mt-0 border-b border-stone-200 pb-5 sm:mt-2 sm:pb-6">
-          <button
-            type="button"
-            onClick={() => navigate(`/chapters/${chapterNumber}/topics${boardQuery}`)}
-            className="group mb-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all duration-300 hover:-translate-x-0.5 hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 hover:shadow-[0_8px_20px_rgba(8,145,178,0.12)] focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2"
-            aria-label="Back to topics"
-            title="Back to topics"
-          >
-            <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-0.5" />
-            <span>Back</span>
-          </button>
+          <div className="mb-3 flex flex-col items-start gap-1.5">
+            <button type="button" onClick={() => navigate(`/chapters/${chapterNumber}/topics${boardQuery}`)} className="group inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.05)] transition-all hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700" aria-label="Back to topics" title="Back to topics"><ArrowLeft className="h-4 w-4" /><span>Back</span></button>
+            <PageBreadcrumbs items={[{ label: 'Chapters', to: '/chapters' }, { label: chapter.name, to: `/chapters/${chapterNumber}/topics${boardQuery}` }, { label: topic.name }]} />
+          </div>
           <h1 className="font-serif text-3xl tracking-tight text-stone-950 sm:text-4xl lg:text-5xl">
             {topic.name}
           </h1>

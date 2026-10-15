@@ -3503,6 +3503,25 @@ const previousLocalDate = (localDate) => {
   return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10)
 }
 
+const nextLocalDate = (localDate) => {
+  const [year, month, day] = String(localDate).split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10)
+}
+
+const localMidnightAsUtc = (localDate, timezone) => {
+  const reference = new Date(`${localDate}T00:00:00.000Z`)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(reference).reduce((result, part) => {
+    if (part.type !== 'literal') result[part.type] = part.value
+    return result
+  }, {})
+  const localAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second))
+  return new Date(reference.getTime() - (localAsUtc - reference.getTime()))
+}
+
 const nextLocalMonth = (localDate) => {
   const [year, month] = String(localDate).split('-').map(Number)
   return month === 12
@@ -6122,6 +6141,8 @@ app.get('/api/progress/me', authRequired, async (req, res) => {
 
 app.get('/api/progress/performance', authRequired, async (req, res) => {
   try {
+    const requestedStudentId = String(req.query.studentId || '').trim()
+    const performanceUserId = requestedStudentId && req.user.isAdmin ? requestedStudentId : String(req.user._id)
     const [chapters, topics, objectiveTypes, questionCounts, attempts] = await Promise.all([
       Chapter.find().select('_id number name').sort({ number: 1 }).lean(),
       Topic.find().select('_id chapter number name').sort({ number: 1 }).lean(),
@@ -6129,7 +6150,7 @@ app.get('/api/progress/performance', authRequired, async (req, res) => {
       ObjectiveQuestion.aggregate([
         { $group: { _id: '$objectiveType', count: { $sum: 1 } } },
       ]),
-      PracticeAttempt.find({ user: req.user._id })
+      PracticeAttempt.find({ user: performanceUserId })
         .sort({ createdAt: 1 })
         .select('createdAt questionBreakdown')
         .lean(),
@@ -6358,7 +6379,9 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
       .lean()
 
     const userIds = users.map((user) => user._id)
-    const [streaks, dailyStats] = await Promise.all([
+    const timezone = dailyTimezone(req)
+    const today = localDateForTimezone(timezone)
+    const [streaks, dailyStats, todayChallenges] = await Promise.all([
       StudentStreak.find({ user: { $in: userIds }, subject: getActiveScience() })
         .select('user currentStreak longestStreak lastCreditedDate')
         .lean(),
@@ -6374,17 +6397,21 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
           },
         },
       ]),
+      DailyChallenge.find({ user: { $in: userIds }, subject: getActiveScience(), localDate: today })
+        .select('user status attemptedCount correctCount completedAt')
+        .lean(),
     ])
 
     const streakMap = new Map(streaks.map((streak) => [String(streak.user), streak]))
     const dailyMap = new Map(dailyStats.map((item) => [String(item._id), item]))
-    const timezone = dailyTimezone(req)
-    const today = localDateForTimezone(timezone)
+    const todayChallengeMap = new Map(todayChallenges.map((challenge) => [String(challenge.user), challenge]))
+    const streakDayEndsAt = localMidnightAsUtc(nextLocalDate(today), timezone).toISOString()
     const onlineCutoff = Date.now() - (15 * 60 * 1000)
     const students = users.map((user) => {
       const row = buildAdminStudentRow(user)
       const streak = streakMap.get(String(user._id)) || {}
       const daily = dailyMap.get(String(user._id)) || {}
+      const todayChallenge = todayChallengeMap.get(String(user._id)) || {}
       const lastLoginAt = user.lastLoginAt || null
       const lastCreditedDate = String(streak.lastCreditedDate || '')
       const currentStreakIsActive = lastCreditedDate === today || lastCreditedDate === previousLocalDate(today)
@@ -6398,6 +6425,12 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
         currentStreak: currentStreakIsActive ? Number(streak.currentStreak || 0) : 0,
         longestStreak: Number(streak.longestStreak || 0),
         lastCreditedDate: streak.lastCreditedDate || null,
+        streakTodayDone: String(streak.lastCreditedDate || '') === today,
+        streakTodayStatus: todayChallenge.status || 'not_started',
+        streakTodayAttempted: Number(todayChallenge.attemptedCount || 0),
+        streakTodayCorrect: Number(todayChallenge.correctCount || 0),
+        streakDayDate: today,
+        streakDayEndsAt,
         completedDailyChallenges: Number(daily.completedDays || 0),
         dailyAttempts: Number(daily.dailyAttempts || 0),
         dailyCorrect: Number(daily.dailyCorrect || 0),

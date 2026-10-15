@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Edit3, ImagePlus, Plus, Save, Trash2, X } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { apiRequest, assetUrl } from '../api'
+import PageBreadcrumbs from '../components/PageBreadcrumbs'
 
 const emptyType = { name: '', questionMode: 'text', solutionMode: 'text' }
 
@@ -86,7 +87,7 @@ const AddTheoryQuestion = () => {
 
   return <main className="min-h-screen bg-[#fbfbfa] px-4 py-6 text-stone-800 sm:px-8 lg:px-12">
     <div className="mx-auto max-w-4xl">
-      <button type="button" onClick={() => navigate(topicId ? `/chapters/${chapterNumber}/topics/${topicId}/objectives` : `/chapters/${chapterNumber}/topics`)} className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600"><ArrowLeft size={16} /> Back</button>
+      <div className="mb-5 flex flex-col items-start gap-1.5"><button type="button" onClick={() => navigate(topicId ? `/chapters/${chapterNumber}/topics/${topicId}/objectives` : `/chapters/${chapterNumber}/topics`)} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600"><ArrowLeft size={16} /> Back</button><PageBreadcrumbs items={[{ label: 'Chapters', to: '/chapters' }, { label: chapter?.name || `Chapter ${chapterNumber}`, to: topicId ? `/chapters/${chapterNumber}/topics` : undefined }, ...(topicId ? [{ label: topics.find((item) => String(item._id) === String(topicId))?.name || 'Topic', to: `/chapters/${chapterNumber}/topics/${topicId}/objectives` }] : []), { label: 'Theory questions' }]} /></div>
       <h1 className="font-serif text-4xl text-stone-950">Theory questions</h1>
       <p className="mt-2 text-sm text-stone-500">{chapter?.name || `Chapter ${chapterNumber}`} · Create a reusable theory question type and add questions with answers.</p>
       {(error || notice) && <p className={`mt-5 rounded-xl px-4 py-3 text-sm font-bold ${error ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>{error || notice}</p>}

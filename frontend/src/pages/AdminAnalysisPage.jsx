@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import { Activity, BookOpen, Brain, ChevronLeft, Flame, RefreshCw, Search, Shield, Users } from 'lucide-react'
+import { Activity, BookOpen, Brain, CheckCircle2, ChevronLeft, Clock3, Flame, RefreshCw, Search, Shield, Users } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 
@@ -154,7 +154,21 @@ const AnalysisRow = ({ student, view }) => {
     ['Brain cells', Number(student.totalBrainCells || 0)],
     ['Streak', `${Number(student.currentStreak || 0)} days`],
   ]
-  return <article className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate text-lg font-black text-slate-950">{student.name || 'Unnamed student'}</h3>{student.online && <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" title="Online" />}</div><p className="mt-1 truncate text-sm text-slate-500">{student.email || 'No email'} · {student.className || 'No class'}</p><p className="mt-1 text-xs font-semibold text-slate-400">Last login: {formatDate(student.lastLoginAt)}</p></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">{performance.map(([label, value]) => <div key={label} className={`rounded-2xl p-3 text-center ${view === 'brain' && label === 'Brain cells' ? 'bg-violet-50' : view === 'streak' && label === 'Streak' ? 'bg-orange-50' : 'bg-slate-50'}`}><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-slate-950">{value}</p></div>)}</div></div><div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-500"><span className="rounded-full bg-slate-100 px-3 py-1">Daily challenges: {Number(student.completedDailyChallenges || 0)}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-orange-700">Current streak: {Number(student.currentStreak || 0)} days</span><span className="rounded-full bg-slate-100 px-3 py-1">Daily correct: {Number(student.dailyCorrect || 0)}</span></div></article>
+  return <article className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate text-lg font-black text-slate-950">{student.name || 'Unnamed student'}</h3>{student.online && <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" title="Online" />}</div><p className="mt-1 truncate text-sm text-slate-500">{student.email || 'No email'} · {student.className || 'No class'}</p><p className="mt-1 text-xs font-semibold text-slate-400">Last login: {formatDate(student.lastLoginAt)}</p></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">{performance.map(([label, value]) => <div key={label} className={`rounded-2xl p-3 text-center ${view === 'brain' && label === 'Brain cells' ? 'bg-violet-50' : view === 'streak' && label === 'Streak' ? 'bg-orange-50' : 'bg-slate-50'}`}><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-slate-950">{value}</p></div>)}</div></div><div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-500"><span className="rounded-full bg-slate-100 px-3 py-1">Daily challenges: {Number(student.completedDailyChallenges || 0)}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-orange-700">Current streak: {Number(student.currentStreak || 0)} days</span><span className="rounded-full bg-slate-100 px-3 py-1">Daily correct: {Number(student.dailyCorrect || 0)}</span></div>{view === 'streak' && <StreakTracker student={student} />}</article>
+}
+
+const StreakTracker = ({ student }) => {
+  const [remaining, setRemaining] = useState(Math.max(0, new Date(student.streakDayEndsAt || 0).getTime() - Date.now()))
+  useEffect(() => {
+    const update = () => setRemaining(Math.max(0, new Date(student.streakDayEndsAt || 0).getTime() - Date.now()))
+    update()
+    const timer = window.setInterval(update, 30000)
+    return () => window.clearInterval(timer)
+  }, [student.streakDayEndsAt])
+  const totalMinutes = Math.floor(remaining / 60000)
+  const countdown = `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m remaining`
+  const done = Boolean(student.streakTodayDone)
+  return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : 'Today’s streak is not done yet'}</span><span>{remaining ? countdown : 'New streak day started'}</span></div>
 }
 
 export default AdminAnalysisPage

@@ -73,7 +73,7 @@ const LineChart = ({ points }) => {
   )
 }
 
-const AcademicPerformanceDashboard = () => {
+const AcademicPerformanceDashboard = ({ performanceStudentId = '' }) => {
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [range, setRange] = useState('30')
@@ -84,12 +84,13 @@ const AcademicPerformanceDashboard = () => {
   useEffect(() => {
     let active = true
     setLoading(true)
-    apiRequest('/api/progress/performance', { cache: 'no-store', science: 'science2' })
+    const query = performanceStudentId ? `?studentId=${encodeURIComponent(performanceStudentId)}` : ''
+    apiRequest(`/api/progress/performance${query}`, { cache: 'no-store', science: 'science2' })
       .then((result) => { if (active) setData(result) })
       .catch((requestError) => { if (active) setError(requestError.message || 'Could not load performance.') })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [])
+  }, [performanceStudentId])
 
   const attempts = useMemo(() => (data?.attempts || []).flatMap((attempt) => (attempt.questions || []).map((question) => ({ ...question, date: attempt.createdAt }))), [data])
   const windowed = useMemo(() => {

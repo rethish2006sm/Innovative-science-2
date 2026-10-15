@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import {
   BadgePlus,
   BellRing,
@@ -106,6 +106,7 @@ const formatPopupAudienceLabel = (message = {}) => {
 }
 
 const Adminpage = () => {
+  const navigate = useNavigate()
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const [activeTab, setActiveTab] = useState('students')
@@ -1183,8 +1184,7 @@ const Adminpage = () => {
   }, [activeTab])
 
   const openStudentDetail = async (student) => {
-    setSelectedStudent(student)
-    await loadStudentDetail(student.id, student)
+    navigate(`/profile/performance?studentId=${encodeURIComponent(student.id)}`)
   }
 
   const createClass = async (event) => {
