@@ -55,9 +55,11 @@ export const AuthProvider = ({ children }) => {
       body: JSON.stringify({
         idToken,
         firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-        name: profile.name || firebaseUser.displayName || '',
+        // MongoDB is the source of truth for an existing profile. Do not
+        // submit Firebase's possibly stale display name during auth refresh.
+        name: profile.name || (profile.name === '' ? '' : undefined),
         email: firebaseUser.email || '',
-        phoneNumber: profile.phoneNumber || firebaseUser.phoneNumber || '',
+        phoneNumber: profile.phoneNumber || (profile.phoneNumber === '' ? '' : undefined),
         dateOfBirth: profile.dateOfBirth,
         gender: profile.gender,
         bloodGroup: profile.bloodGroup,

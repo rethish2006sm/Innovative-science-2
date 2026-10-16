@@ -77,6 +77,7 @@ const Testbuilderpage = () => {
   const [step, setStep] = useState(1)
   const [generatedTest, setGeneratedTest] = useState(null)
   const [answers, setAnswers] = useState({})
+  const [answerResults, setAnswerResults] = useState({})
   const [revealedAnswers, setRevealedAnswers] = useState({})
   const [doneStates, setDoneStates] = useState({})
   const [markedLater, setMarkedLater] = useState({})
@@ -162,6 +163,7 @@ const Testbuilderpage = () => {
   const resetRunState = () => {
     setGeneratedTest(null)
     setAnswers({})
+    setAnswerResults({})
     setRevealedAnswers({})
     setDoneStates({})
     setMarkedLater({})
@@ -230,6 +232,7 @@ const Testbuilderpage = () => {
         questions: buildDisplayQuestions(data.questions || []),
       })
       setAnswers({})
+      setAnswerResults({})
       setRevealedAnswers({})
       setDoneStates({})
       setMarkedLater({})
@@ -260,26 +263,70 @@ const Testbuilderpage = () => {
     await generateTest()
   }
 
-  const selectAnswer = (questionId, optionIndex) => {
+  const checkAndAdvance = async (question, selectedOption, nextAnswers) => {
+    setIsSubmitting(true)
+
+    try {
+      const data = await apiRequest('/api/tests/check-answer', {
+        method: 'POST',
+        body: JSON.stringify({
+          questionId: question.id,
+          selectedOption,
+        }),
+      })
+
+      setAnswerResults((current) => ({
+        ...current,
+        [question.id]: data,
+      }))
+
+      window.setTimeout(() => {
+        if (currentIndex >= generatedTest.questions.length - 1) {
+          submitTest(nextAnswers)
+        } else {
+          setCurrentIndex((index) => Math.min(index + 1, generatedTest.questions.length - 1))
+        }
+      }, 650)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const selectAnswer = async (questionId, optionIndex) => {
     if (!generatedTest) return
 
     const question = generatedTest.questions.find((item) => item.id === questionId)
+    if (!question || isSubmitting || answerResults[questionId]) return
 
     if (question?.pairs?.length) {
       const pairCount = question.pairs.length
       const currentAnswer = Array.isArray(answers[questionId]) ? answers[questionId] : []
       if (currentAnswer.includes(optionIndex) || currentAnswer.length >= pairCount) return
-      setAnswers({ ...answers, [questionId]: [...currentAnswer, optionIndex] })
+      const nextAnswer = [...currentAnswer, optionIndex]
+      const nextAnswers = { ...answers, [questionId]: nextAnswer }
+      setAnswers(nextAnswers)
+      if (nextAnswer.length === pairCount) {
+        await checkAndAdvance(question, nextAnswer, nextAnswers)
+      }
       return
     }
 
-    setAnswers({ ...answers, [questionId]: optionIndex })
+    const nextAnswers = { ...answers, [questionId]: optionIndex }
+    setAnswers(nextAnswers)
+    await checkAndAdvance(question, optionIndex, nextAnswers)
   }
 
   const clearAnswer = (questionId) => {
     const next = { ...answers }
     delete next[questionId]
     setAnswers(next)
+    setAnswerResults((current) => {
+      const nextResults = { ...current }
+      delete nextResults[questionId]
+      return nextResults
+    })
     setDoneStates((current) => {
       const nextDone = { ...current }
       delete nextDone[questionId]
@@ -313,11 +360,20 @@ const Testbuilderpage = () => {
       return
     }
 
-    setAnswers({ ...answers, [questionId]: 1 })
+    const nextAnswers = { ...answers, [questionId]: 1 }
+    setAnswers(nextAnswers)
     setDoneStates((current) => ({ ...current, [questionId]: true }))
+    setAnswerResults((current) => ({ ...current, [questionId]: { isCorrect: true, isDone: true } }))
+    window.setTimeout(() => {
+      if (currentIndex >= generatedTest.questions.length - 1) {
+        submitTest(nextAnswers)
+      } else {
+        setCurrentIndex((index) => Math.min(index + 1, generatedTest.questions.length - 1))
+      }
+    }, 650)
   }
 
-  const submitTest = async () => {
+  const submitTest = async (answersToSubmit = answers) => {
     if (!generatedTest?.questions?.length) return
 
     if (!auth?.token) {
@@ -334,7 +390,7 @@ const Testbuilderpage = () => {
         body: JSON.stringify({
           answers: generatedTest.questions.map((question) => ({
             questionId: question.id,
-            selectedOption: answers[question.id],
+            selectedOption: answersToSubmit[question.id],
           })),
         }),
       })
@@ -358,6 +414,7 @@ const Testbuilderpage = () => {
   const resetTest = () => {
     setGeneratedTest(null)
     setAnswers({})
+    setAnswerResults({})
     setRevealedAnswers({})
     setDoneStates({})
     setMarkedLater({})
@@ -905,7 +962,7 @@ const Testbuilderpage = () => {
                                     type="button"
                                     onClick={() => selectAnswer(currentQuestion.id, option.originalIndex)}
                                     disabled={selectedOrder !== -1}
-                                    className={`rounded-2xl border px-3 py-3 text-left text-sm font-bold leading-snug transition sm:px-4 sm:text-base ${selectedOrder !== -1 ? 'border-violet-400 bg-violet-50 text-violet-700 shadow-sm' : 'border-stone-200 bg-white text-stone-800 hover:border-stone-400'}`}
+                                    className={`rounded-2xl border px-3 py-3 text-left text-sm font-bold leading-snug transition sm:px-4 sm:text-base ${selectedOrder !== -1 ? answerResults[currentQuestion.id]?.isCorrect ? 'border-emerald-500 bg-emerald-100 text-emerald-800' : answerResults[currentQuestion.id] ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-violet-400 bg-violet-50 text-violet-700 shadow-sm' : 'border-stone-200 bg-white text-stone-800 hover:border-stone-400'}`}
                                   >
                                     {option.text}
                                   </button>
@@ -951,11 +1008,17 @@ const Testbuilderpage = () => {
                                 key={`${currentQuestion.id}-${optionIndex}`}
                                 type="button"
                                 onClick={() => selectAnswer(currentQuestion.id, option.originalIndex)}
-                                className={`rounded-2xl border px-4 py-3.5 text-left text-sm font-bold leading-relaxed transition sm:text-base ${answers[currentQuestion.id] === option.originalIndex ? 'border-emerald-600 bg-emerald-500 text-white shadow-sm' : 'border-stone-200 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white'}`}
+                                className={`rounded-2xl border px-4 py-3.5 text-left text-sm font-bold leading-relaxed transition sm:text-base ${answers[currentQuestion.id] === option.originalIndex ? answerResults[currentQuestion.id]?.isCorrect ? 'border-emerald-600 bg-emerald-500 text-white' : answerResults[currentQuestion.id] ? 'border-rose-500 bg-rose-500 text-white' : 'border-violet-500 bg-violet-500 text-white' : answerResults[currentQuestion.id]?.correctOption === option.originalIndex ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : 'border-stone-200 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white'}`}
                               >
                                 {String.fromCharCode(65 + optionIndex)}. {option.text}
                               </button>
                             ))}
+                          </div>
+                        )}
+
+                        {answerResults[currentQuestion.id] && (
+                          <div className={`mt-4 rounded-2xl px-4 py-3 text-sm font-black ${answerResults[currentQuestion.id].isCorrect ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                            {answerResults[currentQuestion.id].isCorrect ? 'Correct answer!' : 'Not quite. The correct answer is highlighted.'}
                           </div>
                         )}
 
@@ -972,17 +1035,9 @@ const Testbuilderpage = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={submitTest}
-                            disabled={isSubmitting}
-                            className="inline-flex h-14 flex-[1.35] items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {isSubmitting ? 'Saving...' : 'Final Submit'}
-                          </button>
-                          <button
-                            type="button"
                             onClick={() => setCurrentIndex((index) => Math.min(index + 1, generatedTest.questions.length - 1))}
                             disabled={currentIndex === generatedTest.questions.length - 1}
-                            className="inline-flex h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-stone-950 px-4 text-sm font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex h-14 flex-[1.35] items-center justify-center gap-2 rounded-2xl bg-stone-950 px-4 text-sm font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Next
                             <ChevronRight className="h-4 w-4" />
@@ -1057,11 +1112,11 @@ const Testbuilderpage = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={submitTest}
-                    disabled={isSubmitting}
-                    className="flex h-14 flex-[2] items-center justify-center rounded-2xl bg-emerald-600 text-sm font-bold text-white transition disabled:opacity-50"
+                    onClick={() => setCurrentIndex((index) => Math.min(index + 1, generatedTest.questions.length - 1))}
+                    disabled={currentIndex === generatedTest.questions.length - 1 || isSubmitting}
+                    className="flex h-14 flex-[2] items-center justify-center gap-2 rounded-2xl bg-stone-950 text-sm font-bold text-white transition disabled:opacity-50"
                   >
-                    {isSubmitting ? 'Saving...' : 'Submit test'}
+                    Next <ChevronRight className="h-5 w-5" />
                   </button>
                   <button
                     type="button"

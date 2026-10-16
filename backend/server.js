@@ -3927,9 +3927,9 @@ app.post('/api/auth/firebase', async (req, res) => {
     const {
       idToken,
       firebaseApiKey = '',
-      name = '',
+      name,
       email = '',
-      phoneNumber = '',
+      phoneNumber,
       dateOfBirth,
       gender,
       bloodGroup,
@@ -3972,8 +3972,10 @@ app.post('/api/auth/firebase', async (req, res) => {
       createdNewUser = true
     } else {
       let changed = false
-      const requestedName = String(name || firebaseUser.name || '').trim()
-      const requestedPhoneNumber = String(phoneNumber || '').trim()
+      // Only update existing profile fields when the caller explicitly sent
+      // them. Firebase can contain older values than the MongoDB profile.
+      const requestedName = name === undefined ? '' : String(name || '').trim()
+      const requestedPhoneNumber = phoneNumber === undefined ? '' : String(phoneNumber || '').trim()
 
       if (!user.firebaseUid) {
         user.firebaseUid = firebaseUser.uid
@@ -8389,6 +8391,33 @@ app.post('/api/tests/generate', authRequired, async (req, res) => {
   }
 })
 
+app.post('/api/tests/check-answer', authRequired, async (req, res) => {
+  try {
+    const questionId = String(req.body?.questionId || '')
+    if (!questionId) {
+      return res.status(400).json({ message: 'Question is required.' })
+    }
+
+    const question = await ObjectiveQuestion.findById(questionId).populate('objectiveType')
+    if (!question) {
+      return res.status(404).json({ message: 'Question not found.' })
+    }
+
+    const objectiveType = question.objectiveType?.type || ''
+    const selectedOption = req.body?.selectedOption
+    const scored = scoreObjectiveQuestion({ objectiveType, question, selectedOption })
+
+    res.json({
+      isCorrect: Boolean(scored.isCorrect),
+      isSkipped: Boolean(scored.isSkipped),
+      correctOption: question.correctOption,
+      correctOptions: question.correctOptions,
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not check answer.' })
+  }
+})
+
 app.post('/api/tests/submit', authRequired, async (req, res) => {
   try {
     const answers = Array.isArray(req.body.answers) ? req.body.answers : []
@@ -8446,6 +8475,78 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
       skippedCount,
       questionBreakdown,
     })
+
+    // Test Builder questions must update the same per-question progress used
+    // by chapter practice. The test attempt above is enough for performance
+    // history, but chapter dashboards read PracticeScore for attempted and
+    // completed questions.
+    const objectiveTypeIds = dedupeByKey(
+      questions.map((question) => question.objectiveType?._id).filter(Boolean),
+      (item) => String(item),
+    )
+    const objectiveQuestions = await ObjectiveQuestion.find({
+      objectiveType: { $in: objectiveTypeIds },
+    }).select('_id objectiveType').lean()
+    const existingScores = await PracticeScore.find({
+      user: req.user._id,
+      objectiveType: { $in: objectiveTypeIds },
+    }).lean()
+    const existingScoreMap = new Map(existingScores.map((score) => [String(score.objectiveType), score]))
+    const testBreakdownByType = new Map()
+
+    questionBreakdown.forEach((item) => {
+      const objectiveTypeId = String(item.objectiveTypeId || '')
+      if (!objectiveTypeId || !item.questionId) return
+
+      const current = testBreakdownByType.get(objectiveTypeId) || []
+      current.push(item)
+      testBreakdownByType.set(objectiveTypeId, current)
+    })
+
+    for (const objectiveTypeId of objectiveTypeIds) {
+      const objectiveTypeKey = String(objectiveTypeId)
+      const allQuestionIds = objectiveQuestions
+        .filter((question) => String(question.objectiveType) === objectiveTypeKey)
+        .map((question) => String(question._id))
+      const currentScore = existingScoreMap.get(objectiveTypeKey)
+      const attemptedQuestionIds = new Set((currentScore?.attemptedQuestionIds || []).map(String))
+      const questionResults = new Map(
+        (currentScore?.questionResults || []).map((item) => [String(item.questionId), Boolean(item.isCorrect)]),
+      )
+      const typeBreakdown = testBreakdownByType.get(objectiveTypeKey) || []
+      const typeScore = typeBreakdown.filter((item) => item.status === 'correct').length
+
+      typeBreakdown.forEach((item) => {
+        const questionId = String(item.questionId || '')
+        if (!questionId || item.status === 'skipped') return
+        attemptedQuestionIds.add(questionId)
+        questionResults.set(questionId, item.status === 'correct')
+      })
+
+      const attemptedQuestions = attemptedQuestionIds.size
+      const previousBestScore = Number(currentScore?.bestScore || 0)
+      const previousAttemptCount = Number(currentScore?.attemptCount || 0)
+      const previousLowScore = currentScore?.lowScore
+      const nextLowScore = previousAttemptCount > 0
+        ? Math.min(Number(previousLowScore ?? typeScore), typeScore)
+        : typeScore
+
+      await PracticeScore.findOneAndUpdate(
+        { user: req.user._id, objectiveType: objectiveTypeId },
+        {
+          bestScore: Math.max(previousBestScore, typeScore),
+          lowScore: nextLowScore,
+          attemptCount: previousAttemptCount + 1,
+          totalQuestions: allQuestionIds.length,
+          questionIds: allQuestionIds,
+          attemptedQuestions,
+          attemptedQuestionIds: [...attemptedQuestionIds],
+          questionResults: [...questionResults.entries()].map(([questionId, isCorrect]) => ({ questionId, isCorrect })),
+          isDone: allQuestionIds.length > 0 && attemptedQuestions >= allQuestionIds.length,
+        },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+      )
+    }
 
     await PracticeAttempt.create({
       user: req.user._id,
