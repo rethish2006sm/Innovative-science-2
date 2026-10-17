@@ -150,7 +150,7 @@ const DailyStreakPage = () => {
           questions: nextQuestions,
           attemptedCount: result.attemptedCount,
           correctCount: result.correctCount,
-          score: result.correctCount,
+          score: result.score,
         },
       }))
 

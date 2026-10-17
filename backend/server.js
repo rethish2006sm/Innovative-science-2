@@ -3580,8 +3580,34 @@ const dailyQuestionView = (question, challenge) => {
   }
 }
 
-const streakExcludedObjectiveTypes = new Set(['complete-the-tables', 'diagram-based-question', 'match-the-following'])
+// Daily streaks are made from these objective types only.  The three visual /
+// structured types are included as practice, but they do not contribute marks
+// towards the 10-correct streak threshold.
+const dailySpecialObjectiveTypes = new Set([
+  'complete-the-tables',
+  'diagram-based-question',
+  'identify-symbol',
+])
+const dailyScoredObjectiveTypes = new Set([
+  'mcqs',
+  'odd-man-out',
+  'true-or-false',
+  'correlation',
+  'numericals',
+])
+const dailyAllowedObjectiveTypes = new Set([
+  ...dailyScoredObjectiveTypes,
+  ...dailySpecialObjectiveTypes,
+])
 
+const streakExcludedObjectiveTypes = new Set([
+  ...dailySpecialObjectiveTypes,
+  // Keep legacy daily challenges safe if they were generated before the
+  // current mix stopped accepting match-the-following questions.
+  'match-the-following',
+])
+
+// Match-the-following is not part of the requested daily objective mix.
 const dailyExcludedObjectiveTypes = new Set(['match-the-following'])
 
 const countStreakEligibleCorrectAnswers = (challenge, questions) => {
@@ -3606,7 +3632,9 @@ const dailyChallengePayload = (challenge, questions, streak) => {
       questions: questions.map((question) => dailyQuestionView(question, challenge)),
       attemptedCount: challenge.attemptedCount,
       correctCount: challenge.correctCount,
-      score: challenge.score,
+      // Only the sixteen regular objective slots carry marks. The four
+      // special slots still have answers and feedback, but are unscored.
+      score: streakEligibleCorrectCount,
       accuracy: challenge.attemptedCount ? Math.round((challenge.correctCount / challenge.attemptedCount) * 100) : 0,
       status: challenge.status,
       completedAt: challenge.completedAt,
@@ -3677,6 +3705,7 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
     : []
   const allEligibleQuestions = candidates
     .filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
+    .filter((question) => dailyAllowedObjectiveTypes.has(question.objectiveType?.type))
     .filter((question) => !dailyExcludedObjectiveTypes.has(question.objectiveType?.type))
   const filtered = allEligibleQuestions
     // Do not repeat a question within the same calendar month. Questions
@@ -3684,65 +3713,54 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
     // unused pool cannot fill today's 20 questions, older questions are
     // allowed by the fallback below.
     .filter((question) => !usedQuestionIds.has(String(question._id)))
-  const byChapter = new Map()
-  shuffle(filtered).forEach((question) => {
-    const chapter = String(question.objectiveType?.topic?.chapter?._id || '')
-    if (!byChapter.has(chapter)) byChapter.set(chapter, [])
-    byChapter.get(chapter).push(question)
-  })
-
+  const targetQuestionCount = 20
   const selected = []
   const used = new Set()
-  const counts = new Map()
-  const targetQuestionCount = 20
-  const take = (question, ignoreTypeCaps = false) => {
-    if (!question || used.has(String(question._id))) return false
-    const type = question.objectiveType?.type || 'other'
-    const count = counts.get(type) || 0
-    if (!ignoreTypeCaps && type === 'diagram-based-question' && count >= 2) return false
-    if (!ignoreTypeCaps && type === 'complete-the-tables' && count >= 2) return false
-    used.add(String(question._id)); selected.push(question); counts.set(type, count + 1)
-    return true
-  }
 
-  /*
-   * Build one shuffled queue per chapter and take one question from each
-   * queue in turn. This gives every solved chapter the same quota (within
-   * one question), while chapters with fewer questions naturally give their
-   * unused slots to the remaining chapters.
-   */
-  const chapterQueues = eligibleChapterIds
-    .map((chapterId) => shuffle(byChapter.get(chapterId) || []))
-    .filter((queue) => queue.length)
+  // Select one question per practiced chapter in rotation.  A separate pass
+  // for each group guarantees exactly four special questions whenever four
+  // are available, with the remaining sixteen coming from scored types.
+  const takeBalanced = (pool, amount, predicate = () => true) => {
+    const chapterQueues = eligibleChapterIds
+      .map((chapterId) => shuffle((pool.filter((question) => (
+        String(question.objectiveType?.topic?.chapter?._id) === String(chapterId) &&
+        predicate(question) &&
+        !used.has(String(question._id))
+      )))))
+      .filter((queue) => queue.length)
 
-  let cursor = 0
-  while (selected.length < targetQuestionCount && chapterQueues.length) {
-    const queue = chapterQueues[cursor % chapterQueues.length]
-    cursor += 1
-
-    // Find the first question that still satisfies the existing type caps.
-    // Removing rejected questions prevents a chapter with only capped types
-    // from blocking the round-robin loop.
-    let selectedFromQueue = false
-    while (queue.length && !selectedFromQueue) {
+    let cursor = 0
+    while (selected.length < targetQuestionCount && amount > 0 && chapterQueues.length) {
+      const queueIndex = cursor % chapterQueues.length
+      const queue = chapterQueues[queueIndex]
+      cursor += 1
       const question = queue.shift()
-      selectedFromQueue = take(question)
-    }
-
-    if (!queue.length) {
-      chapterQueues.splice((cursor - 1) % chapterQueues.length, 1)
-      cursor = chapterQueues.length ? cursor % chapterQueues.length : 0
+      if (question && !used.has(String(question._id))) {
+        used.add(String(question._id))
+        selected.push(question)
+        amount -= 1
+      }
+      if (!queue.length) {
+        chapterQueues.splice(queueIndex, 1)
+        cursor = chapterQueues.length ? cursor % chapterQueues.length : 0
+      }
     }
   }
 
-  // Prefer unused questions, but reuse older eligible questions when the
-  // monthly no-repeat pool is too small. This keeps every daily challenge at
-  // 20 questions whenever at least 20 eligible questions exist overall.
-  if (selected.length < targetQuestionCount) {
-    shuffle(allEligibleQuestions).forEach((question) => {
-      if (selected.length < targetQuestionCount) take(question, true)
-    })
-  }
+  const isSpecial = (question) => dailySpecialObjectiveTypes.has(question.objectiveType?.type)
+  const isScored = (question) => dailyScoredObjectiveTypes.has(question.objectiveType?.type)
+
+  // Fresh questions are always preferred. Once those are exhausted, the
+  // monthly no-repeat pool is relaxed so the challenge can still reach 20.
+  takeBalanced(filtered, 4, isSpecial)
+  takeBalanced(filtered, 16, isScored)
+  takeBalanced(allEligibleQuestions, 4 - selected.filter(isSpecial).length, isSpecial)
+  takeBalanced(allEligibleQuestions, 16 - selected.filter(isScored).length, isScored)
+
+  // If the available bank has an unusual composition, fill remaining slots
+  // from any allowed type. Never duplicate an id inside one challenge; doing
+  // so would make one submitted answer appear against two questions.
+  takeBalanced(allEligibleQuestions, targetQuestionCount - selected.length)
 
   // Selection is chapter-balanced; presentation is still fully shuffled so
   // users do not see a predictable chapter sequence.
@@ -3818,7 +3836,13 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
         challenge.answers = retainedAnswers
         challenge.attemptedCount = retainedAnswers.length
         challenge.correctCount = retainedAnswers.filter((answer) => answer.isCorrect).length
-        challenge.score = challenge.correctCount
+        const retainedQuestionTypes = new Map(existingQuestionDocs.map((question) => [
+          String(question._id), question.objectiveType?.type || '',
+        ]))
+        challenge.streakEligibleCorrectCount = retainedAnswers.filter((answer) => (
+          answer.isCorrect && !streakExcludedObjectiveTypes.has(retainedQuestionTypes.get(String(answer.questionId)))
+        )).length
+        challenge.score = challenge.streakEligibleCorrectCount
       } else if (shouldRefill) {
         const existingIds = new Set((challenge.questionIds || []).map((questionId) => String(questionId)))
         const additionalIds = selected
@@ -3895,9 +3919,16 @@ app.post('/api/daily-challenge/:id/answer', authRequired, async (req, res) => {
     challenge.attemptedCount += 1
     if (isCorrect) challenge.correctCount += 1
     if (isCorrect && !streakExcludedObjectiveTypes.has(type)) challenge.streakEligibleCorrectCount += 1
-    challenge.score = challenge.correctCount
+    challenge.score = challenge.streakEligibleCorrectCount
     await challenge.save()
-    res.json({ questionId, isCorrect, solution: question.solution || '', attemptedCount: challenge.attemptedCount, correctCount: challenge.correctCount })
+    res.json({
+      questionId,
+      isCorrect,
+      solution: question.solution || '',
+      attemptedCount: challenge.attemptedCount,
+      correctCount: challenge.correctCount,
+      score: challenge.score,
+    })
   } catch (error) {
     res.status(500).json({ message: 'Could not save this answer.' })
   }
@@ -3915,6 +3946,7 @@ app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => 
       .lean()
     const streakEligibleCorrectCount = countStreakEligibleCorrectAnswers(challenge, challengeQuestions)
     challenge.streakEligibleCorrectCount = streakEligibleCorrectCount
+    challenge.score = streakEligibleCorrectCount
     challenge.status = 'completed'; challenge.completedAt = new Date(); await challenge.save()
     let streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
     const qualifiesForStreak = streakEligibleCorrectCount >= 10

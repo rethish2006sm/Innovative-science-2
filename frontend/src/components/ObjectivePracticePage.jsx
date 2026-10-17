@@ -1084,6 +1084,19 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setCurrentQuestionIndex(index)
   }
 
+  // Keep the question view scrollable after an answer causes a re-render. On
+  // mobile browsers, changing a large question card while a nested dashboard
+  // is open can otherwise leave the page anchored to a stale scroll container.
+  useEffect(() => {
+    if (mode !== 'practice' || isDashboardOpen) return undefined
+
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [mode, currentQuestionIndex, isDashboardOpen])
+
   const submitPractice = async () => {
     if (isCompleteTable) {
       return
@@ -1236,7 +1249,10 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   }
 
   return (
-    <section className={`practice-feedback-screen min-h-screen text-stone-800 ${mode === 'practice' && currentFeedback ? `is-${currentFeedback}` : ''} ${mode === 'practice' ? 'px-2 py-1 sm:px-3 lg:px-4' : 'px-3 py-2 sm:px-5 sm:py-3 lg:px-6'}`}>
+    <section
+      className={`practice-feedback-screen min-h-screen overflow-x-clip text-stone-800 ${mode === 'practice' && currentFeedback ? `is-${currentFeedback}` : ''} ${mode === 'practice' ? 'px-2 py-1 sm:px-3 lg:px-4' : 'px-3 py-2 sm:px-5 sm:py-3 lg:px-6'}`}
+      style={{ touchAction: 'pan-y' }}
+    >
       <div className={`mx-auto w-full ${mode === 'practice' || mode === 'dashboard' ? 'max-w-[1180px]' : 'max-w-6xl'}`}>
         {mode === 'dashboard' ? (
           <div className="mb-3 flex flex-col items-start gap-1.5"><Link
@@ -2093,7 +2109,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                   </div>
                 </aside>
                 {isDashboardOpen && (
-                  <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/45 px-3 py-3 backdrop-blur-sm sm:items-center sm:px-4 lg:hidden" role="dialog" aria-modal="true" aria-label="Question dashboard">
+                    <div className="fixed inset-0 z-50 flex items-end justify-center overscroll-contain bg-stone-950/45 px-3 py-3 backdrop-blur-sm sm:items-center sm:px-4 lg:hidden" role="dialog" aria-modal="true" aria-label="Question dashboard" style={{ touchAction: 'pan-y' }}>
                     <div className="max-h-[92vh] w-full max-w-xl overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-2xl">
                       <div className="flex items-center justify-between gap-3 border-b border-stone-100 px-4 py-4 sm:px-5">
                         <div className="flex items-center gap-2">
@@ -2110,7 +2126,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                         </button>
                       </div>
 
-                      <div className="max-h-[calc(92vh-5rem)] overflow-y-auto px-4 py-4 sm:px-5">
+                      <div className="max-h-[calc(92vh-5rem)] overflow-y-auto overscroll-contain px-4 py-4 sm:px-5" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                           {dashboardFilters.map((filter) => (
                             <button
