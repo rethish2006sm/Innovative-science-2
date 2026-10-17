@@ -827,6 +827,7 @@ const dailyChallengeSchema = new mongoose.Schema(
     }],
     attemptedCount: { type: Number, default: 0, min: 0 },
     correctCount: { type: Number, default: 0, min: 0 },
+    streakEligibleCorrectCount: { type: Number, default: 0, min: 0 },
     score: { type: Number, default: 0, min: 0 },
     status: { type: String, enum: ['in_progress', 'completed', 'bank_insufficient'], default: 'in_progress' },
     generatedAt: { type: Date, default: Date.now },
@@ -844,6 +845,8 @@ const studentStreakSchema = new mongoose.Schema(
     currentStreak: { type: Number, default: 0, min: 0 },
     longestStreak: { type: Number, default: 0, min: 0 },
     lastCreditedDate: { type: String, default: null },
+    streakBeforeBreak: { type: Number, default: 0, min: 0 },
+    streakBrokenAt: { type: Date, default: null },
   },
   { timestamps: true },
 )
@@ -3522,6 +3525,19 @@ const localMidnightAsUtc = (localDate, timezone) => {
   return new Date(reference.getTime() - (localAsUtc - reference.getTime()))
 }
 
+const syncExpiredStreakBreak = async (userId, today, timezone) => {
+  const streak = await StudentStreak.findOne({ user: userId, subject: getActiveScience() })
+  if (!streak || !streak.currentStreak || streak.streakBrokenAt) return streak
+  const lastDate = String(streak.lastCreditedDate || '')
+  if (!lastDate || lastDate === today || lastDate === previousLocalDate(today)) return streak
+
+  streak.streakBeforeBreak = streak.currentStreak
+  streak.streakBrokenAt = localMidnightAsUtc(today, timezone)
+  streak.currentStreak = 0
+  await streak.save()
+  return streak
+}
+
 const nextLocalMonth = (localDate) => {
   const [year, month] = String(localDate).split('-').map(Number)
   return month === 12
@@ -3659,11 +3675,14 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
       populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } },
     }).lean()
     : []
-  const filtered = candidates
+  const allEligibleQuestions = candidates
     .filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
     .filter((question) => !dailyExcludedObjectiveTypes.has(question.objectiveType?.type))
+  const filtered = allEligibleQuestions
     // Do not repeat a question within the same calendar month. Questions
-    // become eligible again automatically when the next month starts.
+    // become eligible again automatically when the next month starts. If the
+    // unused pool cannot fill today's 20 questions, older questions are
+    // allowed by the fallback below.
     .filter((question) => !usedQuestionIds.has(String(question._id)))
   const byChapter = new Map()
   shuffle(filtered).forEach((question) => {
@@ -3676,12 +3695,12 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
   const used = new Set()
   const counts = new Map()
   const targetQuestionCount = 20
-  const take = (question) => {
+  const take = (question, ignoreTypeCaps = false) => {
     if (!question || used.has(String(question._id))) return false
     const type = question.objectiveType?.type || 'other'
     const count = counts.get(type) || 0
-    if (type === 'diagram-based-question' && count >= 2) return false
-    if (type === 'complete-the-tables' && count >= 2) return false
+    if (!ignoreTypeCaps && type === 'diagram-based-question' && count >= 2) return false
+    if (!ignoreTypeCaps && type === 'complete-the-tables' && count >= 2) return false
     used.add(String(question._id)); selected.push(question); counts.set(type, count + 1)
     return true
   }
@@ -3716,12 +3735,12 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
     }
   }
 
-  // If type caps or a small question bank prevent a complete set, fill from
-  // any remaining eligible question without sacrificing the monthly no-repeat
-  // rule. The normal case already has balanced chapter coverage above.
+  // Prefer unused questions, but reuse older eligible questions when the
+  // monthly no-repeat pool is too small. This keeps every daily challenge at
+  // 20 questions whenever at least 20 eligible questions exist overall.
   if (selected.length < targetQuestionCount) {
-    shuffle(filtered).forEach((question) => {
-      if (selected.length < targetQuestionCount) take(question)
+    shuffle(allEligibleQuestions).forEach((question) => {
+      if (selected.length < targetQuestionCount) take(question, true)
     })
   }
 
@@ -3746,6 +3765,7 @@ const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
 }
 
 const getDailyChallenge = async (userId, localDate, timezone) => {
+  await syncExpiredStreakBreak(userId, localDate, timezone)
   let challenge = await DailyChallenge.findOne({ user: userId, subject: getActiveScience(), localDate })
   if (!challenge) {
     try {
@@ -3774,7 +3794,8 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
     const currentChapterIds = [...eligibleChapterIds].sort()
     const chaptersChanged = JSON.stringify(storedChapterIds) !== JSON.stringify(currentChapterIds)
     const shouldRefreshUntouched = !challenge.answers?.length && chaptersChanged
-    if (hasDailyExcludedQuestion || shouldRefreshUntouched) {
+    const shouldRefill = (challenge.questionIds || []).length < 20
+    if (hasDailyExcludedQuestion || shouldRefreshUntouched || shouldRefill) {
       const selected = await selectDailyQuestions(userId, eligibleChapterIds, localDate)
       if (hasDailyExcludedQuestion) {
         const excludedQuestionIds = new Set(
@@ -3798,6 +3819,13 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
         challenge.attemptedCount = retainedAnswers.length
         challenge.correctCount = retainedAnswers.filter((answer) => answer.isCorrect).length
         challenge.score = challenge.correctCount
+      } else if (shouldRefill) {
+        const existingIds = new Set((challenge.questionIds || []).map((questionId) => String(questionId)))
+        const additionalIds = selected
+          .filter((question) => !existingIds.has(String(question._id)))
+          .slice(0, Math.max(0, 20 - (challenge.questionIds || []).length))
+          .map((question) => question._id)
+        challenge.questionIds = [...(challenge.questionIds || []), ...additionalIds]
       } else {
         challenge.questionIds = selected.map((question) => question._id)
       }
@@ -3866,6 +3894,7 @@ app.post('/api/daily-challenge/:id/answer', authRequired, async (req, res) => {
     challenge.answers.push({ questionId, selectedAnswer, isCorrect })
     challenge.attemptedCount += 1
     if (isCorrect) challenge.correctCount += 1
+    if (isCorrect && !streakExcludedObjectiveTypes.has(type)) challenge.streakEligibleCorrectCount += 1
     challenge.score = challenge.correctCount
     await challenge.save()
     res.json({ questionId, isCorrect, solution: question.solution || '', attemptedCount: challenge.attemptedCount, correctCount: challenge.correctCount })
@@ -3885,6 +3914,7 @@ app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => 
       .select('_id objectiveType')
       .lean()
     const streakEligibleCorrectCount = countStreakEligibleCorrectAnswers(challenge, challengeQuestions)
+    challenge.streakEligibleCorrectCount = streakEligibleCorrectCount
     challenge.status = 'completed'; challenge.completedAt = new Date(); await challenge.save()
     let streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
     const qualifiesForStreak = streakEligibleCorrectCount >= 10
@@ -3893,8 +3923,12 @@ app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => 
       streak.currentStreak = streak.lastCreditedDate === previousLocalDate(challenge.localDate) ? streak.currentStreak + 1 : 1
       streak.longestStreak = Math.max(streak.longestStreak, streak.currentStreak)
       streak.lastCreditedDate = challenge.localDate
+      streak.streakBeforeBreak = 0
+      streak.streakBrokenAt = null
       await streak.save()
     } else if (!qualifiesForStreak && streak.currentStreak !== 0) {
+      streak.streakBeforeBreak = streak.currentStreak
+      streak.streakBrokenAt = new Date()
       streak.currentStreak = 0
       await streak.save()
     }
@@ -3911,6 +3945,8 @@ app.post('/api/admin/streaks/reset', authRequired, adminRequired, async (req, re
         currentStreak: 0,
         longestStreak: 0,
         lastCreditedDate: null,
+        streakBeforeBreak: 0,
+        streakBrokenAt: null,
       },
     })
 
@@ -3918,6 +3954,36 @@ app.post('/api/admin/streaks/reset', authRequired, adminRequired, async (req, re
   } catch (error) {
     console.error('Admin streak reset failed:', error.message)
     res.status(500).json({ message: 'Could not reset student streaks.' })
+  }
+})
+
+app.post('/api/admin/streaks/:userId/restore', authRequired, adminRequired, async (req, res) => {
+  try {
+    const user = await User.findOne({ _id: req.params.userId, isAdmin: { $ne: true } }).select('_id')
+    if (!user) return res.status(404).json({ message: 'Student not found.' })
+
+    const timezone = dailyTimezone(req)
+    const today = localDateForTimezone(timezone)
+    let streak = await StudentStreak.findOne({ user: user._id, subject: getActiveScience() })
+    if (!streak || !streak.streakBrokenAt) return res.status(400).json({ message: 'This student has no streak to restore.' })
+    const brokenAt = new Date(streak.streakBrokenAt).getTime()
+    if (!Number.isFinite(brokenAt) || Date.now() - brokenAt > 24 * 60 * 60 * 1000) {
+      return res.status(410).json({ message: 'The 24-hour streak restore window has expired.' })
+    }
+    if (streak.lastCreditedDate === today) {
+      return res.json({ message: 'Today\'s streak is already active.', streak: streak.toObject() })
+    }
+
+    streak.currentStreak = Math.max(1, Number(streak.streakBeforeBreak || 0) + 1)
+    streak.longestStreak = Math.max(Number(streak.longestStreak || 0), streak.currentStreak)
+    streak.lastCreditedDate = today
+    streak.streakBeforeBreak = 0
+    streak.streakBrokenAt = null
+    await streak.save()
+    res.json({ message: 'Today\'s streak was restored for the student.', streak: streak.toObject() })
+  } catch (error) {
+    console.error('Admin restore streak failed:', error.message)
+    res.status(500).json({ message: 'Could not restore today\'s streak.' })
   }
 })
 
@@ -6383,9 +6449,10 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
     const userIds = users.map((user) => user._id)
     const timezone = dailyTimezone(req)
     const today = localDateForTimezone(timezone)
+    await Promise.all(userIds.map((userId) => syncExpiredStreakBreak(userId, today, timezone)))
     const [streaks, dailyStats, todayChallenges] = await Promise.all([
       StudentStreak.find({ user: { $in: userIds }, subject: getActiveScience() })
-        .select('user currentStreak longestStreak lastCreditedDate')
+        .select('user currentStreak longestStreak lastCreditedDate streakBeforeBreak streakBrokenAt')
         .lean(),
       DailyChallenge.aggregate([
         { $match: { user: { $in: userIds }, subject: getActiveScience() } },
@@ -6400,7 +6467,7 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
         },
       ]),
       DailyChallenge.find({ user: { $in: userIds }, subject: getActiveScience(), localDate: today })
-        .select('user status attemptedCount correctCount completedAt')
+        .select('user status attemptedCount correctCount streakEligibleCorrectCount completedAt')
         .lean(),
     ])
 
@@ -6428,9 +6495,17 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
         longestStreak: Number(streak.longestStreak || 0),
         lastCreditedDate: streak.lastCreditedDate || null,
         streakTodayDone: String(streak.lastCreditedDate || '') === today,
+        streakTodayFailed: Number(todayChallenge.attemptedCount || 0) > 0 &&
+          Number(todayChallenge.streakEligibleCorrectCount ?? todayChallenge.correctCount ?? 0) < 10 &&
+          String(streak.lastCreditedDate || '') !== today,
+        streakRestoreAvailable: Boolean(
+          streak.streakBrokenAt &&
+          Date.now() - new Date(streak.streakBrokenAt).getTime() <= 24 * 60 * 60 * 1000 &&
+          String(streak.lastCreditedDate || '') !== today,
+        ),
         streakTodayStatus: todayChallenge.status || 'not_started',
         streakTodayAttempted: Number(todayChallenge.attemptedCount || 0),
-        streakTodayCorrect: Number(todayChallenge.correctCount || 0),
+        streakTodayCorrect: Number(todayChallenge.streakEligibleCorrectCount ?? todayChallenge.correctCount ?? 0),
         streakDayDate: today,
         streakDayEndsAt,
         completedDailyChallenges: Number(daily.completedDays || 0),

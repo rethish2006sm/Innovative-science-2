@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import { Activity, BookOpen, Brain, CheckCircle2, ChevronLeft, Clock3, Flame, RefreshCw, Search, Shield, Users } from 'lucide-react'
+import { Activity, BookOpen, Brain, CheckCircle2, ChevronLeft, Clock3, Flame, RefreshCw, Search, Shield, Users, XCircle } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 
@@ -168,7 +168,45 @@ const StreakTracker = ({ student }) => {
   const totalMinutes = Math.floor(remaining / 60000)
   const countdown = `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m remaining`
   const done = Boolean(student.streakTodayDone)
+  return <StreakStatus student={student} />
   return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : 'Today’s streak is not done yet'}</span><span>{remaining ? countdown : 'New streak day started'}</span></div>
+}
+
+const StreakStatus = ({ student }) => {
+  const [starting, setStarting] = useState(false)
+  const done = Boolean(student.streakTodayDone)
+  const failed = Boolean(student.streakTodayFailed)
+  const startToday = async () => {
+    setStarting(true)
+    try {
+      await apiRequest(`/api/admin/streaks/${student.id}/restore`, { method: 'POST' })
+      window.location.reload()
+    } catch (error) {
+      window.alert(error.message || 'Could not restore today\'s streak.')
+    } finally {
+      setStarting(false)
+    }
+  }
+  if (!done && !failed) return <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold text-slate-600">Not attempted today</div>
+  if (failed && student.streakRestoreAvailable) return <RestoreStreakAction student={student} />
+  if (failed && !student.streakRestoreAvailable) return <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs font-bold text-rose-800"><XCircle className="mr-2 inline h-4 w-4" />Below 10 correct · Restore window expired</div>
+  return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : failed ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : failed ? <XCircle className="h-4 w-4" /> : null}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : failed ? `Below 10 correct · ${student.streakTodayCorrect || 0} correct` : 'Not attempted today'}</span>{failed && <button type="button" onClick={startToday} disabled={starting} className="rounded-full bg-slate-950 px-3 py-1.5 text-white transition hover:bg-black disabled:opacity-60">{starting ? 'Starting...' : 'Start today'}</button>}</div>
+}
+
+const RestoreStreakAction = ({ student }) => {
+  const [restoring, setRestoring] = useState(false)
+  const restore = async () => {
+    setRestoring(true)
+    try {
+      await apiRequest(`/api/admin/streaks/${student.id}/restore`, { method: 'POST' })
+      window.location.reload()
+    } catch (error) {
+      window.alert(error.message || 'Could not restore today\'s streak.')
+    } finally {
+      setRestoring(false)
+    }
+  }
+  return <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs font-bold text-rose-800 sm:flex-row sm:items-center sm:justify-between"><span><XCircle className="mr-2 inline h-4 w-4" />Below 10 correct · Restore available for 24 hours</span><button type="button" onClick={restore} disabled={restoring} className="rounded-full bg-slate-950 px-3 py-1.5 text-white transition hover:bg-black disabled:opacity-60">{restoring ? 'Restoring...' : 'Restore streak'}</button></div>
 }
 
 export default AdminAnalysisPage
