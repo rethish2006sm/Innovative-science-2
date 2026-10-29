@@ -457,6 +457,26 @@ const Homepage = () => {
     ]
   }, [weeklyRewards])
 
+  const hasUnclaimedReward = Boolean(
+    weeklyRewards?.days?.some((day) => day.isToday && !day.claimed),
+  )
+
+  useEffect(() => {
+    if (!hasUnclaimedReward) return
+
+    const userKey = auth?.user?._id || auth?.user?.email || 'student'
+    const reminderKey = `innovative-science-login-reward-reminder-${userKey}-${getLocalDateKey(new Date())}`
+
+    try {
+      if (window.localStorage.getItem(reminderKey) !== 'shown') {
+        setShowWeeklyRewards(true)
+        window.localStorage.setItem(reminderKey, 'shown')
+      }
+    } catch {
+      setShowWeeklyRewards(true)
+    }
+  }, [auth?.user?._id, auth?.user?.email, hasUnclaimedReward])
+
   useEffect(() => {
     if (!auth?.user?.classId) {
       setSelectedClassId('')
@@ -1059,7 +1079,14 @@ const Homepage = () => {
       {weeklyRewards && (
         <div className="fixed bottom-5 right-5 z-[150]">
           {showWeeklyRewards && (
-            <div className="fixed right-3 top-[4.75rem] max-h-[calc(100vh-5.5rem)] w-[min(28rem,calc(100vw-1.5rem))] overflow-hidden rounded-3xl border border-violet-200 bg-white p-4 shadow-2xl sm:right-5 sm:top-[6.5rem] sm:p-5">
+            <>
+              <button
+                type="button"
+                aria-label="Close login rewards"
+                onClick={() => setShowWeeklyRewards(false)}
+                className="fixed inset-0 z-[140] cursor-default bg-slate-950/65 backdrop-blur-[2px]"
+              />
+              <div className="fixed right-3 top-[4.75rem] z-[150] max-h-[calc(100vh-5.5rem)] w-[min(28rem,calc(100vw-1.5rem))] overflow-hidden rounded-3xl border border-violet-200 bg-white p-4 shadow-2xl sm:right-5 sm:top-[6.5rem] sm:p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.16em] text-violet-700">Login rewards</p>
@@ -1081,9 +1108,10 @@ const Homepage = () => {
                   </div>
                 ) : <div key={`empty-${index}`} className="min-h-[4.5rem]" />)}
               </div>
-            </div>
+              </div>
+            </>
           )}
-          <button type="button" onClick={() => setShowWeeklyRewards((current) => !current)} aria-label="Open login rewards" className="grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-xl shadow-violet-300 transition hover:scale-105">
+          <button type="button" onClick={() => setShowWeeklyRewards((current) => !current)} aria-label="Open login rewards" className={`relative z-[160] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-xl shadow-violet-300 transition hover:scale-105 ${hasUnclaimedReward ? 'animate-pulse ring-4 ring-violet-300/70 ring-offset-2' : ''}`}>
             <Gift size={24} />
           </button>
         </div>

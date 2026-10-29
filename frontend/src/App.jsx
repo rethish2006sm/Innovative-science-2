@@ -4,7 +4,6 @@ import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
 import StudentMessagePopup from './components/StudentMessagePopup'
-import StudentGiftPopup from './components/StudentGiftPopup'
 import SiteNoticeBanner from './components/SiteNoticeBanner'
 const Aboutpage = lazy(() => import('./pages/Aboutpage'))
 const ChapterWeightage = lazy(() => import('./pages/Chapter_weightage'))
@@ -642,7 +641,6 @@ const AppLayout = () => {
       <RankNotifier />
       <StudentMessagePopup />
       {!isObjectivePracticeRoute && !isBattleRoute && <Navbar />}
-      <StudentGiftPopup />
       <div className={isObjectivePracticeRoute || isBattleRoute ? '' : 'pt-24'}>
         {showSiteNotice && (
           <SiteNoticeBanner
