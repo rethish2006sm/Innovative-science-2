@@ -464,18 +464,8 @@ const Homepage = () => {
   useEffect(() => {
     if (!hasUnclaimedReward) return
 
-    const userKey = auth?.user?._id || auth?.user?.email || 'student'
-    const reminderKey = `innovative-science-login-reward-reminder-${userKey}-${getLocalDateKey(new Date())}`
-
-    try {
-      if (window.localStorage.getItem(reminderKey) !== 'shown') {
-        setShowWeeklyRewards(true)
-        window.localStorage.setItem(reminderKey, 'shown')
-      }
-    } catch {
-      setShowWeeklyRewards(true)
-    }
-  }, [auth?.user?._id, auth?.user?.email, hasUnclaimedReward])
+    setShowWeeklyRewards(true)
+  }, [hasUnclaimedReward])
 
   useEffect(() => {
     if (!auth?.user?.classId) {
