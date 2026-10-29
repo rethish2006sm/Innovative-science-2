@@ -1,5 +1,7 @@
 import { clearAuth, getStoredAuth } from './authStorage'
 import { getActiveScience } from './science'
+import { firebaseAuth } from './firebase'
+import { signOut } from 'firebase/auth'
 
 const normalizeBaseUrl = (value) => String(value || '').replace(/\/$/, '')
 
@@ -101,8 +103,13 @@ export const apiRequest = async (path, options = {}) => {
     const data = isJson ? await response.json() : null
 
     if (!response.ok) {
-      if (response.status === 401) {
+      const deletedFirebaseAccount = response.status === 410 && path === '/api/auth/firebase'
+      if (response.status === 401 || deletedFirebaseAccount) {
         clearAuth()
+        // Account deletion invalidates the backend session first. End the
+        // Firebase session too, otherwise the client could try to sync it
+        // again and appear signed in until the token refreshes.
+        signOut(firebaseAuth).catch(() => {})
       }
 
       const error = new Error(data?.message || 'Something went wrong.')

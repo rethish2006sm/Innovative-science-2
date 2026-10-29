@@ -137,6 +137,9 @@ const Adminpage = () => {
   const [giftClassId, setGiftClassId] = useState('')
   const [giftFile, setGiftFile] = useState(null)
   const [giftSaving, setGiftSaving] = useState(false)
+  const [streakImage, setStreakImage] = useState(null)
+  const [streakImageFile, setStreakImageFile] = useState(null)
+  const [streakImageSaving, setStreakImageSaving] = useState(false)
   const [streakResetting, setStreakResetting] = useState(false)
   const [streakResetSuccess, setStreakResetSuccess] = useState('')
   const [reports, setReports] = useState([])
@@ -600,7 +603,11 @@ const Adminpage = () => {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       })
-      await loadDeletionRequests()
+      await Promise.all([
+        loadDeletionRequests(),
+        loadDashboard(),
+        status === 'approved' ? loadStudents({ silent: true }) : Promise.resolve(),
+      ])
     } catch (err) {
       setError(err.message)
     }
@@ -868,6 +875,48 @@ const Adminpage = () => {
     try {
       await apiRequest(`/api/admin/gifts/${classId}`, { method: 'DELETE' })
       setGifts((current) => current.filter((gift) => gift.classId !== classId))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const loadStreakImage = async () => {
+    try {
+      const data = await apiRequest('/api/admin/daily-streak/settings', { cache: 'no-store' })
+      setStreakImage(data.setting || null)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const saveStreakImage = async (event) => {
+    event.preventDefault()
+    if (!streakImageFile) {
+      setError('Choose an image for the 100-day streak milestone.')
+      return
+    }
+    setStreakImageSaving(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.append('image', streakImageFile)
+      formData.append('kind', 'milestone')
+      const data = await apiRequest('/api/admin/daily-streak/settings/image', { method: 'POST', body: formData })
+      setStreakImage(data.setting || null)
+      setStreakImageFile(null)
+      event.target.reset()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setStreakImageSaving(false)
+    }
+  }
+
+  const removeStreakImage = async (kind = 'milestone') => {
+    if (!window.confirm(`Remove the 100-day streak ${kind === 'reward' ? 'reward' : 'milestone'} image?`)) return
+    try {
+      await apiRequest(`/api/admin/daily-streak/settings/image?kind=${kind}`, { method: 'DELETE' })
+      setStreakImage((current) => current ? { ...current, milestoneImage: null } : null)
     } catch (err) {
       setError(err.message)
     }
@@ -1181,6 +1230,7 @@ const Adminpage = () => {
     }
 
     if (activeTab === 'gift') loadGifts()
+    if (activeTab === 'streak') loadStreakImage()
   }, [activeTab])
 
   const openStudentDetail = async (student) => {
@@ -2052,6 +2102,36 @@ const Adminpage = () => {
                       <RotateCcw className={`h-4 w-4 ${streakResetting ? 'animate-spin' : ''}`} />
                       {streakResetting ? 'Resetting streaks...' : 'Reset all user streaks'}
                     </button>
+                  </div>
+                  <div className="mt-6 rounded-3xl border border-orange-200 bg-orange-50/60 p-4">
+                    <div className="flex items-start gap-3">
+                      <ImageIcon className="mt-0.5 h-5 w-5 shrink-0 text-orange-600" />
+                      <div>
+                        <h3 className="font-black text-slate-950">100-day milestone image</h3>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">
+                          Add the image shown at the end of every student&apos;s 100-day streak bar.
+                        </p>
+                      </div>
+                    </div>
+                    <form onSubmit={saveStreakImage} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+                      <label className="grid flex-1 gap-2 text-sm font-bold text-slate-600">
+                        Choose image
+                        <input type="file" accept="image/*" onChange={(event) => setStreakImageFile(event.target.files?.[0] || null)} className="rounded-2xl border border-orange-200 bg-white px-4 py-3 text-sm" />
+                      </label>
+                      <button type="submit" disabled={streakImageSaving} className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-orange-600 px-5 font-bold text-white hover:bg-orange-700 disabled:opacity-60">
+                        {streakImageSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                        {streakImageSaving ? 'Saving...' : 'Save streak image'}
+                      </button>
+                    </form>
+                    {streakImage?.milestoneImage?.imageData && (
+                      <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl border border-orange-200 bg-white p-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <img src={streakImage.milestoneImage.imageData} alt="Current streak milestone" className="h-16 w-16 rounded-xl object-cover" />
+                          <p className="truncate text-xs font-bold text-slate-600">{streakImage.milestoneImage.originalName || 'Current milestone image'}</p>
+                        </div>
+                        <button type="button" onClick={() => removeStreakImage('milestone')} className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-black text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /> Remove</button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

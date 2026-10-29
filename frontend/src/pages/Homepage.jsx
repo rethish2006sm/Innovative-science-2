@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, BookOpen, Brain, CalendarDays, Check, CheckCircle2, Flame, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
+import { ArrowRight, BookOpen, Brain, CalendarDays, Check, CheckCircle2, Flame, Gift, KeyRound, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
@@ -220,6 +220,9 @@ const Homepage = () => {
   const [selectedClassId, setSelectedClassId] = useState(() => getStoredAuth()?.user?.classId || '')
   const [chapters, setChapters] = useState([])
   const [dailyStreakData, setDailyStreakData] = useState(null)
+  const [weeklyRewards, setWeeklyRewards] = useState(null)
+  const [showWeeklyRewards, setShowWeeklyRewards] = useState(false)
+  const [claimingRewardDate, setClaimingRewardDate] = useState('')
   const [timeUntilTomorrow, setTimeUntilTomorrow] = useState(formatTimeUntilTomorrow)
   const [featuredFeedback, setFeaturedFeedback] = useState([])
   const [feedbackForm, setFeedbackForm] = useState({ name: '', email: '', message: '' })
@@ -297,9 +300,11 @@ const Homepage = () => {
     }
 
     window.addEventListener('innovative-science-progress-updated', refreshProgress)
+    window.addEventListener('focus', refreshProgress)
 
     return () => {
       window.removeEventListener('innovative-science-progress-updated', refreshProgress)
+      window.removeEventListener('focus', refreshProgress)
     }
   }, [])
 
@@ -415,6 +420,44 @@ const Homepage = () => {
   }, [auth?.token, refreshTick])
 
   useEffect(() => {
+    let cancelled = false
+    if (!auth?.token) {
+      setWeeklyRewards(null)
+      return undefined
+    }
+    apiRequest('/api/daily-streak/rewards', { cache: 'no-store' })
+      .then((data) => {
+        if (!cancelled) setWeeklyRewards(data.rewards || null)
+      })
+      .catch(() => {
+        if (!cancelled) setWeeklyRewards(null)
+      })
+    return () => { cancelled = true }
+  }, [auth?.token, refreshTick])
+
+  const claimWeeklyReward = async (localDate) => {
+    if (claimingRewardDate) return
+    setClaimingRewardDate(localDate)
+    try {
+      const data = await apiRequest('/api/daily-streak/rewards/claim', { method: 'POST', body: JSON.stringify({ localDate }) })
+      setWeeklyRewards(data.rewards || null)
+    } catch (error) {
+      setFeedbackError(error.message || 'Could not claim this reward.')
+    } finally {
+      setClaimingRewardDate('')
+    }
+  }
+
+  const rewardCalendarCells = useMemo(() => {
+    if (!weeklyRewards?.days?.length) return []
+    const firstDay = new Date(`${weeklyRewards.days[0].localDate}T00:00:00`).getDay()
+    return [
+      ...Array.from({ length: firstDay }, () => null),
+      ...weeklyRewards.days,
+    ]
+  }, [weeklyRewards])
+
+  useEffect(() => {
     if (!auth?.user?.classId) {
       setSelectedClassId('')
       return
@@ -444,6 +487,17 @@ const Homepage = () => {
         .filter((challenge) => challenge.status === 'completed')
         .map((challenge) => challenge.localDate)
     )
+    const currentStreak = Number(dailyStreakData?.streak?.currentStreak || 0)
+    const lastCreditedDate = String(dailyStreakData?.streak?.lastCreditedDate || '')
+    if (currentStreak > 0 && /^\d{4}-\d{2}-\d{2}$/.test(lastCreditedDate)) {
+      const [year, month, day] = lastCreditedDate.split('-').map(Number)
+      const streakEnd = new Date(year, month - 1, day)
+      for (let offset = 0; offset < currentStreak; offset += 1) {
+        const date = new Date(streakEnd)
+        date.setDate(streakEnd.getDate() - offset)
+        completedDates.add(getLocalDateKey(date))
+      }
+    }
 
     return Array.from({ length: 7 }, (_, offset) => {
       const date = new Date(today)
@@ -1000,6 +1054,38 @@ const Homepage = () => {
               </button>
             </form>
           </div>
+        </div>
+      )}
+      {weeklyRewards && (
+        <div className="fixed bottom-5 right-5 z-[150]">
+          {showWeeklyRewards && (
+            <div className="fixed right-3 top-[4.75rem] max-h-[calc(100vh-5.5rem)] w-[min(28rem,calc(100vw-1.5rem))] overflow-hidden rounded-3xl border border-violet-200 bg-white p-4 shadow-2xl sm:right-5 sm:top-[6.5rem] sm:p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-violet-700">Login rewards</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Claim today&apos;s reward and collect restore keys.</p>
+                </div>
+                <button type="button" onClick={() => setShowWeeklyRewards(false)} aria-label="Close login rewards" className="rounded-full bg-slate-100 px-2.5 py-1 text-sm font-black text-slate-500">×</button>
+              </div>
+              <div className="mt-4 grid grid-cols-7 gap-1 text-center">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => <p key={label} className="text-[9px] font-black uppercase text-slate-400">{label}</p>)}
+                {rewardCalendarCells.map((day, index) => day ? (
+                  <div key={day.localDate} className={`min-w-0 rounded-lg p-1 ${day.claimed ? 'bg-emerald-100 ring-2 ring-emerald-400' : day.isToday ? 'bg-violet-100 ring-2 ring-violet-400' : 'bg-slate-50'}`}>
+                    <p className={`text-[9px] font-black ${day.claimed ? 'text-emerald-700' : 'text-slate-500'}`}>{Number(day.localDate.slice(-2))}</p>
+                    <div className={`mx-auto mt-1 grid h-6 w-6 place-items-center rounded-full ${day.claimed ? 'bg-emerald-200 text-emerald-700' : day.type === 'restore-key' ? 'bg-amber-100 text-amber-700' : 'bg-cyan-100 text-cyan-700'}`}>
+                      {day.type === 'restore-key' ? <KeyRound size={12} /> : <Brain size={12} />}
+                    </div>
+                    <p className="mt-0.5 text-[8px] font-black text-slate-600">{day.type === 'restore-key' ? 'Key' : '×10'}</p>
+                    {day.isToday && !day.claimed && <button type="button" onClick={() => claimWeeklyReward(day.localDate)} disabled={Boolean(claimingRewardDate)} className="mt-1 rounded-full bg-violet-600 px-1.5 py-1 text-[8px] font-black text-white transition hover:bg-violet-700 disabled:opacity-50">{claimingRewardDate ? '...' : 'Claim'}</button>}
+                    {day.claimed && <p className="mt-1 rounded-full bg-emerald-500 px-1 py-0.5 text-[8px] font-black text-white">Claimed</p>}
+                  </div>
+                ) : <div key={`empty-${index}`} className="min-h-[4.5rem]" />)}
+              </div>
+            </div>
+          )}
+          <button type="button" onClick={() => setShowWeeklyRewards((current) => !current)} aria-label="Open login rewards" className="grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-xl shadow-violet-300 transition hover:scale-105">
+            <Gift size={24} />
+          </button>
         </div>
       )}
     </section>

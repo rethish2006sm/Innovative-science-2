@@ -250,7 +250,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     }
 
     if (isDiagram) {
-      return Boolean(doneStates[question._id])
+      return Boolean(doneStates[question._id] || bestScore?.attemptedQuestionIds?.includes(String(question._id)))
     }
 
     return Boolean(submittedQuestions[question._id] || (!isSingleQuestionFlow && answer !== undefined))
@@ -320,9 +320,10 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
       const preparedQuestions = preparePracticeQuestions(data.questions || [], isAdmin, objectiveType)
       setQuestions(await translatePracticeQuestions(preparedQuestions))
       setBestScore(data.bestScore)
+      window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
       setDoneStates(
-        (objectiveType === 'complete-the-tables' || objectiveType === 'diagram-based-question') && data.bestScore?.isDone
-          ? Object.fromEntries((data.questions || []).map((question) => [question._id, true]))
+        (objectiveType === 'complete-the-tables' || objectiveType === 'diagram-based-question')
+          ? Object.fromEntries((data.bestScore?.attemptedQuestionIds || []).map((questionId) => [String(questionId), true]))
           : {},
       )
       setTutorMessages(defaultTutorMessages)
@@ -343,6 +344,30 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   useEffect(() => {
     loadPractice()
   }, [topicId, objectiveType, boardOnly])
+
+  useEffect(() => {
+    const refreshSavedStatus = async () => {
+      if (!isSignedIn) return
+
+      try {
+        const boardQuery = boardOnly ? '?boardOnly=true' : ''
+        const data = await apiRequest(`/api/topics/${topicId}/objective-types/${objectiveType}/practice${boardQuery}`)
+        setBestScore(data.bestScore)
+
+        if (objectiveType === 'complete-the-tables' || objectiveType === 'diagram-based-question') {
+          setDoneStates(Object.fromEntries(
+            (data.bestScore?.attemptedQuestionIds || []).map((questionId) => [String(questionId), true]),
+          ))
+        }
+      } catch {
+        // The current page already has its previous status; keep it if a
+        // background refresh is temporarily unavailable.
+      }
+    }
+
+    window.addEventListener('innovative-science-progress-updated', refreshSavedStatus)
+    return () => window.removeEventListener('innovative-science-progress-updated', refreshSavedStatus)
+  }, [boardOnly, isSignedIn, objectiveType, topicId])
 
   useEffect(() => {
     const handleBrowserBack = () => {
@@ -528,10 +553,13 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   }
 
   const toggleAnswerReveal = (questionId) => {
-    setRevealedAnswers((current) => ({
-      ...current,
-      [questionId]: !current[questionId],
-    }))
+    const nextVisible = !revealedAnswers[questionId]
+    setRevealedAnswers((current) => ({ ...current, [questionId]: nextVisible }))
+    if (nextVisible) {
+      window.setTimeout(() => {
+        document.getElementById(`objective-answer-${questionId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 80)
+    }
   }
 
   const submitReport = async (event) => {
@@ -998,7 +1026,17 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   }
 
   const markQuestionDone = async (questionId) => {
-    const isAlreadyDone = Boolean(doneStates[questionId] || answers[questionId] !== undefined || isDoneOnlyDone)
+    if ((isCompleteTable || isDiagram) && !revealedAnswers[questionId] && !doneStates[questionId] && !isDoneOnlyDone) {
+      setError('Show the answer before marking this question done.')
+      return
+    }
+
+    const isAlreadyDone = Boolean(
+      doneStates[questionId]
+      || bestScore?.attemptedQuestionIds?.includes(String(questionId))
+      || answers[questionId] !== undefined
+      || isDoneOnlyDone,
+    )
     const nextIsDone = !isAlreadyDone
     const previousAnswers = answers
     const previousDoneStates = doneStates
@@ -1031,9 +1069,10 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     try {
       const data = await apiRequest(`/api/objective-types/${objective._id}/done`, {
         method: 'POST',
-        body: JSON.stringify({ isDone: nextIsDone }),
+        body: JSON.stringify({ isDone: nextIsDone, questionId }),
       })
       setBestScore(data.bestScore)
+      window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
     } catch (err) {
       setAnswers(previousAnswers)
       setDoneStates(previousDoneStates)
@@ -1782,17 +1821,19 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                     const isSubmitted = Boolean(submittedQuestions[question._id] || bestScore?.attemptedQuestionIds?.includes(String(question._id)) || bestScore?.isDone)
                     const storedCorrectAnswer = correctAnswersByQuestion[question._id]
                     const storedQuestionResult = bestScore?.questionResults?.find((item) => String(item.questionId) === String(question._id))
-                    const isCorrect = isSubmitted && (storedQuestionResult ? Boolean(storedQuestionResult.isCorrect) : storedCorrectAnswer && (
+                    const isDoneQuestion = (isCompleteTable || isDiagram)
+                      && Boolean(doneStates[question._id] || bestScore?.attemptedQuestionIds?.includes(String(question._id)) || isDoneOnlyDone)
+                    const isCorrect = isDoneQuestion || (isSubmitted && (storedQuestionResult ? Boolean(storedQuestionResult.isCorrect) : storedCorrectAnswer && (
                       isMatching
                         ? Array.isArray(answers[question._id])
                           && Array.isArray(storedCorrectAnswer.correctOptions)
                           && answers[question._id].length === storedCorrectAnswer.correctOptions.length
                           && answers[question._id].every((optionIndex, pairIndex) => optionIndex === storedCorrectAnswer.correctOptions[pairIndex])
                         : answers[question._id] === storedCorrectAnswer.correctOption
-                    ))
+                    )))
                     const hasStoredResult = Boolean(storedQuestionResult || storedCorrectAnswer)
                     const questionStatusClass = isCorrect
-                      ? 'border-emerald-200 bg-emerald-100 text-emerald-950 hover:border-emerald-300 hover:bg-emerald-200'
+                      ? 'border-emerald-700 bg-emerald-500 text-white hover:border-emerald-800 hover:bg-emerald-600'
                       : isSubmitted && hasStoredResult
                         ? 'border-red-200 bg-red-100 text-red-950 hover:border-red-300 hover:bg-red-200'
                         : question.isBoardQuestion
@@ -1806,14 +1847,14 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                         onClick={() => openQuestionFromDashboard(index)}
                         className={`group flex min-h-16 items-center gap-3 rounded-2xl border px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md sm:gap-4 sm:px-5 ${questionStatusClass}`}
                       >
-                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-black ${isCorrect ? 'bg-emerald-200 text-emerald-800' : isSubmitted && hasStoredResult ? 'bg-red-200 text-red-800' : 'bg-cyan-50 text-cyan-700'}`}>
+                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-black ${isCorrect ? 'bg-emerald-700 text-white' : isSubmitted && hasStoredResult ? 'bg-red-200 text-red-800' : 'bg-cyan-50 text-cyan-700'}`}>
                           {String(index + 1).padStart(2, '0')}
                         </span>
-                        <span className="min-w-0 flex-1 break-words text-sm font-bold leading-6 text-stone-900 sm:text-base">
+                        <span className={`min-w-0 flex-1 break-words text-sm font-bold leading-6 sm:text-base ${isCorrect ? 'text-white' : 'text-stone-900'}`}>
                           {question.question || 'Question'}
                         </span>
                         {question.isBoardQuestion && <span className="shrink-0 rounded-full bg-amber-200 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-amber-900">Board</span>}
-                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full transition ${isCorrect ? 'bg-emerald-200 text-emerald-800 group-hover:bg-emerald-300' : isSubmitted && hasStoredResult ? 'bg-red-200 text-red-800 group-hover:bg-red-300' : 'bg-cyan-50 text-cyan-700 group-hover:bg-cyan-600 group-hover:text-white'}`}>
+                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full transition ${isCorrect ? 'bg-emerald-700 text-white group-hover:bg-emerald-800' : isSubmitted && hasStoredResult ? 'bg-red-200 text-red-800 group-hover:bg-red-300' : 'bg-cyan-50 text-cyan-700 group-hover:bg-cyan-600 group-hover:text-white'}`}>
                           <Play className="ml-0.5 h-4 w-4 fill-current" />
                         </span>
                       </button>
@@ -1966,7 +2007,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                             {revealedAnswers[currentQuestion._id] ? 'Hide answer' : 'Show answer'}
                           </button>
                           {revealedAnswers[currentQuestion._id] && (currentQuestion.answerImageUrl ? (
-                            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                            <div id={`objective-answer-${currentQuestion._id}`} className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
                               <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Answer</p>
                               <img
                                 src={assetUrl(currentQuestion.answerImageUrl)}
@@ -1974,19 +2015,26 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
                                 className="mt-3 max-h-[58vh] w-full rounded-xl object-contain"
                               />
                             </div>
+                          ) : currentQuestion.solution ? (
+                            <div id={`objective-answer-${currentQuestion._id}`} className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                              <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Answer</p>
+                              <p className="mt-2 whitespace-pre-wrap text-sm font-bold leading-6 text-emerald-950">{currentQuestion.solution}</p>
+                            </div>
                           ) : (
-                            <div className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-5 text-center text-sm font-bold text-stone-500">
+                            <div id={`objective-answer-${currentQuestion._id}`} className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-5 text-center text-sm font-bold text-stone-500">
                               Answer is not uploaded yet.
                             </div>
                           ))}
-                          <button
-                            type="button"
-                            onClick={() => markQuestionDone(currentQuestion._id)}
-                            disabled={isSaving}
-                            className={`h-12 w-full rounded-2xl border text-sm font-black transition disabled:cursor-not-allowed sm:text-base ${doneStates[currentQuestion._id] || answers[currentQuestion._id] !== undefined || isDoneOnlyDone ? 'border-emerald-600 bg-emerald-500 text-white shadow-sm' : 'border-stone-300 bg-white text-stone-800 hover:border-stone-500'}`}
-                          >
-                            {isSaving ? 'Saving...' : doneStates[currentQuestion._id] || answers[currentQuestion._id] !== undefined || isDoneOnlyDone ? 'Undo done' : 'Mark done'}
-                          </button>
+                          {(revealedAnswers[currentQuestion._id] || doneStates[currentQuestion._id] || bestScore?.attemptedQuestionIds?.includes(String(currentQuestion._id)) || answers[currentQuestion._id] !== undefined || isDoneOnlyDone) && (
+                            <button
+                              type="button"
+                              onClick={() => markQuestionDone(currentQuestion._id)}
+                              disabled={isSaving}
+                              className={`h-12 w-full rounded-2xl border text-sm font-black transition disabled:cursor-not-allowed sm:text-base ${doneStates[currentQuestion._id] || bestScore?.attemptedQuestionIds?.includes(String(currentQuestion._id)) || answers[currentQuestion._id] !== undefined || isDoneOnlyDone ? 'border-emerald-600 bg-emerald-500 text-white shadow-sm' : 'border-stone-300 bg-white text-stone-800 hover:border-stone-500'}`}
+                            >
+                              {isSaving ? 'Saving...' : doneStates[currentQuestion._id] || bestScore?.attemptedQuestionIds?.includes(String(currentQuestion._id)) || answers[currentQuestion._id] !== undefined || isDoneOnlyDone ? 'Undo done' : 'Done'}
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <div className="mt-4 grid gap-2">

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, Navigate } from 'react-router-dom'
 import { Activity, BookOpen, Brain, CheckCircle2, ChevronLeft, Clock3, Flame, RefreshCw, Search, Shield, Users, XCircle } from 'lucide-react'
 import { apiRequest } from '../api'
@@ -157,6 +158,32 @@ const AnalysisRow = ({ student, view }) => {
   return <article className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate text-lg font-black text-slate-950">{student.name || 'Unnamed student'}</h3>{student.online && <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" title="Online" />}</div><p className="mt-1 truncate text-sm text-slate-500">{student.email || 'No email'} · {student.className || 'No class'}</p><p className="mt-1 text-xs font-semibold text-slate-400">Last login: {formatDate(student.lastLoginAt)}</p></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">{performance.map(([label, value]) => <div key={label} className={`rounded-2xl p-3 text-center ${view === 'brain' && label === 'Brain cells' ? 'bg-violet-50' : view === 'streak' && label === 'Streak' ? 'bg-orange-50' : 'bg-slate-50'}`}><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-slate-950">{value}</p></div>)}</div></div><div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-500"><span className="rounded-full bg-slate-100 px-3 py-1">Daily challenges: {Number(student.completedDailyChallenges || 0)}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-orange-700">Current streak: {Number(student.currentStreak || 0)} days</span><span className="rounded-full bg-slate-100 px-3 py-1">Daily correct: {Number(student.dailyCorrect || 0)}</span></div>{view === 'streak' && <StreakTracker student={student} />}</article>
 }
 
+const SetStreakControl = ({ student }) => {
+  const [value, setValue] = useState(String(Number(student.currentStreak || 0)))
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const save = async (event) => {
+    event.preventDefault()
+    setMessage('')
+    setSaving(true)
+    try {
+      await apiRequest(`/api/admin/streaks/${student.id}/set`, {
+        method: 'POST',
+        body: JSON.stringify({ streak: Number(value) }),
+      })
+      setMessage('Updated')
+      window.location.reload()
+    } catch (error) {
+      setMessage(error.message || 'Could not update')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <form onSubmit={save} className="mt-3 flex flex-wrap items-end gap-2 rounded-2xl border border-orange-200 bg-orange-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-orange-800">Set streak<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-orange-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-orange-400" /></label><button type="submit" disabled={saving || value === ''} className="h-9 rounded-xl bg-orange-600 px-3 text-xs font-black text-white transition hover:bg-orange-700 disabled:opacity-60">{saving ? 'Saving...' : 'Update streak'}</button>{message && <span className="text-xs font-bold text-orange-800">{message}</span>}</form>
+}
+
 const StreakTracker = ({ student }) => {
   const [remaining, setRemaining] = useState(Math.max(0, new Date(student.streakDayEndsAt || 0).getTime() - Date.now()))
   useEffect(() => {
@@ -168,13 +195,13 @@ const StreakTracker = ({ student }) => {
   const totalMinutes = Math.floor(remaining / 60000)
   const countdown = `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m remaining`
   const done = Boolean(student.streakTodayDone)
-  return <StreakStatus student={student} />
+  return <><SetStreakControl student={student} />{student.todayChallengeCompleted && <ViewStreakQuestions student={student} />}<StreakStatus student={student} /></>
   return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : 'Today’s streak is not done yet'}</span><span>{remaining ? countdown : 'New streak day started'}</span></div>
 }
 
 const StreakStatus = ({ student }) => {
   const [starting, setStarting] = useState(false)
-  const done = Boolean(student.streakTodayDone)
+  const done = Boolean(student.todayChallengeCompleted)
   const failed = Boolean(student.streakTodayFailed)
   const startToday = async () => {
     setStarting(true)
@@ -191,6 +218,41 @@ const StreakStatus = ({ student }) => {
   if (failed && student.streakRestoreAvailable) return <RestoreStreakAction student={student} />
   if (failed && !student.streakRestoreAvailable) return <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs font-bold text-rose-800"><XCircle className="mr-2 inline h-4 w-4" />Below 10 correct · Restore window expired</div>
   return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : failed ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : failed ? <XCircle className="h-4 w-4" /> : null}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : failed ? `Below 10 correct · ${student.streakTodayCorrect || 0} correct` : 'Not attempted today'}</span>{failed && <button type="button" onClick={startToday} disabled={starting} className="rounded-full bg-slate-950 px-3 py-1.5 text-white transition hover:bg-black disabled:opacity-60">{starting ? 'Starting...' : 'Start today'}</button>}</div>
+}
+
+const formatAnswer = (answer, options = []) => {
+  if (answer === undefined || answer === null || answer === '') return 'Not answered'
+  const formatValue = (value) => typeof value === 'number' && options[value] !== undefined ? options[value] : value
+  if (Array.isArray(answer)) return answer.map((item) => typeof item === 'object' ? Object.values(item).join(' - ') : String(formatValue(item))).join(', ')
+  if (typeof answer === 'object') return Object.values(answer).join(' - ')
+  return String(formatValue(answer))
+}
+
+const ViewStreakQuestions = ({ student }) => {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [questions, setQuestions] = useState([])
+  const [error, setError] = useState('')
+
+  const loadQuestions = async () => {
+    setOpen(true)
+    setError('')
+    if (questions.length) return
+    setLoading(true)
+    try {
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/questions`)
+      setQuestions(Array.isArray(data.questions) ? data.questions : [])
+    } catch (requestError) {
+      setError(requestError.message || 'Could not load questions.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <>
+    <button type="button" onClick={loadQuestions} className="mt-3 inline-flex items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700">View today&apos;s questions</button>
+    {open && createPortal(<div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="Today&apos;s streak questions"><div className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><h3 className="text-xl font-black text-slate-950">Today&apos;s streak questions</h3><p className="mt-1 text-xs font-semibold text-slate-500">{student.name || 'Student'} · chosen answers</p></div><button type="button" onClick={() => setOpen(false)} className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-black text-slate-600 hover:bg-slate-200">Close</button></div><div className="max-h-[calc(85vh-80px)] overflow-y-auto p-4">{loading ? <p className="p-6 text-center text-sm font-semibold text-slate-500">Loading questions...</p> : error ? <p className="rounded-2xl bg-rose-50 p-4 text-sm font-bold text-rose-700">{error}</p> : questions.map((question) => <article key={String(question.id)} className={`mb-3 rounded-2xl border p-4 ${question.isCorrect ? 'border-emerald-200 bg-emerald-50/60' : 'border-rose-200 bg-rose-50/60'}`}><div className="flex items-start justify-between gap-3"><p className="text-sm font-black text-slate-950">{question.number}. {question.question}</p><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${question.isCorrect ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>{question.isCorrect ? 'Right' : 'Wrong'}</span></div><div className="mt-3 grid gap-2 text-xs sm:grid-cols-2"><p className="rounded-xl bg-white/80 px-3 py-2 font-semibold text-slate-700"><span className="font-black text-slate-400">Chosen: </span>{formatAnswer(question.selectedAnswer, question.options)}</p><p className="rounded-xl bg-white/80 px-3 py-2 font-semibold text-slate-700"><span className="font-black text-slate-400">Correct: </span>{formatAnswer(question.correctAnswer)}</p></div></article>)}</div></div></div>, document.body)}
+  </>
 }
 
 const RestoreStreakAction = ({ student }) => {

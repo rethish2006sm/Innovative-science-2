@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CheckCircle2, Trophy, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
@@ -26,6 +26,12 @@ const writeRankState = (payload) => {
 
 const RankNotifier = () => {
   const { pathname } = useLocation()
+  const suppressRankPopup = pathname === '/questions'
+    || pathname === '/daily-streak'
+    || pathname.includes('/objectives')
+    || pathname.startsWith('/pyqs')
+    || pathname.startsWith('/test-builder')
+    || pathname.startsWith('/battle')
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [notification, setNotification] = useState(null)
   const [refreshTick, setRefreshTick] = useState(0)
@@ -59,7 +65,7 @@ const RankNotifier = () => {
     let cancelled = false
 
     const loadRank = async () => {
-      if (!auth?.token || auth?.user?.isAdmin) {
+      if (!auth?.token || auth?.user?.isAdmin || suppressRankPopup) {
         setNotification(null)
         return
       }
@@ -107,7 +113,7 @@ const RankNotifier = () => {
     return () => {
       cancelled = true
     }
-  }, [auth?.token, auth?.user?.email, auth?.user?.isAdmin, pathname, refreshTick])
+  }, [auth?.token, auth?.user?.email, auth?.user?.isAdmin, pathname, refreshTick, suppressRankPopup])
 
   if (!notification) {
     return null

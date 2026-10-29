@@ -404,6 +404,7 @@ const AppLayout = () => {
   const [activeScience, setActiveScience] = useState(() => getActiveScience())
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
   const isBattleRoute = pathname.startsWith('/battle-mode')
+  const isDailyStreakRoute = pathname === '/daily-streak'
   const isAuthRoute = pathname === '/signin' || pathname === '/signup'
   const seo = getSeoFromPathname(pathname)
   const siteNoticeKey = siteNotice?.id ? `${siteNotice.id}:${siteNotice.updatedAt || ''}` : ''
@@ -443,6 +444,23 @@ const AppLayout = () => {
       window.removeEventListener('innovative-science-push-updated', setupPush)
     }
   }, [auth?.token, auth?.user?.isAdmin])
+
+  useEffect(() => {
+    if (!auth?.token || auth?.user?.isAdmin) return undefined
+
+    const verifyActiveAccount = async () => {
+      try {
+        await apiRequest('/api/auth/me', { cache: 'no-store' })
+      } catch (error) {
+        if (error.status === 401) {
+          navigate('/signin', { replace: true })
+        }
+      }
+    }
+
+    const timer = window.setInterval(verifyActiveAccount, 30000)
+    return () => window.clearInterval(timer)
+  }, [auth?.token, auth?.user?.isAdmin, navigate])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -702,7 +720,7 @@ const AppLayout = () => {
           </Suspense>
         </main>
       </div>
-      {!isObjectivePracticeRoute && !isBattleRoute && <div className="app-footer"><Footer /></div>}
+      {!isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && <div className="app-footer"><Footer /></div>}
       {showSigninReminder && !auth?.token && !isAuthRoute && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[2rem] border border-white/70 bg-white p-6 shadow-2xl">
