@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   CalendarDays,
@@ -113,6 +113,10 @@ export default function Classpage() {
   const { classId } = useParams();
   const navigate = useNavigate();
 
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [classId]);
+
   const [activeCategory, setActiveCategory] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOrder, setSortOrder] = useState("newest");
@@ -135,6 +139,15 @@ export default function Classpage() {
   const [viewerPhoto, setViewerPhoto] = useState(null);
   const [viewerPdf, setViewerPdf] = useState(null);
   const [isZoomed, setIsZoomed] = useState(false);
+
+  useEffect(() => {
+    if (!activeCategory) return;
+
+    document.getElementById("class-material-content")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, [activeCategory]);
 
   /*
    * FILTER + SEARCH + SORT
@@ -840,6 +853,7 @@ export default function Classpage() {
         {/* =====================================================
             LOADING
         ====================================================== */}
+        <div id="class-material-content" className="scroll-mt-28">
         {loading ? (
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -1322,6 +1336,7 @@ export default function Classpage() {
           </section>
           </>
         )}
+        </div>
 
       </div>
 
