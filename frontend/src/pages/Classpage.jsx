@@ -11,7 +11,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { API_BASE_URL, apiRequest } from "../api";
 import { authEvents, getStoredAuth } from "../authStorage";
 import {
@@ -112,6 +112,7 @@ function getChapterNumber(post) {
 export default function Classpage() {
   const { classId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useLayoutEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -139,6 +140,12 @@ export default function Classpage() {
   const [viewerPhoto, setViewerPhoto] = useState(null);
   const [viewerPdf, setViewerPdf] = useState(null);
   const [isZoomed, setIsZoomed] = useState(false);
+
+  useEffect(() => {
+    const nextCategory = searchParams.get("category") || "";
+    setActiveCategory((current) => current === nextCategory ? current : nextCategory);
+    setSearchTerm("");
+  }, [searchParams]);
 
   useEffect(() => {
     if (!activeCategory) return;
@@ -505,6 +512,10 @@ export default function Classpage() {
 
     setActiveCategory(nextCategory);
     setSearchTerm("");
+    setSearchParams(
+      nextCategory ? { category: nextCategory } : {},
+      { replace: false },
+    );
   };
 
   const openMaterial = (post) => {
