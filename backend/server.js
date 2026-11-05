@@ -354,6 +354,8 @@ const Science2User = mongoose.model('User', userSchema)
 
 const normalizeEmail = (email = '') => email.toLowerCase().trim()
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+const isValidPersonName = (name = '') => /^\p{L}[\p{L}\p{M}]*(?: +\p{L}[\p{L}\p{M}]*)*$/u.test(String(name).trim())
+const invalidPersonNameMessage = 'Name can contain letters and spaces only.'
 const getStoredPassword = (user) => String(user?.password || user?.passwordHash || '')
 const passwordMatches = async (plainPassword, user) => {
   const storedPassword = getStoredPassword(user)
@@ -4369,12 +4371,18 @@ app.post('/api/auth/firebase', async (req, res) => {
       return res.status(400).json({ message: 'A verified email address is required.' })
     }
 
+    if (name !== undefined && !isValidPersonName(name)) {
+      return res.status(400).json({ message: invalidPersonNameMessage })
+    }
+
     let user = await AccountUser.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
     let createdNewUser = false
     if (!user) {
       user = await AccountUser.create({
         firebaseUid: firebaseUser.uid,
-        name: String(firebaseUser.name || name || normalizedEmail.split('@')[0]).trim() || 'Student',
+        name: isValidPersonName(name || firebaseUser.name)
+          ? String(name || firebaseUser.name).trim()
+          : 'Student',
         email: normalizedEmail,
         phoneNumber: String(phoneNumber || '').trim(),
         dateOfBirth: String(dateOfBirth || '').trim(),
@@ -4503,6 +4511,10 @@ app.post('/api/auth/signup', async (req, res) => {
 
     if (!name?.trim() || !normalizedEmail || !normalizedPhoneNumber || !password) {
       return res.status(400).json({ message: 'Name, email, phone number, and password are required.' })
+    }
+
+    if (!isValidPersonName(name)) {
+      return res.status(400).json({ message: invalidPersonNameMessage })
     }
 
     if (!isValidEmail(normalizedEmail)) {
@@ -4805,6 +4817,10 @@ app.patch('/api/auth/profile', authRequired, async (req, res) => {
 
     if (!name?.trim()) {
       return res.status(400).json({ message: 'Name is required.' })
+    }
+
+    if (!isValidPersonName(name)) {
+      return res.status(400).json({ message: invalidPersonNameMessage })
     }
 
     const normalizedPhoneNumber = String(phoneNumber || '').trim()

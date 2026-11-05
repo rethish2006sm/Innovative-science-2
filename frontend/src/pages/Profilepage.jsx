@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 
 import { apiRequest, assetUrl } from '../api'
+import { isValidName, NAME_VALIDATION_MESSAGE, NAME_PATTERN } from '../utils/nameValidation'
 import { getStoredAuth, updateStoredUser } from '../authStorage'
 import { useAuth } from '../context/AuthContext'
 import { getWebPushSubscription, registerWebPush, unregisterWebPush } from '../lib/webPush'
@@ -863,6 +864,10 @@ const Profilepage = () => {
         return 'Mobile number must contain exactly 10 digits.'
       }
 
+      if (!isValidName(name)) {
+        return NAME_VALIDATION_MESSAGE
+      }
+
       if (
         percentage !== '' &&
         (
@@ -1411,6 +1416,9 @@ const Profilepage = () => {
                         setName
                       }
                       icon={User}
+                      pattern={NAME_PATTERN.source}
+                      title={NAME_VALIDATION_MESSAGE}
+                      maxLength={80}
                       required
                     />
 
@@ -2330,6 +2338,9 @@ const FormInput = memo(
     step,
     inputMode,
     maxLength,
+    pattern,
+    title,
+    autoComplete,
   }) => {
     return (
       <label className="grid gap-1.5 text-xs font-bold text-slate-600">
@@ -2361,6 +2372,9 @@ const FormInput = memo(
             step={step}
             inputMode={inputMode}
             maxLength={maxLength}
+            pattern={pattern}
+            title={title}
+            autoComplete={autoComplete}
             placeholder={
               placeholder
             }

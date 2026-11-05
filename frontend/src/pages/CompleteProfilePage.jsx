@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Loader2, UserRound } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getStoredAuth } from '../authStorage'
+import { isValidName, NAME_VALIDATION_MESSAGE, NAME_PATTERN } from '../utils/nameValidation'
 
 const CITY_API_URL = 'https://countriesnow.space/api/v0.1/countries/state/cities'
 const FALLBACK_CITIES = ['Mumbai', 'Pune', 'Nashik', 'Nagpur', 'Thane', 'Aurangabad', 'Kolhapur', 'Solapur']
@@ -173,6 +174,10 @@ const CompleteProfilePage = () => {
       setError('Please complete every required field.')
       return
     }
+    if (!isValidName(form.name)) {
+      setError(NAME_VALIDATION_MESSAGE)
+      return
+    }
     if (!/^\d{10}$/.test(phone)) {
       setError('Mobile number must contain exactly 10 digits.')
       return
@@ -214,7 +219,7 @@ const CompleteProfilePage = () => {
 
         <div className="mt-8 grid gap-5">
           <h2 className="border-b border-slate-100 pb-2 text-lg font-black text-slate-800">Basic Information</h2>
-          <label className={labelClass}>Full name<input className={inputClass} value={form.name} onChange={(event) => updateField('name', event.target.value)} required /></label>
+          <label className={labelClass}>Full name<input className={inputClass} value={form.name} onChange={(event) => updateField('name', event.target.value)} pattern={NAME_PATTERN.source} title={NAME_VALIDATION_MESSAGE} maxLength={80} autoComplete="name" required /></label>
           <label className={labelClass}>Email<input className={`${inputClass} cursor-not-allowed bg-slate-100`} value={user?.email || savedUser?.email || ''} readOnly /></label>
           <label className={labelClass}>Mobile number<input className={inputClass} type="tel" inputMode="numeric" maxLength={10} value={form.phoneNumber} onChange={(event) => updateField('phoneNumber', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile number" required /></label>
 
