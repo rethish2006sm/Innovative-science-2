@@ -12,13 +12,14 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
+import { assetUrl } from "../api";
 
 /* ==========================================================================
    BATTLE RESULTS PAGE
    Cinematic / Responsive / Mobile Optimized
    ========================================================================== */
 
-const BattleResultsPage = ({ room, leaveToHome }) => {
+const BattleResultsPage = ({ room, returnToLobby, resultLocked = false, resultSeconds = 0 }) => {
   const [visible, setVisible] = useState(false);
   const [showAllPlayers, setShowAllPlayers] = useState(false);
   const [celebration, setCelebration] = useState(false);
@@ -145,7 +146,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
     <div
       className={`
         relative min-h-screen w-full overflow-x-hidden
-        bg-[#f5f8ff] px-3 py-3 text-slate-900
+        bg-white px-3 py-3 text-slate-900
         sm:px-5 sm:py-5
         lg:px-8 lg:py-8
         transition-all duration-1000
@@ -160,9 +161,9 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
         <div
           className="
             absolute inset-0
-            bg-[radial-gradient(circle_at_20%_10%,rgba(34,211,238,0.13),transparent_30%),
-            radial-gradient(circle_at_85%_15%,rgba(139,92,246,0.12),transparent_30%),
-            radial-gradient(circle_at_50%_100%,rgba(16,185,129,0.08),transparent_35%)]
+            bg-[radial-gradient(circle_at_20%_10%,rgba(251,146,60,0.18),transparent_30%),
+            radial-gradient(circle_at_85%_15%,rgba(249,115,22,0.14),transparent_30%),
+            radial-gradient(circle_at_50%_100%,rgba(245,158,11,0.10),transparent_35%)]
           "
         />
 
@@ -171,7 +172,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
             absolute -left-40 -top-40
             h-[380px] w-[380px]
             rounded-full
-            bg-cyan-300/20
+            bg-orange-300/20
             blur-[100px]
             animate-[float_9s_ease-in-out_infinite]
           "
@@ -182,7 +183,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
             absolute -right-40 top-20
             h-[450px] w-[450px]
             rounded-full
-            bg-violet-300/20
+            bg-amber-300/20
             blur-[110px]
             animate-[floatReverse_11s_ease-in-out_infinite]
           "
@@ -193,7 +194,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
             absolute bottom-[-200px] left-[35%]
             h-[400px] w-[400px]
             rounded-full
-            bg-emerald-300/15
+            bg-orange-300/15
             blur-[100px]
             animate-[float_12s_ease-in-out_infinite]
           "
@@ -202,7 +203,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
         <div
           className="
             absolute inset-0 opacity-[0.035]
-            [background-image:linear-gradient(#0f172a_1px,transparent_1px),linear-gradient(90deg,#0f172a_1px,transparent_1px)]
+            [background-image:linear-gradient(#f97316_1px,transparent_1px),linear-gradient(90deg,#f97316_1px,transparent_1px)]
             [background-size:42px_42px]
           "
         />
@@ -218,118 +219,6 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
       <CinematicParticles />
 
       <div className="relative z-10 mx-auto w-full max-w-7xl">
-        {/* ==================================================================
-            HEADER
-            ================================================================== */}
-
-        <div
-          className={`
-            mb-4 flex items-center justify-between gap-3
-            transition-all duration-1000
-            sm:mb-6
-            ${
-              visible
-                ? "translate-y-0 opacity-100"
-                : "-translate-y-8 opacity-0"
-            }
-          `}
-        >
-          <div className="flex min-w-0 items-center gap-3">
-            <div
-              className="
-                group relative grid h-11 w-11 shrink-0
-                place-items-center rounded-2xl
-                bg-gradient-to-br
-                from-cyan-500 via-blue-600 to-violet-600
-                text-white
-                shadow-xl shadow-cyan-200/60
-              "
-            >
-              <div
-                className="
-                  absolute inset-0 rounded-2xl
-                  bg-white/20 blur-md
-                  opacity-0 transition-opacity
-                  group-hover:opacity-100
-                "
-              />
-
-              <Trophy
-                className="
-                  relative h-5 w-5
-                  animate-[trophyBounce_3s_ease-in-out_infinite]
-                "
-              />
-            </div>
-
-            <div className="min-w-0">
-              <p
-                className="
-                  text-[8px] font-black uppercase
-                  tracking-[0.28em] text-cyan-600
-                "
-              >
-                Battle results
-              </p>
-
-              <h1
-                className="
-                  truncate text-lg font-black
-                  tracking-tight text-slate-950
-                  sm:text-2xl
-                "
-              >
-                Match Summary
-              </h1>
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <div
-              className="
-                hidden rounded-full border border-slate-200
-                bg-white/80 px-3 py-2
-                text-[9px] font-black uppercase
-                tracking-[0.16em] text-slate-500
-                shadow-sm backdrop-blur
-                sm:block
-              "
-            >
-              Room {room?.code || "------"}
-            </div>
-
-            <div
-              className="
-                flex items-center gap-1.5
-                rounded-full border border-emerald-200
-                bg-emerald-50/90 px-2.5 py-2
-                text-[8px] font-black uppercase
-                tracking-[0.12em] text-emerald-600
-                shadow-sm sm:px-3
-              "
-            >
-              <span className="relative flex h-2 w-2">
-                <span
-                  className="
-                    absolute inline-flex h-full w-full
-                    animate-ping rounded-full
-                    bg-emerald-400 opacity-70
-                  "
-                />
-
-                <span
-                  className="
-                    relative inline-flex h-2 w-2
-                    rounded-full bg-emerald-500
-                  "
-                />
-              </span>
-
-              Complete
-            </div>
-          </div>
-        </div>
-
         {/* ==================================================================
             TOP PODIUM CARD
             ================================================================== */}
@@ -582,10 +471,10 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                 <p
                   className="
                     text-[8px] font-black uppercase
-                    tracking-[0.2em] text-cyan-600
+                    tracking-[0.2em] text-orange-600
                   "
                 >
-                  Complete ranking
+                  Player performance
                 </p>
 
                 <h3
@@ -623,6 +512,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                   key={player.userId || index}
                   player={player}
                   index={index}
+                  reward={rewards.find((item) => String(item.userId) === String(player.userId))}
                 />
               ))}
             </div>
@@ -646,7 +536,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                   hover:-translate-y-0.5
                   hover:border-cyan-200
                   hover:bg-cyan-50
-                  hover:text-cyan-700
+                  hover:text-orange-700
                   sm:mt-4 sm:py-3 sm:text-xs
                 "
               >
@@ -688,6 +578,8 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                 PERSONAL RESULT
                 ============================================================== */}
 
+            {false && (
+              <>
             <section
               className="
                 overflow-hidden
@@ -704,7 +596,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                 className="
                   rounded-2xl
                   bg-gradient-to-br
-                  from-slate-950 via-slate-800 to-slate-700
+                  from-orange-950 via-orange-800 to-amber-700
                   p-4 text-white
                   shadow-xl
                 "
@@ -778,10 +670,15 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
               </div>
             </section>
 
+              </>
+            )}
+
             {/* ==============================================================
                 PERFORMANCE
                 ============================================================== */}
 
+            {false && (
+              <>
             <section
               className="
                 rounded-[1.8rem]
@@ -798,7 +695,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                   <p
                     className="
                       text-[8px] font-black uppercase
-                      tracking-[0.22em] text-violet-500
+                      tracking-[0.22em] text-orange-600
                     "
                   >
                     Performance
@@ -817,8 +714,8 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                 <div
                   className="
                     grid h-9 w-9 place-items-center
-                    rounded-xl bg-violet-50
-                    text-violet-600
+                    rounded-xl bg-orange-50
+                    text-orange-600
                     sm:h-10 sm:w-10
                   "
                 >
@@ -885,9 +782,9 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                     className="
                       relative h-full rounded-full
                       bg-gradient-to-r
-                      from-cyan-500
-                      via-blue-500
-                      to-emerald-500
+                      from-orange-500
+                      via-amber-400
+                      to-yellow-300
                       transition-all duration-[1600ms]
                     "
                     style={{
@@ -924,7 +821,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                 className="
                   relative overflow-hidden
                   bg-gradient-to-br
-                  from-violet-600 via-indigo-600 to-blue-600
+                  from-orange-600 via-orange-500 to-amber-400
                   p-5 text-white
                 "
               >
@@ -948,7 +845,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                 <p
                   className="
                     text-[8px] font-black uppercase
-                    tracking-[0.22em] text-violet-200
+                    tracking-[0.22em] text-orange-100
                   "
                 >
                   Rewards unlocked
@@ -966,7 +863,7 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
                       +{brainCells}
                     </p>
 
-                    <p className="mt-0.5 text-[10px] font-bold text-violet-200">
+                    <p className="mt-0.5 text-[10px] font-bold text-orange-100">
                       Brain Cells earned
                     </p>
                   </div>
@@ -1060,28 +957,33 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
               </div>
             </section>
 
+              </>
+            )}
+
             {/* ==============================================================
                 CTA
                 ============================================================== */}
 
             <button
               type="button"
-              onClick={leaveToHome}
+              onClick={returnToLobby}
+              disabled={resultLocked}
               className="
                 group relative flex w-full
                 items-center justify-between
                 overflow-hidden
                 rounded-[1.5rem]
-                bg-slate-950
+                bg-orange-950
                 px-4 py-3.5
                 text-left text-white
-                shadow-xl shadow-slate-300/50
+                shadow-xl shadow-orange-300/50
                 transition-all duration-500
+                disabled:cursor-not-allowed disabled:opacity-60
                 hover:-translate-y-1
                 hover:shadow-2xl
                 focus:outline-none
                 focus-visible:ring-4
-                focus-visible:ring-cyan-300
+                focus-visible:ring-orange-300
                 active:scale-[0.98]
                 sm:px-5 sm:py-4
               "
@@ -1122,11 +1024,11 @@ const BattleResultsPage = ({ room, leaveToHome }) => {
 
                 <div>
                   <p className="text-xs font-black sm:text-sm">
-                    Return to website
+                    {resultLocked ? `Lobby opens in ${resultSeconds}s` : 'Return to lobby'}
                   </p>
 
                   <p className="mt-0.5 text-[9px] font-bold text-slate-400">
-                    Continue exploring and play again
+                    Start or join another battle
                   </p>
                 </div>
               </div>
@@ -1357,7 +1259,7 @@ const CinematicParticles = () => {
             key={index}
             className="
               absolute rounded-full
-              bg-cyan-400/40
+              bg-orange-400/50
               animate-[particleFloat_8s_ease-in-out_infinite]
             "
             style={{
@@ -1536,18 +1438,26 @@ const PodiumPlayer = ({
           />
         )}
 
-        <span
-          className={`
-            relative font-black
-            ${
-              isFirst
-                ? "text-2xl sm:text-4xl"
-                : "text-lg sm:text-2xl"
-            }
-          `}
-        >
-          {player.name?.charAt(0)?.toUpperCase() || "?"}
-        </span>
+        {player.profileImageUrl ? (
+          <img
+            src={assetUrl(player.profileImageUrl)}
+            alt={`${player.name || "Player"} battle profile`}
+            className="relative h-full w-full rounded-full object-cover"
+          />
+        ) : (
+          <span
+            className={`
+              relative font-black
+              ${
+                isFirst
+                  ? "text-2xl sm:text-4xl"
+                  : "text-lg sm:text-2xl"
+              }
+            `}
+          >
+            {player.name?.charAt(0)?.toUpperCase() || "?"}
+          </span>
+        )}
 
         {/* Rank */}
 
@@ -1641,6 +1551,7 @@ const PodiumPlayer = ({
 const LeaderboardRow = ({
   player,
   index,
+  reward,
 }) => {
   const rank = Number(player.rank || index + 1);
 
@@ -1661,14 +1572,14 @@ const LeaderboardRow = ({
         ${
           player.isSelf
             ? `
-              border-emerald-200
-              bg-emerald-50/80
+              border-orange-200
+              bg-orange-50/90
               shadow-sm
             `
             : `
               border-slate-100
               bg-slate-50/60
-              hover:border-cyan-100
+              hover:border-orange-200
               hover:bg-white
             `
         }
@@ -1683,13 +1594,16 @@ const LeaderboardRow = ({
         `,
       }}
     >
-      <RankBadge rank={rank} />
+      <div className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-2xl border-2 border-white bg-gradient-to-br from-orange-100 to-amber-200 text-sm font-black text-orange-700 shadow-md sm:h-12 sm:w-12">
+        {player.profileImageUrl ? <img src={assetUrl(player.profileImageUrl)} alt={`${player.name || "Player"} battle profile`} className="h-full w-full object-cover" /> : player.name?.slice(0, 1)?.toUpperCase() || "?"}
+        <span className="absolute -bottom-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full border-2 border-white bg-slate-950 px-1 text-[7px] font-black text-white">{rank}</span>
+      </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <p
             className="
-              truncate text-[10px]
+              break-words text-[10px]
               font-black text-slate-800
               sm:text-sm
             "
@@ -1701,11 +1615,11 @@ const LeaderboardRow = ({
             <span
               className="
                 shrink-0 rounded-full
-                bg-emerald-100
+                bg-orange-100
                 px-1.5 py-0.5
                 text-[6px] font-black
                 uppercase tracking-wider
-                text-emerald-700
+                text-orange-700
                 sm:px-2 sm:text-[8px]
               "
             >
@@ -1756,12 +1670,12 @@ const LeaderboardRow = ({
               "
             />
 
-            {player.streak || 0} streak
+            {player.highestStreak || player.streak || 0} best streak
           </span>
         </div>
       </div>
 
-      <div className="shrink-0 text-right">
+      <div className="grid shrink-0 justify-items-end gap-0.5 text-right">
         <p
           className="
             text-xs font-black
@@ -1771,7 +1685,7 @@ const LeaderboardRow = ({
             sm:text-base
           "
         >
-          {player.score || 0}
+          {player.score || 0} XP
         </p>
 
         <p
@@ -1782,7 +1696,7 @@ const LeaderboardRow = ({
             sm:text-[8px]
           "
         >
-          points
+          points · +{reward?.brainCells || 0} brain
         </p>
       </div>
 
@@ -1792,7 +1706,7 @@ const LeaderboardRow = ({
           text-slate-300
           transition-all duration-300
           group-hover:translate-x-1
-          group-hover:text-cyan-500
+          group-hover:text-orange-500
           sm:block
         "
       />

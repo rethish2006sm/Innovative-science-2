@@ -276,6 +276,29 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    gameId: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      maxlength: 14,
+      match: /(?=.*\d)^[A-Za-z0-9_]{6,14}$/,
+    },
+    friendIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    }],
+    friendRequests: [{
+      senderId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+      },
+      createdAt: {
+        type: Date,
+        default: Date.now,
+      },
+    }],
     dateOfBirth: { type: String, trim: true, default: '' },
     gender: { type: String, trim: true, default: '' },
     bloodGroup: { type: String, trim: true, default: '' },
@@ -294,6 +317,11 @@ const userSchema = new mongoose.Schema(
       default: '',
     },
     profileImage: {
+      data: Buffer,
+      contentType: String,
+      updatedAt: Date,
+    },
+    battleProfileImage: {
       data: Buffer,
       contentType: String,
       updatedAt: Date,
@@ -1091,6 +1119,12 @@ const battleRewardSchema = new mongoose.Schema(
       uppercase: true,
       maxlength: 6,
     },
+    roomName: {
+      type: String,
+      trim: true,
+      default: 'Battle Match',
+      maxlength: 120,
+    },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -1107,6 +1141,13 @@ const battleRewardSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    correctCount: { type: Number, default: 0, min: 0 },
+    wrongCount: { type: Number, default: 0, min: 0 },
+    skippedCount: { type: Number, default: 0, min: 0 },
+    attemptedCount: { type: Number, default: 0, min: 0 },
+    streak: { type: Number, default: 0, min: 0 },
+    chapterIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+    objectiveTypes: { type: [String], default: [] },
     brainCells: {
       type: Number,
       default: 0,
@@ -1950,6 +1991,8 @@ const publicUser = (user, { includePassword = false } = {}) => ({
   name: user.name,
   email: user.email,
   phoneNumber: user.phoneNumber || '',
+  gameId: user.gameId || '',
+  friendIds: (user.friendIds || []).map((friendId) => String(friendId)),
   dateOfBirth: user.dateOfBirth || '',
   gender: user.gender || '',
   bloodGroup: user.bloodGroup || '',
@@ -1969,6 +2012,9 @@ const publicUser = (user, { includePassword = false } = {}) => ({
     ? `/api/auth/users/${user._id}/avatar?v=${
         user.profileImage.updatedAt?.getTime() || Date.now()
       }`
+    : '',
+  battleProfileImageUrl: user.battleProfileImage?.data
+    ? `/api/auth/users/${user._id}/battle-profile-image?v=${user.battleProfileImage.updatedAt?.getTime() || Date.now()}`
     : '',
 })
 
@@ -4351,6 +4397,7 @@ app.post('/api/auth/firebase', async (req, res) => {
       name,
       email = '',
       phoneNumber,
+      gameId,
       dateOfBirth,
       gender,
       bloodGroup,
@@ -4375,6 +4422,17 @@ app.post('/api/auth/firebase', async (req, res) => {
       return res.status(400).json({ message: invalidPersonNameMessage })
     }
 
+    if (gameId !== undefined) {
+      const normalizedGameId = String(gameId || '').trim()
+      if (normalizedGameId && !/(?=.*\d)^[A-Za-z0-9_]{6,14}$/.test(normalizedGameId)) {
+        return res.status(400).json({ message: 'GameID must be 6–14 characters and include at least one number.' })
+      }
+      const gameIdOwner = normalizedGameId
+        ? await AccountUser.findOne({ gameId: normalizedGameId, _id: { $ne: (await AccountUser.findOne({ firebaseUid: firebaseUser.uid }))?._id } })
+        : null
+      if (gameIdOwner && gameIdOwner.email !== normalizedEmail) return res.status(409).json({ message: 'This GameID is already taken.' })
+    }
+
     let user = await AccountUser.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
     let createdNewUser = false
     if (!user) {
@@ -4385,6 +4443,7 @@ app.post('/api/auth/firebase', async (req, res) => {
           : 'Student',
         email: normalizedEmail,
         phoneNumber: String(phoneNumber || '').trim(),
+        gameId: String(gameId || '').trim(),
         dateOfBirth: String(dateOfBirth || '').trim(),
         gender: String(gender || '').trim(),
         bloodGroup: String(bloodGroup || '').trim(),
@@ -4416,7 +4475,7 @@ app.post('/api/auth/firebase', async (req, res) => {
         user.phoneNumber = requestedPhoneNumber
         changed = true
       }
-      const profileFields = { dateOfBirth, gender, bloodGroup, state, city, area, schoolName, finalExamPercentage }
+      const profileFields = { dateOfBirth, gender, bloodGroup, state, city, area, schoolName, finalExamPercentage, gameId }
       Object.entries(profileFields).forEach(([key, value]) => {
         if (value !== undefined && user[key] !== (key === 'finalExamPercentage' && value !== '' ? Number(value) : String(value || '').trim())) {
           user[key] = key === 'finalExamPercentage'
@@ -4805,6 +4864,7 @@ app.patch('/api/auth/profile', authRequired, async (req, res) => {
     const {
       name,
       phoneNumber = '',
+      gameId,
       dateOfBirth = '',
       gender = '',
       bloodGroup = '',
@@ -4828,8 +4888,18 @@ app.patch('/api/auth/profile', authRequired, async (req, res) => {
       return res.status(400).json({ message: 'Mobile number must contain exactly 10 digits.' })
     }
 
+    const normalizedGameId = gameId === undefined ? undefined : String(gameId || '').trim()
+    if (normalizedGameId && !/(?=.*\d)^[A-Za-z0-9_]{6,14}$/.test(normalizedGameId)) {
+      return res.status(400).json({ message: 'GameID must be 6–14 characters and include at least one number.' })
+    }
+    if (normalizedGameId) {
+      const existingGameId = await AccountUser.findOne({ gameId: normalizedGameId, _id: { $ne: req.user._id } })
+      if (existingGameId) return res.status(409).json({ message: 'This GameID is already taken.' })
+    }
+
     req.user.name = name.trim()
     req.user.phoneNumber = normalizedPhoneNumber
+    if (normalizedGameId !== undefined) req.user.gameId = normalizedGameId
     req.user.dateOfBirth = String(dateOfBirth || '').trim()
     req.user.gender = String(gender || '').trim()
     req.user.bloodGroup = String(bloodGroup || '').trim()
@@ -4957,6 +5027,35 @@ app.delete('/api/auth/profile-image', authRequired, async (req, res) => {
   }
 })
 
+app.post('/api/auth/battle-profile-image', authRequired, upload.single('battleProfileImage'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'Please upload an image.' })
+    const webpBuffer = await createWebpImage(req.file.buffer, {
+      width: 512,
+      height: 512,
+      fit: 'cover',
+      quality: 82,
+    })
+    req.user.battleProfileImage = { data: webpBuffer, contentType: 'image/webp', updatedAt: new Date() }
+    await req.user.save()
+    const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
+    res.json({ user: publicUser(refreshedUser) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not save Battle Mode profile image.' })
+  }
+})
+
+app.delete('/api/auth/battle-profile-image', authRequired, async (req, res) => {
+  try {
+    req.user.battleProfileImage = undefined
+    await req.user.save()
+    const refreshedUser = await User.findById(req.user._id).populate('classId', 'name')
+    res.json({ user: publicUser(refreshedUser) })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not remove Battle Mode profile image.' })
+  }
+})
+
 app.get('/api/auth/users/:id/avatar', async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('profileImage')
@@ -4970,6 +5069,18 @@ app.get('/api/auth/users/:id/avatar', async (req, res) => {
     res.send(user.profileImage.data)
   } catch (error) {
     res.status(404).json({ message: 'Profile image not found.' })
+  }
+})
+
+app.get('/api/auth/users/:id/battle-profile-image', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('battleProfileImage')
+    if (!user?.battleProfileImage?.data) return res.status(404).json({ message: 'Battle profile image not found.' })
+    res.set('Content-Type', user.battleProfileImage.contentType || 'image/webp')
+    res.set('Cache-Control', 'no-store')
+    res.send(user.battleProfileImage.data)
+  } catch (error) {
+    res.status(404).json({ message: 'Battle profile image not found.' })
   }
 })
 

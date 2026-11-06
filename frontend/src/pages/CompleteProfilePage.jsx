@@ -182,6 +182,10 @@ const CompleteProfilePage = () => {
       setError('Mobile number must contain exactly 10 digits.')
       return
     }
+    if (false) {
+      setError('GameID must be 6–14 characters and include at least one number.')
+      return
+    }
     if (!form.city || !form.area.trim() || !form.schoolName.trim()) {
       setError('Please complete every required field.')
       return
@@ -202,7 +206,8 @@ const CompleteProfilePage = () => {
         schoolName: form.schoolName.trim(),
         finalExamPercentage: percentage,
       })
-      navigate('/', { replace: true })
+      const returnTo = new URLSearchParams(window.location.search).get('returnTo')
+      navigate(returnTo || '/', { replace: true })
     } catch (profileError) {
       setError(profileError.message || 'Could not save your profile.')
     } finally {
@@ -212,7 +217,7 @@ const CompleteProfilePage = () => {
 
   return (
     <section className="min-h-[calc(100vh-6rem)] bg-gradient-to-br from-emerald-50 via-white to-teal-100 px-4 py-8 sm:py-12">
-      <form onSubmit={handleSubmit} className="mx-auto w-full max-w-2xl rounded-[2rem] border border-white bg-white p-6 shadow-2xl shadow-emerald-900/10 sm:p-10">
+      <form onSubmit={handleSubmit} className="complete-profile-form mx-auto w-full max-w-2xl rounded-[2rem] border border-white bg-white p-6 shadow-2xl shadow-emerald-900/10 sm:p-10">
         <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-gradient-to-tr from-emerald-400 to-teal-400 text-white shadow-lg shadow-emerald-500/25"><UserRound size={30} /></div>
         <h1 className="mt-6 text-center text-3xl font-black text-slate-900">Complete your profile</h1>
         <p className="mt-2 text-center text-sm font-medium leading-6 text-slate-500">Please enter all required details to finish creating your student account.</p>
@@ -222,6 +227,7 @@ const CompleteProfilePage = () => {
           <label className={labelClass}>Full name<input className={inputClass} value={form.name} onChange={(event) => updateField('name', event.target.value)} pattern={NAME_PATTERN.source} title={NAME_VALIDATION_MESSAGE} maxLength={80} autoComplete="name" required /></label>
           <label className={labelClass}>Email<input className={`${inputClass} cursor-not-allowed bg-slate-100`} value={user?.email || savedUser?.email || ''} readOnly /></label>
           <label className={labelClass}>Mobile number<input className={inputClass} type="tel" inputMode="numeric" maxLength={10} value={form.phoneNumber} onChange={(event) => updateField('phoneNumber', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile number" required /></label>
+          <label className={labelClass}>Battle GameID<input className={inputClass} value={form.gameId} onChange={(event) => updateField('gameId', event.target.value.replace(/[^A-Za-z0-9_]/g, '').slice(0, 14))} placeholder="name_123" maxLength={14} pattern="(?=.*\d)[A-Za-z0-9_]{6,14}" required /><span className="text-xs font-medium text-slate-400">6–14 characters with at least one number.</span></label>
 
           <h2 className="mt-3 border-b border-slate-100 pb-2 text-lg font-black text-slate-800">Personal Details</h2>
           <div className="grid gap-2">

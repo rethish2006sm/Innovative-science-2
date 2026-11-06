@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
@@ -38,6 +38,9 @@ const ProfilePerformancePage = lazy(() => import('./pages/ProfilePerformancePage
 const Signinpage = lazy(() => import('./pages/Signinpage'))
 const Signuppage = lazy(() => import('./pages/Signuppage'))
 const CompleteProfilePage = lazy(() => import('./pages/CompleteProfilePage'))
+const BattleProfilePage = lazy(() => import('./pages/BattleProfilePage'))
+const BattleRankPage = lazy(() => import('./pages/BattleRankPage'))
+const BattleHistoryPage = lazy(() => import('./pages/BattleHistoryPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const PyqsPage = lazy(() => import('./pages/PyqsPage'))
 const Testbuilderpage = lazy(() => import('./pages/Testbuilderpage'))
@@ -308,6 +311,8 @@ const getSeoFromPathname = (pathname) => {
 
 const ScrollToTop = () => {
   const { pathname } = useLocation()
+  const currentPathRef = useRef(pathname)
+  currentPathRef.current = pathname
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
@@ -330,6 +335,18 @@ const hasCompleteProfile = (profile = {}) => Boolean(
   profile.finalExamPercentage !== undefined &&
   profile.finalExamPercentage !== '',
 )
+
+const hasBattleProfile = (profile = {}) => Boolean(
+  /^[A-Za-z0-9_]+$/.test(profile.gameId || ''),
+)
+
+const BattleProfileRequired = ({ children }) => {
+  const { loading } = useAuth()
+  if (loading) return <PageLoading />
+  const auth = getStoredAuth()
+  if (!auth?.token) return <AuthRequiredScreen />
+  return hasBattleProfile(auth.user) ? children : <Navigate to="/battle-mode/profile?returnTo=/battle-mode" replace />
+}
 
 const AuthRedirect = ({ children }) => {
   const { loading } = useAuth()
@@ -399,6 +416,9 @@ const AppLayout = () => {
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [showSigninReminder, setShowSigninReminder] = useState(false)
   const [siteNotice, setSiteNotice] = useState(null)
+  const [globalBattleInvite, setGlobalBattleInvite] = useState(null)
+  const [globalFriendRequest, setGlobalFriendRequest] = useState(null)
+  const [globalInviteSeconds, setGlobalInviteSeconds] = useState(10)
   const [dismissedNoticeKey, setDismissedNoticeKey] = useState('')
   const [activeScience, setActiveScience] = useState(() => getActiveScience())
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
@@ -408,6 +428,30 @@ const AppLayout = () => {
   const seo = getSeoFromPathname(pathname)
   const siteNoticeKey = siteNotice?.id ? `${siteNotice.id}:${siteNotice.updatedAt || ''}` : ''
   const showSiteNotice = Boolean(siteNotice?.message && !isObjectivePracticeRoute && !isBattleRoute && siteNoticeKey && dismissedNoticeKey !== siteNoticeKey)
+
+  useEffect(() => {
+    if (!globalBattleInvite) {
+      setGlobalInviteSeconds(10)
+      return undefined
+    }
+
+    setGlobalInviteSeconds(10)
+    const timer = window.setInterval(() => {
+      setGlobalInviteSeconds((current) => {
+        if (current <= 1) {
+          window.clearInterval(timer)
+          window.dispatchEvent(new CustomEvent('innovative-science-battle-invite-response', {
+            detail: { inviteId: globalBattleInvite.inviteId, roomCode: globalBattleInvite.roomCode, senderId: globalBattleInvite.senderId, status: 'expired' },
+          }))
+          setGlobalBattleInvite(null)
+          return 0
+        }
+        return current - 1
+      })
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [globalBattleInvite])
 
   useEffect(() => {
     const syncScience = (event) => setActiveScience(event.detail?.science || getActiveScience())
@@ -472,6 +516,7 @@ const AppLayout = () => {
       transports: ['polling'],
       upgrade: false,
       withCredentials: true,
+      auth: { token: auth?.token || '' },
     })
 
     const dispatchProgressUpdate = (detail) => {
@@ -485,6 +530,45 @@ const AppLayout = () => {
     const dispatchClassRosterUpdate = (detail) => {
       window.dispatchEvent(new CustomEvent('innovative-science-class-roster-updated', { detail }))
     }
+
+    const dispatchBattlePresenceUpdate = (detail) => {
+      window.dispatchEvent(new CustomEvent('innovative-science-battle-presence-updated', { detail }))
+    }
+
+    const dispatchBattlePresenceSnapshot = (detail) => {
+      window.dispatchEvent(new CustomEvent('innovative-science-battle-presence-snapshot', { detail }))
+    }
+
+    const dispatchBattleInvite = (detail) => {
+      if (String(detail?.targetUserId || '') !== String(auth?.user?.id || '')) {
+        return
+      }
+      setGlobalBattleInvite(detail)
+      window.setTimeout(() => setGlobalBattleInvite((current) => current?.inviteId === detail?.inviteId ? null : current), 10000)
+    }
+
+    const dispatchBattleInviteStatus = (detail) => {
+      window.dispatchEvent(new CustomEvent('innovative-science-battle-invite-status', { detail }))
+    }
+
+    const dispatchFriendRequest = (detail) => {
+      if (currentPathRef.current.startsWith('/battle-mode/room/')) {
+        return
+      }
+      setGlobalFriendRequest(detail)
+      window.setTimeout(() => setGlobalFriendRequest((current) => current?.id === detail?.id ? null : current), 7000)
+      window.dispatchEvent(new CustomEvent('innovative-science-battle-friend-request', { detail }))
+    }
+
+    const dispatchFriendRequestStatus = (detail) => {
+      window.dispatchEvent(new CustomEvent('innovative-science-battle-friend-request-status', { detail }))
+    }
+
+    const respondToBattleInvite = (event) => {
+      socket.emit('battle:room-invite-response', event.detail || {})
+    }
+
+    const syncBattlePresence = () => socket.emit('battle:presence-sync')
 
     const refreshCurrentAuthUser = async (detail) => {
       const currentAuth = getStoredAuth()
@@ -535,16 +619,32 @@ const AppLayout = () => {
     socket.on('student-progress-updated', dispatchProgressUpdate)
     socket.on('student-class-updated', syncCurrentAuthUser)
     socket.on('class-feed-updated', dispatchClassFeedUpdate)
+    socket.on('connect', syncBattlePresence)
+    socket.on('battle:presence-update', dispatchBattlePresenceUpdate)
+    socket.on('battle:presence-snapshot', dispatchBattlePresenceSnapshot)
+    socket.on('battle:room-invite', dispatchBattleInvite)
+    socket.on('battle:room-invite-status', dispatchBattleInviteStatus)
+    socket.on('battle:friend-request', dispatchFriendRequest)
+    socket.on('battle:friend-request-status', dispatchFriendRequestStatus)
     window.addEventListener('innovative-science-progress-updated', refreshCurrentAuthUser)
+    window.addEventListener('innovative-science-battle-invite-response', respondToBattleInvite)
 
     return () => {
       socket.off('student-progress-updated', dispatchProgressUpdate)
       socket.off('student-class-updated', syncCurrentAuthUser)
       socket.off('class-feed-updated', dispatchClassFeedUpdate)
+      socket.off('connect', syncBattlePresence)
+      socket.off('battle:presence-update', dispatchBattlePresenceUpdate)
+      socket.off('battle:presence-snapshot', dispatchBattlePresenceSnapshot)
+      socket.off('battle:room-invite', dispatchBattleInvite)
+      socket.off('battle:room-invite-status', dispatchBattleInviteStatus)
+      socket.off('battle:friend-request', dispatchFriendRequest)
+      socket.off('battle:friend-request-status', dispatchFriendRequestStatus)
       window.removeEventListener('innovative-science-progress-updated', refreshCurrentAuthUser)
+      window.removeEventListener('innovative-science-battle-invite-response', respondToBattleInvite)
       socket.disconnect()
     }
-  }, [])
+  }, [auth?.token])
 
   useEffect(() => {
     if (auth?.token || isAuthRoute || isBattleRoute) {
@@ -630,6 +730,23 @@ const AppLayout = () => {
     }
   }, [auth?.token, isBattleRoute, navigate, pathname])
 
+  const respondToGlobalBattleInvite = async (status) => {
+    if (!globalBattleInvite) return
+    const invite = globalBattleInvite
+    window.dispatchEvent(new CustomEvent('innovative-science-battle-invite-response', {
+      detail: { inviteId: invite.inviteId, roomCode: invite.roomCode, senderId: invite.senderId, status },
+    }))
+    setGlobalBattleInvite(null)
+    if (status === 'accepted') {
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${invite.roomCode}/join`, { method: 'POST' })
+        navigate(`/battle-mode/room/${data.room.code}/${data.room.status === 'active' ? 'arena' : 'lobby'}`)
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent('innovative-science-battle-invite-status', { detail: { status: 'error', message: error.message } }))
+      }
+    }
+  }
+
   return (
     <>
       <Seo
@@ -640,6 +757,33 @@ const AppLayout = () => {
       />
       <RankNotifier />
       <StudentMessagePopup />
+      {globalBattleInvite && (
+        <div className="fixed inset-0 z-[999] grid place-items-center bg-slate-950/35 px-4 py-6 backdrop-blur-md">
+          <div className="battle-invite-pop relative w-full max-w-md overflow-hidden rounded-[2rem] border border-orange-200 bg-white p-5 shadow-[0_30px_110px_rgba(255,105,0,.3)] sm:p-7">
+            <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-orange-100 blur-3xl" />
+            <div className="relative flex items-center gap-3">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#ff8a00] to-[#ff5500] text-xl text-white shadow-lg shadow-orange-200">⚔</div>
+              <div><p className="text-[10px] font-black uppercase tracking-[.22em] text-orange-600">Battle invite</p><p className="mt-1 text-xs font-bold text-slate-500">A challenger wants you in the arena</p></div>
+              <div className="ml-auto grid h-12 w-12 shrink-0 place-items-center rounded-full border-4 border-orange-100 text-sm font-black text-orange-600">{globalInviteSeconds}</div>
+            </div>
+            <p className="relative mt-5 text-lg font-black leading-7 text-slate-950"><span className="text-orange-600">{globalBattleInvite.senderName}</span> invited you to {globalBattleInvite.roomName}.</p>
+            <div className="relative mt-5 grid gap-3 sm:grid-cols-2">
+              <button type="button" onClick={() => respondToGlobalBattleInvite('accepted')} className="h-12 rounded-2xl bg-gradient-to-r from-[#ff8a00] to-[#ff5500] text-sm font-black text-white shadow-[0_12px_30px_rgba(255,105,0,.25)] transition hover:scale-[1.02]">Accept battle</button>
+              <button type="button" onClick={() => respondToGlobalBattleInvite('rejected')} className="h-12 rounded-2xl border border-orange-100 bg-orange-50/50 text-sm font-black text-slate-700 transition hover:bg-orange-50">Decline</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {globalFriendRequest && !pathname.startsWith('/battle-mode/room/') && (
+        <div className="fixed right-4 top-4 z-[998] w-[min(92vw,24rem)] overflow-hidden rounded-[1.5rem] border border-cyan-200 bg-white p-4 shadow-[0_20px_70px_rgba(15,23,42,.2)]">
+          <div className="flex items-start gap-3">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-cyan-500 to-emerald-500 text-xl text-white shadow-lg shadow-cyan-100">👋</div>
+            <div className="min-w-0 flex-1"><p className="text-[10px] font-black uppercase tracking-[.22em] text-cyan-700">New friend request</p><p className="mt-1 text-sm font-black leading-5 text-slate-950"><span className="text-cyan-700">{globalFriendRequest.sender?.name || 'A student'}</span> wants to join your squad.</p></div>
+            <button type="button" onClick={() => setGlobalFriendRequest(null)} className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-500" aria-label="Dismiss friend request notification">×</button>
+          </div>
+          <button type="button" onClick={() => { setGlobalFriendRequest(null); navigate('/battle-mode'); }} className="mt-3 h-9 w-full rounded-xl bg-slate-950 text-xs font-black text-white transition hover:bg-cyan-700">View request</button>
+        </div>
+      )}
       {!isObjectivePracticeRoute && !isBattleRoute && <Navbar />}
       <div className={isObjectivePracticeRoute || isBattleRoute ? '' : 'pt-24'}>
         {showSiteNotice && (
@@ -658,12 +802,15 @@ const AppLayout = () => {
           <Route path="/feedback" element={<Feedbackpage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/daily-streak" element={<ProtectedRoute><DailyStreakPage /></ProtectedRoute>} />
-          <Route path="/battle-mode" element={<BattleModeHome />} />
-          <Route path="/battle-mode/create" element={<ProtectedRoute><BattleCreatePage /></ProtectedRoute>} />
-          <Route path="/battle-mode/join" element={<ProtectedRoute><BattleJoinPage /></ProtectedRoute>} />
-          <Route path="/battle-mode/room/:roomCode/lobby" element={<BattleRoomPage />} />
-          <Route path="/battle-mode/room/:roomCode/arena" element={<BattleRoomPage />} />
-          <Route path="/battle-mode/room/:roomCode/results" element={<BattleRoomPage />} />
+          <Route path="/battle-mode" element={<BattleProfileRequired><BattleModeHome /></BattleProfileRequired>} />
+          <Route path="/battle-mode/rank" element={<BattleProfileRequired><BattleRankPage /></BattleProfileRequired>} />
+          <Route path="/battle-mode/history" element={<BattleProfileRequired><BattleHistoryPage /></BattleProfileRequired>} />
+          <Route path="/battle-mode/profile" element={<ProtectedRoute><BattleProfilePage /></ProtectedRoute>} />
+          <Route path="/battle-mode/create" element={<BattleProfileRequired><BattleCreatePage /></BattleProfileRequired>} />
+          <Route path="/battle-mode/join" element={<BattleProfileRequired><BattleJoinPage /></BattleProfileRequired>} />
+          <Route path="/battle-mode/room/:roomCode/lobby" element={<BattleProfileRequired><BattleRoomPage /></BattleProfileRequired>} />
+          <Route path="/battle-mode/room/:roomCode/arena" element={<BattleProfileRequired><BattleRoomPage /></BattleProfileRequired>} />
+          <Route path="/battle-mode/room/:roomCode/results" element={<BattleProfileRequired><BattleRoomPage /></BattleProfileRequired>} />
           <Route path="/improvement" element={<ProtectedRoute><Improvementpage /></ProtectedRoute>} />
           <Route
             path="/test-builder"

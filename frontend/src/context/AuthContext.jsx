@@ -60,6 +60,7 @@ export const AuthProvider = ({ children }) => {
         name: profile.name || (profile.name === '' ? '' : undefined),
         email: firebaseUser.email || '',
         phoneNumber: profile.phoneNumber || (profile.phoneNumber === '' ? '' : undefined),
+        gameId: profile.gameId,
         dateOfBirth: profile.dateOfBirth,
         gender: profile.gender,
         bloodGroup: profile.bloodGroup,

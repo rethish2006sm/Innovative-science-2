@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, Check, LoaderCircle, Swords } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { ArrowLeft, ArrowRight, Check, LoaderCircle } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 import { saveBattleSession } from '../lib/battleSession'
@@ -18,9 +19,10 @@ const battleDifficultyOptions = [
   { value: 'hard', label: 'Hard', description: 'Sharper timing and tighter scoring.' },
 ]
 const battleSteps = [
-  { key: 'basics', number: '1', title: 'Room details', subtitle: 'Name the room and choose the question and timing presets.' },
-  { key: 'chapters', number: '2', title: 'Chapters', subtitle: 'Pick the chapter pool that will feed the battle questions.' },
-  { key: 'objectives', number: '3', title: 'Objectives', subtitle: 'Choose the objective types and launch the room.' },
+  { key: 'room', number: '1', title: 'Room name' },
+  { key: 'questions', number: '2', title: 'Questions' },
+  { key: 'time', number: '3', title: 'Time / question' },
+  { key: 'settings', number: '4', title: 'Battle settings' },
 ]
 
 const toggleValue = (items, value) => (items.includes(value) ? items.filter((item) => item !== value) : [...items, value])
@@ -32,7 +34,7 @@ const BattleCreatePage = () => {
   const [selectedChapterIds, setSelectedChapterIds] = useState([])
   const [selectedObjectiveTypes, setSelectedObjectiveTypes] = useState(['mcqs', 'true-or-false', 'correlation'])
   const [settings, setSettings] = useState({
-    roomName: 'Arena',
+    roomName: '',
     questionsCount: 10,
     timeLimitSeconds: 10,
     difficulty: 'medium',
@@ -52,7 +54,9 @@ const BattleCreatePage = () => {
       try {
         const data = await apiRequest('/api/chapters')
         if (!cancelled) {
-          setChapters(Array.isArray(data.chapters) ? data.chapters : [])
+          const availableChapters = Array.isArray(data.chapters) ? data.chapters : []
+          setChapters(availableChapters)
+          setSelectedChapterIds([])
         }
       } catch (err) {
         if (!cancelled) {
@@ -137,13 +141,19 @@ const BattleCreatePage = () => {
       return
     }
 
-    if (step === 1) {
-      if (!selectedChapterIds.length) {
-        setError('Pick at least one chapter.')
-        return
-      }
+    if (step === 1 && !selectedChapterIds.length) {
+      setError('Pick at least one chapter.')
+      return
+    }
+
+    if (step === 2 && !selectedObjectiveTypes.length) {
+      setError('Pick at least one objective type.')
+      return
+    }
+
+    if (step < 5) {
       setError('')
-      setStep(2)
+      setStep((current) => current + 1)
       return
     }
 
@@ -160,50 +170,12 @@ const BattleCreatePage = () => {
   }
 
   return (
-    <section className="min-h-[calc(100vh-6rem)] overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.16),_transparent_22%),linear-gradient(180deg,#ecfeff_0%,#f8fafc_38%,#f8fafc_100%)] px-3 py-4 text-slate-950 sm:px-4 sm:py-6 lg:px-6">
-      <div className="mx-auto flex min-h-[calc(100vh-7rem)] w-full max-w-4xl items-center">
+    <section className="battle-create-shell h-screen overflow-hidden px-3 py-4 text-slate-950 sm:px-4 sm:py-6 lg:px-6">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl items-center">
         <form
           onSubmit={handlePrimaryAction}
-          className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-5 shadow-[0_24px_90px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-6 lg:p-8"
+          className="battle-create-form w-full rounded-[2rem] border border-orange-100 bg-white/95 p-5 shadow-[0_24px_90px_rgba(255,105,0,0.1)] backdrop-blur-xl sm:p-6 lg:p-8"
         >
-          <div className="inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.22em] text-cyan-700">
-            <Swords className="h-4 w-4" />
-            Create room
-          </div>
-
-          <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h1 className="text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">
-                Build your battle room
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600 sm:text-base">
-                Follow the flow on any screen size: room details first, chapters next, objectives last, then launch.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-2">
-            {battleSteps.map((item, index) => {
-              const active = index === step
-              const completed = index < step
-
-              return (
-                <div
-                  key={item.key}
-                  className={`rounded-full border px-4 py-2 text-xs font-black uppercase tracking-[0.2em] ${
-                    active
-                      ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
-                      : completed
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                        : 'border-slate-200 bg-white text-slate-500'
-                  }`}
-                >
-                  {item.number}. {item.title}
-                </div>
-              )
-            })}
-          </div>
-
           {error && (
             <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
               {error}
@@ -211,8 +183,17 @@ const BattleCreatePage = () => {
           )}
 
           <div className="mt-5">
-            <StepHero step={battleSteps[step]} />
-
+            <AnimatePresence mode="wait">
+              <motion.div key={step} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: 0.22 }}>
+                {step === 0 && <div className="battle-create-step"><StepTitle title="Name your room" subtitle="Give your battle a name your squad will recognize." /><label className="grid gap-2 text-sm font-bold text-slate-600">Room name<input autoFocus value={settings.roomName} onChange={(event) => setSettings((current) => ({ ...current, roomName: event.target.value }))} className="h-14 rounded-2xl border border-orange-100 bg-orange-50/40 px-4 text-base font-bold outline-none transition focus:border-orange-400 focus:bg-white focus:ring-4 focus:ring-orange-100" placeholder="Brain Blitz" /></label></div>}
+                {step === 1 && <div className="battle-create-step"><StepTitle title="Choose your chapters" subtitle="Pick the science chapters for this battle." /><SelectorGroup title="Chapters" subtitle="Select at least one chapter." count={selectedChapterIds.length} actionLabel="Clear" onAction={() => setSelectedChapterIds([])}>{loadingChapters ? <div className="rounded-2xl bg-orange-50 p-4 text-sm font-bold text-orange-700">Loading chapters...</div> : <div className="grid max-h-[45vh] gap-2 overflow-y-auto sm:grid-cols-2">{chapters.map((chapter) => { const checked = selectedChapterIds.includes(String(chapter._id)); return <button key={chapter._id} type="button" onClick={() => setSelectedChapterIds((current) => toggleValue(current, String(chapter._id)))} className={`rounded-2xl border px-4 py-3 text-left transition ${checked ? 'border-orange-300 bg-orange-50 text-slate-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-orange-50/40'}`}><div className="flex items-center justify-between gap-2"><span className="text-sm font-black">{chapter.name}</span>{checked && <Check className="h-4 w-4 text-orange-600" />}</div><span className="mt-1 block text-xs text-slate-500">Chapter {chapter.number}</span></button> })}</div>}</SelectorGroup></div>}
+                {step === 2 && <div className="battle-create-step"><StepTitle title="Choose objective types" subtitle="Pick the question styles your arena will use." /><SelectorGroup title="Objective types" subtitle="Select at least one type." count={selectedObjectiveTypes.length} actionLabel="Select all" onAction={() => setSelectedObjectiveTypes(battleObjectiveTypes.map((item) => item.value))}><div className="grid gap-3">{battleObjectiveTypes.map((objective) => { const checked = selectedObjectiveTypes.includes(objective.value); return <button key={objective.value} type="button" onClick={() => setSelectedObjectiveTypes((current) => toggleValue(current, objective.value))} className={`rounded-3xl border p-4 text-left transition ${checked ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-orange-50/40'}`}><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-black uppercase tracking-[.16em]">{objective.label}</p><p className="mt-1 text-xs text-slate-500">{objective.description}</p></div>{checked ? <Check className="h-5 w-5 text-orange-600" /> : <span className="h-5 w-5 rounded-full border border-slate-300" />}</div></button> })}</div></SelectorGroup></div>}
+                {step === 3 && <div className="battle-create-step"><StepTitle title="Choose question count" subtitle="Set the length of your live science battle." /><ChoiceGroup label="Questions" subtitle="Pick how many questions should be in the battle." value={settings.questionsCount} options={battleQuestionCounts} onPick={(value) => setSettings((current) => ({ ...current, questionsCount: value }))} /></div>}
+                {step === 4 && <div className="battle-create-step"><StepTitle title="Set the battle pace" subtitle="Choose how many seconds players get per question." /><ChoiceGroup label="Time / question" subtitle="Pick the response time for every question." value={settings.timeLimitSeconds} options={battleTimeLimits} suffix="s" onPick={(value) => setSettings((current) => ({ ...current, timeLimitSeconds: value }))} /></div>}
+                {step === 5 && <div className="battle-create-step grid gap-5"><StepTitle title="Make it your arena" subtitle="Choose your difficulty and battle controls." /><div className="rounded-[1.5rem] border border-orange-100 bg-orange-50/50 p-4"><p className="text-[11px] font-black uppercase tracking-[0.22em] text-orange-600">Difficulty level</p><div className="mt-4 grid gap-3 sm:grid-cols-3">{battleDifficultyOptions.map((option) => { const selected = settings.difficulty === option.value; return <button key={option.value} type="button" onClick={() => setSettings((current) => ({ ...current, difficulty: option.value }))} className={`rounded-3xl border p-4 text-left transition ${selected ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-orange-50/40'}`}><div className="flex items-center justify-between gap-3"><span className="text-sm font-black uppercase tracking-[0.18em] text-slate-700">{option.label}</span>{selected ? <Check className="h-4 w-4 text-orange-600" /> : <span className="h-4 w-4 rounded-full border border-slate-300" />}</div><p className="mt-2 text-xs leading-5 text-slate-500">{option.description}</p></button> })}</div><div className="mt-4 grid gap-3 sm:grid-cols-2"><Toggle label="Emoji reactions" checked={settings.emojiReactions} onChange={(checked) => setSettings((current) => ({ ...current, emojiReactions: checked }))} /><Toggle label="Room chat" checked={settings.roomChat} onChange={(checked) => setSettings((current) => ({ ...current, roomChat: checked }))} /></div></div></div>}
+              </motion.div>
+            </AnimatePresence>
+            {false && (<>
             {step === 0 && (
               <div className="mt-5 grid gap-4">
                 <label className="grid gap-2 text-sm font-bold text-slate-600">
@@ -220,7 +201,7 @@ const BattleCreatePage = () => {
                   <input
                     value={settings.roomName}
                     onChange={(event) => setSettings((current) => ({ ...current, roomName: event.target.value }))}
-                    className="h-12 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-cyan-400 focus:bg-white"
+                    className="h-12 rounded-2xl border border-orange-100 bg-orange-50/40 px-4 outline-none transition focus:border-orange-400 focus:bg-white focus:ring-4 focus:ring-orange-100"
                     placeholder="Brain Blitz"
                   />
                 </label>
@@ -242,7 +223,7 @@ const BattleCreatePage = () => {
                   onPick={(value) => setSettings((current) => ({ ...current, timeLimitSeconds: value }))}
                 />
 
-                <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+                <div className="rounded-[1.5rem] border border-orange-100 bg-orange-50/50 p-4">
                   <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-500">Battle extras</p>
                   <div className="mt-4 grid gap-3">
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -255,12 +236,12 @@ const BattleCreatePage = () => {
                             type="button"
                             onClick={() => setSettings((current) => ({ ...current, difficulty: option.value }))}
                             className={`rounded-3xl border p-4 text-left transition ${
-                              selected ? 'border-cyan-300 bg-cyan-50' : 'border-slate-200 bg-white hover:bg-slate-50'
+                              selected ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-orange-50/40'
                             }`}
                           >
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-sm font-black uppercase tracking-[0.18em] text-slate-700">{option.label}</span>
-                              {selected ? <Check className="h-4 w-4 text-cyan-600" /> : <span className="h-4 w-4 rounded-full border border-slate-300" />}
+                              {selected ? <Check className="h-4 w-4 text-orange-600" /> : <span className="h-4 w-4 rounded-full border border-slate-300" />}
                             </div>
                             <p className="mt-2 text-xs leading-5 text-slate-500">{option.description}</p>
                           </button>
@@ -308,7 +289,7 @@ const BattleCreatePage = () => {
                             type="button"
                             onClick={() => setSelectedChapterIds((current) => toggleValue(current, String(chapter._id)))}
                             className={`rounded-2xl border px-4 py-3 text-left transition ${
-                              checked ? 'border-emerald-300 bg-emerald-50 text-slate-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                              checked ? 'border-orange-300 bg-orange-50 text-slate-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-orange-50/40'
                             }`}
                           >
                             <p className="text-sm font-black">{chapter.name}</p>
@@ -341,7 +322,7 @@ const BattleCreatePage = () => {
                           type="button"
                           onClick={() => setSelectedObjectiveTypes((current) => toggleValue(current, objective.value))}
                           className={`rounded-3xl border p-4 text-left transition ${
-                            checked ? 'border-cyan-300 bg-cyan-50 text-slate-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                              checked ? 'border-orange-300 bg-orange-50 text-slate-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-orange-50/40'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-3">
@@ -349,7 +330,7 @@ const BattleCreatePage = () => {
                               <p className="text-sm font-black uppercase tracking-[0.18em]">{objective.label}</p>
                               <p className="mt-1 text-xs leading-5 text-slate-500">{objective.description}</p>
                             </div>
-                            {checked ? <Check className="h-4 w-4 text-cyan-600" /> : <span className="h-4 w-4 rounded-full border border-slate-300" />}
+                            {checked ? <Check className="h-4 w-4 text-orange-600" /> : <span className="h-4 w-4 rounded-full border border-slate-300" />}
                           </div>
                         </button>
                       )
@@ -358,6 +339,7 @@ const BattleCreatePage = () => {
                 </SelectorGroup>
               </div>
             )}
+            </>)}
           </div>
 
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -374,9 +356,9 @@ const BattleCreatePage = () => {
             <button
               type="submit"
               disabled={creating}
-              className="inline-flex h-14 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-emerald-500 px-6 text-sm font-bold text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+              className="battle-create-cta inline-flex h-14 items-center justify-center gap-2 rounded-2xl px-6 text-sm font-bold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {step < 2 ? (
+              {step < 5 ? (
                 <>
                   Next
                   <ArrowRight className="h-4 w-4" />
@@ -400,12 +382,11 @@ const BattleCreatePage = () => {
   )
 }
 
-const StepHero = ({ step }) => (
-  <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-    <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-700">
-      {step.number}. {step.title}
-    </p>
-    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{step.subtitle}</p>
+const StepTitle = ({ title, subtitle }) => (
+  <div className="mb-5 text-center sm:text-left">
+    <p className="text-[10px] font-black uppercase tracking-[0.24em] text-orange-600">Battle setup</p>
+    <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">{title}</h1>
+    <p className="mt-2 text-sm leading-6 text-slate-500">{subtitle}</p>
   </div>
 )
 
@@ -432,7 +413,7 @@ const ChoiceGroup = ({ label, subtitle, value, options, suffix = '', onPick }) =
             type="button"
             onClick={() => onPick(option)}
             className={`rounded-2xl border px-4 py-3 text-sm font-black transition ${
-              selected ? 'border-cyan-300 bg-cyan-50 text-cyan-800' : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+              selected ? 'border-orange-300 bg-orange-50 text-orange-800' : 'border-slate-200 bg-orange-50/30 text-slate-700 hover:bg-orange-50'
             }`}
           >
             {option}
@@ -449,14 +430,14 @@ const Toggle = ({ label, checked, onChange }) => (
     type="button"
     onClick={() => onChange(!checked)}
     className={`flex items-center justify-between gap-3 rounded-3xl border p-4 text-left transition ${
-      checked ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white'
+      checked ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white'
     }`}
   >
     <div>
       <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-600">{label}</p>
       <p className="mt-1 text-xs leading-5 text-slate-500">{checked ? 'Enabled' : 'Disabled'}</p>
     </div>
-    <div className={`grid h-10 w-10 place-items-center rounded-full text-sm font-black ${checked ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+    <div className={`grid h-10 w-10 place-items-center rounded-full text-sm font-black ${checked ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
       {checked ? 'ON' : 'OFF'}
     </div>
   </button>
@@ -474,7 +455,7 @@ const SelectorGroup = ({ title, subtitle, count, actionLabel, onAction, children
           {count}
         </span>
         {actionLabel && onAction && (
-          <button type="button" onClick={onAction} className="text-xs font-bold text-cyan-700 transition hover:text-cyan-600">
+          <button type="button" onClick={onAction} className="text-xs font-bold text-orange-700 transition hover:text-orange-600">
             {actionLabel}
           </button>
         )}

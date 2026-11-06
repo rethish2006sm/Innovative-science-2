@@ -27,6 +27,7 @@ const battleAnswerLimit = 100
 const battleEmojis = ['🔥', '😂', '😎', '😱', '💪', '👏', '❤️', '🤣', '🚀', '🎯', '🧠']
 const allowedBattleObjectiveTypes = ['mcqs', 'true-or-false', 'correlation']
 const battleRoomOperationQueues = new Map()
+const battleOnlineUsers = new Map()
 
 const withBattleRoomLock = async (roomKey, operation) => {
   const key = String(roomKey)
@@ -60,6 +61,12 @@ const battleRoomPlayerSchema = {
     trim: true,
     maxlength: 80,
   },
+  gameId: {
+    type: String,
+    trim: true,
+    maxlength: 40,
+    default: '',
+  },
   className: {
     type: String,
     trim: true,
@@ -73,6 +80,10 @@ const battleRoomPlayerSchema = {
     default: '',
   },
   ready: {
+    type: Boolean,
+    default: false,
+  },
+  returnedToLobby: {
     type: Boolean,
     default: false,
   },
@@ -389,6 +400,10 @@ const safeNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const battleProfileImageUrl = (user) => user?.battleProfileImage?.data
+  ? `/api/auth/users/${user._id}/battle-profile-image?v=${user.battleProfileImage.updatedAt?.getTime() || Date.now()}`
+  : ''
+
 const shuffle = (items) => {
   const next = [...items]
   for (let index = next.length - 1; index > 0; index -= 1) {
@@ -534,15 +549,26 @@ const battleRoomView = (room, viewerUserId = '') => {
     startedAt: room.startedAt || null,
     finishedAt: room.finishedAt || null,
     cleanupAt: room.cleanupAt || null,
-    chatMessages: Boolean(room.settings?.roomChat)
-      ? (room.chatMessages || []).slice(-battleChatLimit)
-      : [],
+    chatMessages: (room.chatMessages || []).slice(-battleChatLimit),
     reactions: Boolean(room.settings?.emojiReactions)
       ? (room.reactions || []).slice(-battleReactionLimit)
       : [],
     battleSummary: room.battleSummary || null,
     viewerUserId: String(viewerUserId || ''),
   }
+}
+
+const battleRoomViewForUser = (room, viewerUserId = '') => {
+  const view = battleRoomView(room, viewerUserId)
+  const player = (room.players || []).find((entry) => String(entry.userId) === String(viewerUserId))
+  if (room.status === 'finished' && player?.returnedToLobby) {
+    view.status = 'lobby'
+    view.startedAt = null
+    view.finishedAt = null
+    view.cleanupAt = null
+    view.battleSummary = null
+  }
+  return view
 }
 
 const chooseQuestions = async ({ room, models }) => {
@@ -627,8 +653,9 @@ const ensureBattlePlayer = (room, user) => {
 
   if (player) {
     player.name = user.name || player.name
+    player.gameId = user.gameId || player.gameId || ''
     player.className = user.classId?.name || player.className || ''
-    player.profileImageUrl = user.profileImageUrl ? `/api/users/${user._id}/profile-image` : ''
+    player.profileImageUrl = battleProfileImageUrl(user)
     player.connected = true
     player.lastSeenAt = new Date()
     player.updatedAt = new Date()
@@ -642,10 +669,9 @@ const ensureBattlePlayer = (room, user) => {
   player = {
     userId: user._id,
     name: user.name || 'Student',
+    gameId: user.gameId || '',
     className: user.classId?.name || '',
-    profileImageUrl: user.profileImage?.data
-      ? `/api/auth/users/${user._id}/avatar?v=${user.profileImage.updatedAt?.getTime() || Date.now()}`
-      : '',
+    profileImageUrl: battleProfileImageUrl(user),
     ready: false,
     connected: true,
     seat: getSeatNumber(room.players || []),
@@ -733,22 +759,30 @@ const finishBattle = async ({ room, io, models }) => {
     return safeString(left.name).localeCompare(safeString(right.name))
   })
 
-  const rewards = orderedPlayers.map((player, index) => {
+  const attemptedQuestionCount = (player) => new Set(
+    (player.answers || [])
+      .map((answer) => safeNumber(answer.questionIndex, -1))
+      .filter((questionIndex) => questionIndex >= 0),
+  ).size
+  const validBattle = orderedPlayers.length > 0 && orderedPlayers.every((player) => attemptedQuestionCount(player) > 0)
+
+  const rewards = validBattle ? orderedPlayers.map((player, index) => {
     const rank = index + 1
-    const attemptedQuestionCount = new Set(
-      (player.answers || [])
-        .map((answer) => safeNumber(answer.questionIndex, -1))
-        .filter((questionIndex) => questionIndex >= 0),
-    ).size
-    const hasRealBattleProgress = attemptedQuestionCount > 0 && safeNumber(player.score, 0) > 0
+    const attemptedCount = attemptedQuestionCount(player)
+    const hasRealBattleProgress = attemptedCount > 0 && safeNumber(player.score, 0) > 0
 
     return {
       userId: player.userId,
       rank,
       score: safeNumber(player.score, 0),
+      correctCount: safeNumber(player.correctCount, 0),
+      wrongCount: safeNumber(player.wrongCount, 0),
+      skippedCount: safeNumber(player.skippedCount, 0),
+      attemptedCount,
+      streak: safeNumber(player.streak, 0),
       brainCells: hasRealBattleProgress ? getBattleReward(rank) : 0,
     }
-  })
+  }) : []
 
   for (const reward of rewards) {
     await User.updateOne(
@@ -780,9 +814,17 @@ const finishBattle = async ({ room, io, models }) => {
         update: {
           $set: {
             roomCode: room.code,
+            roomName: room.settings?.roomName || 'Battle Match',
+            chapterIds: room.settings?.chapterIds || [],
+            objectiveTypes: room.settings?.objectiveTypes || [],
             userId: reward.userId,
             rank: reward.rank,
             score: reward.score,
+            correctCount: reward.correctCount,
+            wrongCount: reward.wrongCount,
+            skippedCount: reward.skippedCount,
+            attemptedCount: reward.attemptedCount,
+            streak: reward.streak,
             brainCells: reward.brainCells,
             totalQuestions: room.questions.length,
             totalPlayers: room.players.length,
@@ -801,6 +843,7 @@ const finishBattle = async ({ room, io, models }) => {
   room.battleSummary = {
     totalQuestions: room.questions.length,
     totalPlayers: room.players.length,
+    validBattle,
     winnerIds: rewards.slice(0, 1).map((reward) => reward.userId),
     rewards,
   }
@@ -969,6 +1012,10 @@ const normalizeBattleSettings = (body = {}) => {
 
 const normalizeBattleSettingsUpdate = (body = {}, currentSettings = {}) => ({
   roomName: safeString(body.roomName ?? currentSettings.roomName ?? 'Battle Room').slice(0, 120) || 'Battle Room',
+  chapterIds: Array.isArray(body.chapterIds) ? body.chapterIds.map((item) => String(item)).filter(Boolean) : (currentSettings.chapterIds || []),
+  objectiveTypes: Array.isArray(body.objectiveTypes)
+    ? body.objectiveTypes.map((item) => safeLower(item)).filter((item) => allowedBattleObjectiveTypes.includes(item))
+    : (currentSettings.objectiveTypes || []),
   questionsCount: Math.min(Math.max(safeNumber(body.questionsCount, currentSettings.questionsCount ?? DEFAULT_QUESTIONS_COUNT), 1), 20),
   timeLimitSeconds: Math.min(Math.max(safeNumber(body.timeLimitSeconds, currentSettings.timeLimitSeconds ?? DEFAULT_QUESTION_TIME_SECONDS), 5), 120),
   difficulty: ['easy', 'medium', 'hard'].includes(safeLower(body.difficulty))
@@ -1037,6 +1084,341 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
     })
   })
 
+  app.get('/api/battle-mode/rankings', authRequired, async (req, res) => {
+    try {
+      const { BattleReward, User } = models
+      if (!BattleReward || !User) return res.json({ rankings: [], me: null })
+      const rows = await BattleReward.aggregate([
+        { $group: { _id: '$userId', battlePoints: { $sum: '$score' }, matches: { $sum: 1 } } },
+        { $lookup: { from: User.collection.name, localField: '_id', foreignField: '_id', as: 'user' } },
+        { $unwind: '$user' },
+        { $match: { 'user.isAdmin': { $ne: true } } },
+        { $sort: { battlePoints: -1, matches: -1, _id: 1 } },
+      ])
+      const allRankings = rows.map((row, index) => ({
+        rank: index + 1,
+        userId: String(row._id),
+        name: row.user.name || 'Battle player',
+        gameId: row.user.gameId || '',
+        profileImageUrl: row.user.battleProfileImage?.data
+          ? `/api/auth/users/${row.user._id}/battle-profile-image?v=${row.user.battleProfileImage.updatedAt?.getTime() || Date.now()}`
+          : '',
+        battlePoints: safeNumber(row.battlePoints),
+        matches: safeNumber(row.matches),
+      }))
+      res.json({ rankings: allRankings.slice(0, 5), me: allRankings.find((entry) => entry.userId === String(req.user._id)) || null })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not load Battle Mode rankings.' })
+    }
+  })
+
+  app.get('/api/battle-mode/history', authRequired, async (req, res) => {
+    try {
+      const { BattleReward } = models
+      if (!BattleReward) return res.json({ matches: [] })
+      const matches = await BattleReward.find({ userId: req.user._id })
+        .sort({ finishedAt: -1 })
+        .lean()
+      const chapterIds = [...new Set(matches.flatMap((match) => (match.chapterIds || []).map((id) => String(id))))]
+      const chapters = models.Chapter && chapterIds.length
+        ? await models.Chapter.find({ _id: { $in: chapterIds } }).select('name').lean()
+        : []
+      const chapterNames = new Map(chapters.map((chapter) => [String(chapter._id), chapter.name]))
+      const roomIds = matches.map((match) => match.roomId).filter(Boolean)
+      const allRewards = await BattleReward.find({ roomId: { $in: roomIds } }).sort({ rank: 1 }).lean()
+      const userIds = [...new Set(allRewards.map((reward) => String(reward.userId)))]
+      const users = await models.User.find({ _id: { $in: userIds } }).select('name gameId battleProfileImage').lean()
+      const usersById = new Map(users.map((user) => [String(user._id), user]))
+      const playersByRoom = new Map()
+      allRewards.forEach((reward) => {
+        const player = usersById.get(String(reward.userId))
+        const players = playersByRoom.get(String(reward.roomId)) || []
+        players.push({
+          userId: String(reward.userId),
+          name: player?.name || 'Battle player',
+          gameId: player?.gameId || '',
+          profileImageUrl: player?.battleProfileImage?.data
+            ? `/api/auth/users/${player._id}/battle-profile-image?v=${player.battleProfileImage.updatedAt?.getTime() || Date.now()}`
+            : '',
+          rank: safeNumber(reward.rank),
+          score: safeNumber(reward.score),
+          correctCount: safeNumber(reward.correctCount),
+          wrongCount: safeNumber(reward.wrongCount),
+          skippedCount: safeNumber(reward.skippedCount),
+          attemptedCount: safeNumber(reward.attemptedCount, safeNumber(reward.correctCount) + safeNumber(reward.wrongCount) + safeNumber(reward.skippedCount)),
+          streak: safeNumber(reward.streak),
+          brainCells: safeNumber(reward.brainCells),
+        })
+        playersByRoom.set(String(reward.roomId), players)
+      })
+      res.json({ matches: matches.map((match) => ({
+        id: String(match._id),
+        roomId: String(match.roomId),
+        roomName: match.roomName || 'Battle Match',
+        roomCode: match.roomCode || '------',
+        rank: safeNumber(match.rank),
+        score: safeNumber(match.score),
+        brainCells: safeNumber(match.brainCells),
+        totalQuestions: safeNumber(match.totalQuestions),
+        totalPlayers: safeNumber(match.totalPlayers),
+        finishedAt: match.finishedAt || match.createdAt || null,
+        settings: {
+          chapters: (match.chapterIds || []).map((id) => chapterNames.get(String(id))).filter(Boolean),
+          objectives: (match.objectiveTypes || []).map((type) => type === 'mcqs' ? 'MCQs' : type === 'true-or-false' ? 'True or False' : type === 'correlation' ? 'Correlations' : type),
+        },
+        players: playersByRoom.get(String(match.roomId)) || [],
+      })) })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not load Battle Mode history.' })
+    }
+  })
+
+  app.get('/api/battle-mode/game-id-availability/:gameId', authRequired, async (req, res) => {
+    const gameId = safeString(req.params.gameId)
+    if (!/(?=.*\d)^[A-Za-z0-9_]{6,14}$/.test(gameId)) return res.json({ available: false, valid: false })
+    const owner = await models.User.findOne({ gameId, _id: { $ne: req.user._id } }).select('_id').lean()
+    res.json({ available: !owner, valid: true })
+  })
+
+  app.get('/api/battle-mode/friends', authRequired, async (req, res) => {
+    try {
+      const user = await models.User.findById(req.user._id).select('friendIds').lean()
+      const friendIds = user?.friendIds || []
+      const friends = await models.User.find({ _id: { $in: friendIds }, isAdmin: false })
+        .select('name gameId battleProfileImage classId totalBrainCells')
+        .populate('classId', 'name')
+        .lean()
+      const requestedRoomCode = safeUpper(req.query?.roomCode)
+      const occupiedRooms = await BattleRoom.find({
+        'players.userId': { $in: friendIds },
+        status: { $in: ['lobby', 'active'] },
+      }).select('code status players.userId codeExpiresAt').lean()
+      const now = Date.now()
+      const roomByPlayer = new Map()
+      occupiedRooms.forEach((room) => {
+        if (room.status === 'lobby' && room.codeExpiresAt && new Date(room.codeExpiresAt).getTime() <= now) return
+        const roomStatus = room.status === 'active'
+          ? 'active'
+          : String(room.code) === requestedRoomCode
+            ? 'current-lobby'
+            : 'lobby'
+        const statusPriority = { lobby: 1, 'current-lobby': 2, active: 3 }
+        ;(room.players || []).forEach((player) => {
+          const playerId = String(player.userId)
+          const previousRoom = roomByPlayer.get(playerId)
+          if (
+            friendIds.some((id) => String(id) === playerId)
+            && (!previousRoom || statusPriority[roomStatus] > statusPriority[previousRoom.battleStatus])
+          ) {
+            roomByPlayer.set(playerId, { ...room, battleStatus: roomStatus })
+          }
+        })
+      })
+      res.json({
+        friends: friends.map((friend) => ({
+          battleStatus: roomByPlayer.get(String(friend._id))?.battleStatus || 'available',
+          id: String(friend._id),
+          name: friend.name,
+          gameId: friend.gameId || '',
+          className: friend.classId?.name || '',
+          totalBrainCells: safeNumber(friend.totalBrainCells),
+          profileImageUrl: friend.battleProfileImage?.data
+            ? `/api/auth/users/${friend._id}/battle-profile-image?v=${friend.battleProfileImage.updatedAt?.getTime() || Date.now()}`
+            : '',
+          online: (battleOnlineUsers.get(String(friend._id)) || 0) > 0,
+        })),
+      })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not load your friends.' })
+    }
+  })
+
+  app.get('/api/battle-mode/friend-requests', authRequired, async (req, res) => {
+    try {
+      const [user, outgoing] = await Promise.all([
+        models.User.findById(req.user._id)
+          .select('friendRequests')
+          .populate('friendRequests.senderId', 'name gameId battleProfileImage classId')
+          .lean(),
+        models.User.find({ 'friendRequests.senderId': req.user._id, isAdmin: false })
+          .select('name gameId')
+          .lean(),
+      ])
+      res.json({
+        incoming: (user?.friendRequests || []).filter((request) => request.senderId).map((request) => ({
+          id: String(request._id),
+          createdAt: request.createdAt,
+          sender: {
+            id: String(request.senderId._id),
+            name: request.senderId.name,
+            gameId: request.senderId.gameId || '',
+            profileImageUrl: request.senderId.battleProfileImage?.data
+              ? `/api/auth/users/${request.senderId._id}/battle-profile-image?v=${request.senderId.battleProfileImage.updatedAt?.getTime() || Date.now()}`
+              : '',
+            online: (battleOnlineUsers.get(String(request.senderId._id)) || 0) > 0,
+          },
+        })),
+        outgoing: outgoing.map((request) => ({ id: String(request._id), name: request.name, gameId: request.gameId || '' })),
+      })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not load friend requests.' })
+    }
+  })
+
+  app.get('/api/battle-mode/friend-search', authRequired, async (req, res) => {
+    try {
+      const query = safeString(req.query?.q).trim()
+      if (query.length < 2) return res.json({ students: [] })
+      const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const userIdQuery = /^[a-f\d]{24}$/i.test(query) ? query : null
+      const currentUser = await models.User.findById(req.user._id).select('friendIds friendRequests').lean()
+      const [students, outgoing] = await Promise.all([
+        models.User.find({
+          _id: { $ne: req.user._id },
+          isAdmin: false,
+          $or: [
+            { gameId: { $regex: escapedQuery, $options: 'i' } },
+            ...(userIdQuery ? [{ _id: userIdQuery }] : []),
+          ],
+        }).select('name gameId battleProfileImage').limit(10).lean(),
+        models.User.find({ 'friendRequests.senderId': req.user._id }).select('_id').lean(),
+      ])
+      const outgoingIds = new Set(outgoing.map((student) => String(student._id)))
+      const friendIds = new Set((currentUser?.friendIds || []).map((id) => String(id)))
+      const incomingIds = new Set((currentUser?.friendRequests || []).map((request) => String(request.senderId)))
+      res.json({
+        students: students.map((student) => ({
+          id: String(student._id),
+          name: student.name,
+          gameId: student.gameId || '',
+          profileImageUrl: student.battleProfileImage?.data
+            ? `/api/auth/users/${student._id}/battle-profile-image?v=${student.battleProfileImage.updatedAt?.getTime() || Date.now()}`
+            : '',
+          online: (battleOnlineUsers.get(String(student._id)) || 0) > 0,
+          relationship: friendIds.has(String(student._id))
+            ? 'friends'
+            : outgoingIds.has(String(student._id))
+              ? 'pending'
+              : incomingIds.has(String(student._id))
+                ? 'incoming'
+                : 'available',
+        })),
+      })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not search students.' })
+    }
+  })
+
+  app.post('/api/battle-mode/friend-requests', authRequired, async (req, res) => {
+    try {
+      const gameId = safeString(req.body?.gameId)
+      const userId = safeString(req.body?.userId)
+      if ((!gameId || !/^[A-Za-z0-9_]+$/.test(gameId)) && !userId) {
+        return res.status(400).json({ message: 'Choose a valid student to add.' })
+      }
+      const target = userId
+        ? await models.User.findOne({ _id: userId, isAdmin: false }).select('name gameId').lean()
+        : await models.User.findOne({ gameId, isAdmin: false }).select('name gameId').lean()
+      if (!target) return res.status(404).json({ message: 'No student was found.' })
+      if (String(target._id) === String(req.user._id)) return res.status(400).json({ message: 'You cannot add yourself.' })
+
+      const [sender, targetWithRequests] = await Promise.all([
+        models.User.findById(req.user._id).select('name friendIds').lean(),
+        models.User.findById(target._id).select('friendIds friendRequests').lean(),
+      ])
+      if ((sender?.friendIds || []).some((id) => String(id) === String(target._id))) {
+        return res.status(409).json({ message: 'You are already friends.' })
+      }
+      if ((targetWithRequests?.friendRequests || []).some((request) => String(request.senderId) === String(req.user._id))) {
+        return res.status(409).json({ message: 'Friend request already sent.' })
+      }
+      if ((sender?.friendRequests || []).some((request) => String(request.senderId) === String(target._id))) {
+        return res.status(409).json({ message: 'This student already sent you a request. Check your requests.' })
+      }
+
+      const updatedTarget = await models.User.findByIdAndUpdate(
+        target._id,
+        { $push: { friendRequests: { senderId: req.user._id } } },
+        { new: true, select: 'friendRequests' },
+      )
+      const request = updatedTarget.friendRequests[updatedTarget.friendRequests.length - 1]
+      io.to(`battle-user:${String(target._id)}`).emit('battle:friend-request', {
+        id: String(request._id),
+        sender: { id: String(req.user._id), name: sender?.name || req.user.name || 'Student', gameId: req.user.gameId || '' },
+      })
+      res.status(201).json({ message: `Friend request sent to ${target.name}.` })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not send friend request.' })
+    }
+  })
+
+  app.patch('/api/battle-mode/friend-requests/:requestId', authRequired, async (req, res) => {
+    try {
+      const action = safeLower(req.body?.action)
+      if (!['accepted', 'rejected'].includes(action)) return res.status(400).json({ message: 'Choose accept or reject.' })
+      const user = await models.User.findById(req.user._id).select('friendRequests name').lean()
+      const request = (user?.friendRequests || []).find((item) => String(item._id) === String(req.params.requestId))
+      if (!request) return res.status(404).json({ message: 'Friend request not found.' })
+
+      await models.User.updateOne({ _id: req.user._id }, { $pull: { friendRequests: { _id: request._id } } })
+      const sender = await models.User.findById(request.senderId).select('name gameId').lean()
+      if (action === 'accepted') {
+        await Promise.all([
+          models.User.updateOne({ _id: req.user._id }, { $addToSet: { friendIds: request.senderId } }),
+          models.User.updateOne({ _id: request.senderId }, { $addToSet: { friendIds: req.user._id } }),
+        ])
+      }
+      io.to(`battle-user:${String(request.senderId)}`).emit('battle:friend-request-status', {
+        action,
+        userId: String(req.user._id),
+        name: user?.name || req.user.name || 'Student',
+      })
+      res.json({ message: action === 'accepted' ? `${sender?.name || 'Student'} is now your friend.` : 'Friend request declined.', action })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not update friend request.' })
+    }
+  })
+
+  app.post('/api/battle-mode/friends', authRequired, async (req, res) => {
+    try {
+      const gameId = safeString(req.body?.gameId)
+      const userId = safeString(req.body?.userId)
+      if ((!gameId || !/^[A-Za-z0-9_]+$/.test(gameId)) && !userId) {
+        return res.status(400).json({ message: 'Enter a valid GameID using only letters, numbers, and underscores.' })
+      }
+      const friend = userId
+        ? await models.User.findOne({ _id: userId, isAdmin: false })
+        : await models.User.findOne({ gameId, isAdmin: false })
+      if (!friend) return res.status(404).json({ message: 'No student was found with that GameID.' })
+      if (String(friend._id) === String(req.user._id)) return res.status(400).json({ message: 'You cannot add yourself.' })
+      await Promise.all([
+        models.User.updateOne({ _id: req.user._id }, { $addToSet: { friendIds: friend._id } }),
+        models.User.updateOne({ _id: friend._id }, { $addToSet: { friendIds: req.user._id } }),
+      ])
+      res.json({ message: `${friend.name} is now your friend.` })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not add this friend.' })
+    }
+  })
+
+  app.delete('/api/battle-mode/friends/:userId', authRequired, async (req, res) => {
+    try {
+      const friendId = safeString(req.params.userId)
+      if (!friendId || friendId === String(req.user._id)) {
+        return res.status(400).json({ message: 'Choose a valid friend.' })
+      }
+      const friend = await models.User.findOne({ _id: friendId, isAdmin: false }).select('name').lean()
+      if (!friend) return res.status(404).json({ message: 'Friend not found.' })
+      await Promise.all([
+        models.User.updateOne({ _id: req.user._id }, { $pull: { friendIds: friendId } }),
+        models.User.updateOne({ _id: friendId }, { $pull: { friendIds: req.user._id } }),
+      ])
+      res.json({ message: `${friend.name} was removed from your friends.` })
+    } catch (error) {
+      res.status(500).json({ message: 'Could not remove this friend.' })
+    }
+  })
+
   app.get('/api/battle-mode/active', authRequired, async (req, res) => {
     try {
       const room = await BattleRoom.findOne({
@@ -1073,8 +1455,11 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
       }
 
       if (!settings.objectiveTypes.length) {
-        settings.objectiveTypes = [...allowedBattleObjectiveTypes]
+        return res.status(400).json({ message: 'Pick at least one objective type.' })
       }
+
+      const availableQuestions = await chooseQuestions({ room: { settings }, models })
+      settings.questionsCount = Math.min(settings.questionsCount, availableQuestions.length)
 
       const code = await createRoomCode(BattleRoom)
       const room = await BattleRoom.create({
@@ -1084,9 +1469,7 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
           userId: req.user._id,
           name: req.user.name,
           className: req.user.classId?.name || '',
-          profileImageUrl: req.user.profileImage?.data
-            ? `/api/auth/users/${req.user._id}/avatar?v=${req.user.profileImage.updatedAt?.getTime() || Date.now()}`
-            : '',
+          profileImageUrl: battleProfileImageUrl(req.user),
         },
         status: 'lobby',
         settings,
@@ -1094,10 +1477,9 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
           {
             userId: req.user._id,
             name: req.user.name,
+            gameId: req.user.gameId || '',
             className: req.user.classId?.name || '',
-            profileImageUrl: req.user.profileImage?.data
-              ? `/api/auth/users/${req.user._id}/avatar?v=${req.user.profileImage.updatedAt?.getTime() || Date.now()}`
-              : '',
+            profileImageUrl: battleProfileImageUrl(req.user),
             ready: false,
             connected: true,
             seat: 1,
@@ -1136,7 +1518,7 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
         return res.status(403).json({ message: 'You do not have access to this room.' })
       }
 
-      res.json({ room: battleRoomView(room, String(req.user._id)) })
+      res.json({ room: battleRoomViewForUser(room, String(req.user._id)) })
     } catch (error) {
       res.status(500).json({ message: 'Could not load battle room.' })
     }
@@ -1217,12 +1599,8 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
         return res.status(404).json({ message: 'Battle room not found.' })
       }
 
-      if (room.status !== 'lobby') {
-        return res.status(409).json({ message: 'You can only leave before the battle starts.' })
-      }
-
-      if (String(room.createdBy) === String(req.user._id)) {
-        return res.status(403).json({ message: 'The room creator must delete the room instead of leaving.' })
+      if (!['lobby', 'finished'].includes(room.status)) {
+        return res.status(409).json({ message: 'You can only leave before or after the battle.' })
       }
 
       const playerIndex = (room.players || []).findIndex((item) => String(item.userId) === String(req.user._id))
@@ -1241,6 +1619,17 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
         })
         await BattleRoom.deleteOne({ _id: room._id })
         return res.json({ message, roomCode: room.code, leftPlayerId: String(leftPlayer?.userId || '') })
+      }
+
+      if (String(room.createdBy) === String(req.user._id)) {
+        const nextHost = room.players[0]
+        room.createdBy = nextHost.userId
+        room.creatorSnapshot = {
+          userId: nextHost.userId,
+          name: nextHost.name || 'Player',
+          className: nextHost.className || '',
+          profileImageUrl: nextHost.profileImageUrl || '',
+        }
       }
 
       await room.save()
@@ -1270,11 +1659,20 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
         return res.status(403).json({ message: 'Only the room creator can edit the lobby settings.' })
       }
 
-      if (room.status !== 'lobby') {
+      const creator = (room.players || []).find((entry) => String(entry.userId) === String(req.user._id))
+      if (room.status !== 'lobby' && !(room.status === 'finished' && creator?.returnedToLobby)) {
         return res.status(409).json({ message: 'Room settings can only be edited before the battle starts.' })
       }
 
       const nextSettings = normalizeBattleSettingsUpdate(req.body, room.settings || {})
+      if (!nextSettings.chapterIds.length) {
+        return res.status(400).json({ message: 'At least one chapter is required.' })
+      }
+      if (!nextSettings.objectiveTypes.length) {
+        return res.status(400).json({ message: 'At least one objective type is required.' })
+      }
+      const availableQuestions = await chooseQuestions({ room: { settings: nextSettings }, models })
+      nextSettings.questionsCount = Math.min(nextSettings.questionsCount, availableQuestions.length)
       room.settings = {
         ...room.settings,
         ...nextSettings,
@@ -1287,13 +1685,15 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
 
       await room.save()
 
-      io.to(room.code).emit('battle:room-update', {
-        room: battleRoomView(room, String(req.user._id)),
-        reason: 'settings',
-      })
+      if (room.status === 'lobby') {
+        io.to(room.code).emit('battle:room-update', {
+          room: battleRoomView(room, String(req.user._id)),
+          reason: 'settings',
+        })
+      }
 
       res.json({
-        room: battleRoomView(room, String(req.user._id)),
+        room: battleRoomViewForUser(room, String(req.user._id)),
       })
     } catch (error) {
       res.status(500).json({ message: 'Could not update room settings.' })
@@ -1329,6 +1729,64 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
       })
     } catch (error) {
       res.status(500).json({ message: 'Could not delete the room.' })
+    }
+  })
+
+  app.post('/api/battle-mode/rooms/:code/replay', authRequired, async (req, res) => {
+    try {
+      const room = await BattleRoom.findOne({ code: safeUpper(req.params.code) })
+      if (!room) {
+        return res.status(404).json({ message: 'Battle room not found.' })
+      }
+
+      const player = (room.players || []).find((item) => String(item.userId) === String(req.user._id))
+      if (!player) {
+        return res.status(403).json({ message: 'You are not part of this room.' })
+      }
+
+      if (!['finished', 'lobby'].includes(room.status)) {
+        return res.status(409).json({ message: 'The battle must be finished before returning to the lobby.' })
+      }
+
+      if (room.status === 'finished') {
+        player.returnedToLobby = true
+        player.ready = false
+        player.connected = true
+        if (room.players.every((entry) => entry.returnedToLobby)) {
+          room.status = 'lobby'
+          room.questions = []
+          room.currentQuestionIndex = 0
+          room.questionStartedAt = null
+          room.questionEndsAt = null
+          room.startedAt = null
+          room.finishedAt = null
+          room.cleanupAt = null
+          room.battleSummary = undefined
+          room.codeExpiresAt = new Date(Date.now() + DEFAULT_CODE_TTL_MS)
+          room.players.forEach((entry) => {
+            entry.returnedToLobby = false
+            entry.ready = false
+            entry.connected = true
+            entry.answers = []
+            entry.score = 0
+            entry.correctCount = 0
+            entry.wrongCount = 0
+            entry.skippedCount = 0
+            entry.streak = 0
+            entry.highestStreak = 0
+            entry.fastestAnswerMs = null
+            entry.updatedAt = new Date()
+          })
+        }
+        room.lastActivityAt = new Date()
+        await room.save()
+      }
+
+      const roomView = battleRoomViewForUser(room, String(req.user._id))
+
+      res.json({ room: roomView })
+    } catch (error) {
+      res.status(500).json({ message: error.message || 'Could not reopen the battle lobby.' })
     }
   })
 
@@ -1423,6 +1881,15 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
   })
 
   io.on('connection', (socket) => {
+    const connectedUserId = String(socket.data.user._id)
+    socket.join(`battle-user:${connectedUserId}`)
+    battleOnlineUsers.set(connectedUserId, (battleOnlineUsers.get(connectedUserId) || 0) + 1)
+    io.emit('battle:presence-update', { userId: connectedUserId, online: true })
+
+    socket.on('battle:presence-sync', () => {
+      socket.emit('battle:presence-snapshot', { userIds: [...battleOnlineUsers.keys()] })
+    })
+
     socket.on('battle:subscribe', async ({ roomCode }) => {
       try {
         const code = safeUpper(roomCode)
@@ -1445,7 +1912,7 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
         socket.join(code)
         socket.data.roomCode = code
         socket.emit('battle:room-update', {
-          room: battleRoomView(room, String(socket.data.user._id)),
+          room: battleRoomViewForUser(room, String(socket.data.user._id)),
           reason: 'sync',
         })
       } catch (error) {
@@ -1497,6 +1964,68 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
         })
       } catch (error) {
         socket.emit('battle:error', { message: error.message })
+      }
+    })
+
+    socket.on('battle:room-invite', async ({ roomCode, targetUserId }) => {
+      try {
+        const code = safeUpper(roomCode)
+        const room = await BattleRoom.findOne({ code })
+        if (!room) throw new Error('Battle room not found.')
+        if (room.status !== 'lobby') throw new Error('Invites are only available in the lobby.')
+
+        const senderId = String(socket.data.user._id)
+        const sender = await models.User.findById(senderId).select('name friendIds').lean()
+        const targetId = String(targetUserId || '')
+        if (!sender?.friendIds?.some((id) => String(id) === targetId)) {
+          throw new Error('You can invite friends only.')
+        }
+        if ((room.players || []).some((player) => String(player.userId) === targetId)) {
+          throw new Error('That player is already in the room.')
+        }
+        const occupiedRooms = await BattleRoom.find({
+          'players.userId': targetId,
+          status: { $in: ['lobby', 'active'] },
+        }).select('code status codeExpiresAt').lean()
+        const occupiedRoom = occupiedRooms.find((candidate) => candidate.status === 'active')
+          || occupiedRooms.find((candidate) => !(candidate.status === 'lobby' && candidate.codeExpiresAt && new Date(candidate.codeExpiresAt).getTime() <= Date.now()))
+        if (occupiedRoom && !(occupiedRoom.status === 'lobby' && occupiedRoom.codeExpiresAt && new Date(occupiedRoom.codeExpiresAt).getTime() <= Date.now())) {
+          throw new Error(occupiedRoom.status === 'active' ? 'That friend is already playing a battle.' : 'That friend is already in another lobby.')
+        }
+
+        const inviteId = `${code}-${senderId}-${targetId}-${Date.now()}`
+        const payload = {
+          inviteId,
+          roomCode: code,
+          roomName: room.settings?.roomName || 'Battle Room',
+          senderId,
+          senderName: sender?.name || socket.data.user.name || 'Player',
+          targetUserId: targetId,
+          expiresAt: Date.now() + 10000,
+        }
+        const delivered = (battleOnlineUsers.get(targetId) || 0) > 0
+        io.to(`battle-user:${targetId}`).emit('battle:room-invite', payload)
+        socket.emit('battle:room-invite-status', {
+          ...payload,
+          status: delivered ? 'sent' : 'offline',
+        })
+      } catch (error) {
+        socket.emit('battle:room-invite-status', { status: 'error', message: error.message || 'Could not send the invite.' })
+      }
+    })
+
+    socket.on('battle:room-invite-response', ({ inviteId, roomCode, senderId, status }) => {
+      if (!['accepted', 'rejected', 'expired'].includes(status)) return
+      for (const targetSocket of io.sockets.sockets.values()) {
+        if (String(targetSocket.data?.user?._id || '') === String(senderId || '')) {
+          targetSocket.emit('battle:room-invite-status', {
+            inviteId,
+            roomCode: safeUpper(roomCode),
+            status,
+            responderId: String(socket.data.user._id),
+            responderName: socket.data.user.name || 'Player',
+          })
+        }
       }
     })
 
@@ -1567,7 +2096,6 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
       try {
         const room = await BattleRoom.findOne({ code: safeUpper(roomCode) })
         if (!room) throw new Error('Battle room not found.')
-        if (!room.settings.roomChat) throw new Error('Room chat is disabled.')
         const text = safeString(message).slice(0, 200)
         if (!text) throw new Error('Message cannot be empty.')
 
@@ -1595,6 +2123,41 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
       } catch (error) {
         socket.emit('battle:error', { message: error.message })
       }
+    })
+
+    socket.on('battle:voice-join', async ({ roomCode }) => {
+      try {
+        const code = safeUpper(roomCode)
+        if (!socket.rooms.has(code)) throw new Error('Join the battle room before enabling voice.')
+        socket.data.voiceRooms = socket.data.voiceRooms || new Set()
+        socket.data.voiceRooms.add(code)
+        const peers = (await io.in(code).fetchSockets())
+          .filter((peer) => peer.id !== socket.id && peer.data.voiceRooms?.has(code))
+          .map((peer) => String(peer.data.user?._id || ''))
+          .filter(Boolean)
+        socket.emit('battle:voice-peers', { userIds: peers })
+        socket.to(code).emit('battle:voice-peer-joined', { userId: String(socket.data.user._id) })
+      } catch (error) {
+        socket.emit('battle:error', { message: error.message || 'Could not join room voice.' })
+      }
+    })
+
+    const relayVoiceSignal = async (eventName, { roomCode, targetUserId, ...payload } = {}) => {
+      const code = safeUpper(roomCode)
+      if (!socket.rooms.has(code)) return
+      const targets = await io.in(code).fetchSockets()
+      targets
+        .filter((peer) => String(peer.data.user?._id || '') === String(targetUserId || ''))
+        .forEach((peer) => peer.emit(eventName, { ...payload, fromUserId: String(socket.data.user._id) }))
+    }
+
+    socket.on('battle:voice-offer', (payload) => relayVoiceSignal('battle:voice-offer', payload).catch(() => {}))
+    socket.on('battle:voice-answer', (payload) => relayVoiceSignal('battle:voice-answer', payload).catch(() => {}))
+    socket.on('battle:voice-ice', (payload) => relayVoiceSignal('battle:voice-ice', payload).catch(() => {}))
+    socket.on('battle:voice-leave', ({ roomCode }) => {
+      const code = safeUpper(roomCode)
+      socket.data.voiceRooms?.delete(code)
+      if (socket.rooms.has(code)) socket.to(code).emit('battle:voice-peer-left', { userId: String(socket.data.user._id) })
     })
 
     socket.on('battle:reaction', async ({ roomCode, emoji }) => {
@@ -1631,6 +2194,12 @@ const initBattleMode = ({ app, server, io: sharedIo, mongoose, models, authRequi
     })
 
     socket.on('disconnect', async () => {
+      const nextCount = (battleOnlineUsers.get(connectedUserId) || 1) - 1
+      if (nextCount > 0) battleOnlineUsers.set(connectedUserId, nextCount)
+      else {
+        battleOnlineUsers.delete(connectedUserId)
+        io.emit('battle:presence-update', { userId: connectedUserId, online: false })
+      }
       const roomCode = socket.data.roomCode
       if (!roomCode) {
         return
