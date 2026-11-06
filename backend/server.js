@@ -125,6 +125,30 @@ const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || '').trim()
 const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || '').trim()
 const VAPID_SUBJECT = String(process.env.VAPID_SUBJECT || 'mailto:innovativesci2@gmail.com').trim()
 const MAX_COMPLETION_TOKENS = Number(process.env.MAX_COMPLETION_TOKENS || 1800)
+let mongoConnectionPromise = null
+
+const ensureMongoConnection = () => {
+  if (mongoose.connection.readyState === 1) return Promise.resolve()
+  if (!MONGODB_URI || MONGODB_URI === 'add_your_mongodb_url_here') {
+    const error = new Error('MongoDB is not configured on the backend.')
+    error.statusCode = 503
+    return Promise.reject(error)
+  }
+
+  if (!mongoConnectionPromise) {
+    mongoConnectionPromise = mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 15000,
+      maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 15),
+      minPoolSize: Number(process.env.MONGODB_MIN_POOL_SIZE || 2),
+    }).then(() => undefined).catch((error) => {
+      mongoConnectionPromise = null
+      throw error
+    })
+  }
+
+  return mongoConnectionPromise
+}
+
 const allowedOrigins = [
   ...(process.env.CLIENT_URL || '')
     .split(',')
@@ -147,14 +171,13 @@ try {
     : undefined
   const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'innovativescience2-f988a'
 
-  if (!getApps().length) {
+  const hasApplicationCredentials = Boolean(serviceAccount || process.env.GOOGLE_APPLICATION_CREDENTIALS)
+  if (hasApplicationCredentials && !getApps().length) {
     initializeApp(serviceAccount
       ? { credential: cert(serviceAccount), projectId: firebaseProjectId }
-      : process.env.GOOGLE_APPLICATION_CREDENTIALS
-        ? { credential: applicationDefault(), projectId: firebaseProjectId }
-        : { projectId: firebaseProjectId })
+      : { credential: applicationDefault(), projectId: firebaseProjectId })
   }
-  firebaseAdminAuth = getAuth()
+  if (hasApplicationCredentials) firebaseAdminAuth = getAuth()
 } catch (error) {
   console.warn(`Firebase Admin could not initialize: ${error.message}`)
 }
@@ -4391,6 +4414,15 @@ app.post('/api/admin/streaks/:userId/set', authRequired, adminRequired, async (r
 // Firebase owns credentials. MongoDB stores only the Firebase UID and app profile data.
 app.post('/api/auth/firebase', async (req, res) => {
   try {
+    try {
+      await ensureMongoConnection()
+    } catch (error) {
+      console.error('Firebase account sync unavailable because MongoDB is not connected:', error.message)
+      return res.status(error.statusCode || 503).json({
+        message: 'Authentication is temporarily unavailable because the account database is offline. Please try again shortly.',
+      })
+    }
+
     const {
       idToken,
       firebaseApiKey = '',
@@ -4436,7 +4468,7 @@ app.post('/api/auth/firebase', async (req, res) => {
     let user = await AccountUser.findOne({ $or: [{ firebaseUid: firebaseUser.uid }, { email: normalizedEmail }] })
     let createdNewUser = false
     if (!user) {
-      user = await AccountUser.create({
+      const accountData = {
         firebaseUid: firebaseUser.uid,
         name: isValidPersonName(name || firebaseUser.name)
           ? String(name || firebaseUser.name).trim()
@@ -4454,7 +4486,15 @@ app.post('/api/auth/firebase', async (req, res) => {
         finalExamPercentage: finalExamPercentage === '' || finalExamPercentage === undefined || finalExamPercentage === null
           ? null
           : Number(finalExamPercentage),
-      })
+      }
+
+      // `gameId` is unique and sparse. Do not store an empty string because
+      // MongoDB still indexes empty strings, making the second Google signup
+      // fail with a duplicate-key error.
+      const normalizedNewGameId = String(gameId || '').trim()
+      if (normalizedNewGameId) accountData.gameId = normalizedNewGameId
+
+      user = await AccountUser.create(accountData)
       createdNewUser = true
     } else {
       let changed = false
@@ -4477,6 +4517,7 @@ app.post('/api/auth/firebase', async (req, res) => {
       }
       const profileFields = { dateOfBirth, gender, bloodGroup, state, city, area, schoolName, finalExamPercentage, gameId }
       Object.entries(profileFields).forEach(([key, value]) => {
+        if (key === 'gameId' && value !== undefined && !String(value || '').trim()) return
         if (value !== undefined && user[key] !== (key === 'finalExamPercentage' && value !== '' ? Number(value) : String(value || '').trim())) {
           user[key] = key === 'finalExamPercentage'
             ? (value === '' || value === null ? null : Number(value))
@@ -4496,7 +4537,10 @@ app.post('/api/auth/firebase', async (req, res) => {
         changed = true
       }
       if (changed) {
-        await user.save()
+        // Older accounts may contain a legacy GameID that no longer matches
+        // the current format. Auth/profile sync must not fail while saving an
+        // unrelated field such as the Firebase UID or phone number.
+        await user.save({ validateModifiedOnly: true })
       }
     }
 
@@ -4510,10 +4554,26 @@ app.post('/api/auth/firebase', async (req, res) => {
       }).catch((error) => console.warn(`Welcome push failed: ${error.message}`))
     }
     user.lastLoginAt = new Date()
-    await user.save()
+    await user.save({ validateModifiedOnly: true })
     return res.json({ token: createToken(user), user: publicUser(user) })
   } catch (error) {
     console.error('Could not connect Firebase account:', error)
+    if (error?.code === 11000) {
+      const duplicateField = Object.keys(error.keyPattern || {})[0]
+      const duplicateMessages = {
+        email: 'This email is already used by another account.',
+        firebaseUid: 'This Google account is already linked to another account.',
+        gameId: 'This GameID is already taken.',
+      }
+      return res.status(409).json({
+        message: duplicateMessages[duplicateField] || 'This account conflicts with an existing account.',
+      })
+    }
+    if (error?.name === 'MongooseServerSelectionError' || error?.name === 'MongoServerSelectionError' || error?.statusCode === 503) {
+      return res.status(503).json({
+        message: 'Authentication is temporarily unavailable because the account database is offline. Please try again shortly.',
+      })
+    }
     return res.status(500).json({ message: 'Could not connect the Firebase account.' })
   }
 })
@@ -9941,11 +10001,7 @@ const startServer = async () => {
 
   try {
     console.log('Connecting to MongoDB...')
-    await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 15000,
-      maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 15),
-      minPoolSize: Number(process.env.MONGODB_MIN_POOL_SIZE || 2),
-    })
+    await ensureMongoConnection()
     console.log('MongoDB connected')
 
     await ensureAcademicScienceFlags()

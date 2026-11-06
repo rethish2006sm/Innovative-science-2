@@ -70,7 +70,7 @@ const Signinpage = () => {
       )
       navigate(hasCompleteProfile ? '/' : '/complete-profile', { replace: true })
     } catch (err) {
-      setError(authError || err.message)
+      setError(err.message || authError)
     } finally {
       setIsLoading(false)
     }
@@ -99,7 +99,7 @@ const Signinpage = () => {
       navigate(hasCompleteProfile ? '/' : '/complete-profile', { replace: true })
       return
     } catch (err) {
-      setError(authError || err.message)
+      setError(err.message || authError)
     } finally {
       setIsGoogleLoading(false)
     }

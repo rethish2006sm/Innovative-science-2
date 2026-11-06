@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
   EmailAuthProvider,
@@ -43,36 +43,52 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
   const [authLoading, setAuthLoading] = useState(false)
   const [error, setError] = useState('')
+  const syncRequestsRef = useRef(new Map())
 
   const syncBackendSession = useCallback(async (firebaseUser, profile = {}, forceTokenRefresh = false) => {
     if (!firebaseUser) {
       if (getStoredAuth()?.provider !== 'legacy') clearAuth()
       return null
     }
-    const idToken = await firebaseUser.getIdToken(forceTokenRefresh)
-    const data = await apiRequest('/api/auth/firebase', {
-      method: 'POST',
-      body: JSON.stringify({
-        idToken,
-        firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-        // MongoDB is the source of truth for an existing profile. Do not
-        // submit Firebase's possibly stale display name during auth refresh.
-        name: profile.name || (profile.name === '' ? '' : undefined),
-        email: firebaseUser.email || '',
-        phoneNumber: profile.phoneNumber || (profile.phoneNumber === '' ? '' : undefined),
-        gameId: profile.gameId,
-        dateOfBirth: profile.dateOfBirth,
-        gender: profile.gender,
-        bloodGroup: profile.bloodGroup,
-        state: profile.state,
-        city: profile.city,
-        area: profile.area,
-        schoolName: profile.schoolName,
-        finalExamPercentage: profile.finalExamPercentage,
-      }),
-    })
-    saveAuth({ token: data.token, user: { ...data.user, firebaseUid: firebaseUser.uid } })
-    return data.user
+    const requestKey = `${firebaseUser.uid}:${forceTokenRefresh ? 'refresh' : 'normal'}:${JSON.stringify(profile)}`
+    const pendingRequest = syncRequestsRef.current.get(requestKey)
+    if (pendingRequest) return pendingRequest
+
+    const request = (async () => {
+      const idToken = await firebaseUser.getIdToken(forceTokenRefresh)
+      const data = await apiRequest('/api/auth/firebase', {
+        method: 'POST',
+        body: JSON.stringify({
+          idToken,
+          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+          // MongoDB is the source of truth for an existing profile. Do not
+          // submit Firebase's possibly stale display name during auth refresh.
+          name: profile.name || (profile.name === '' ? '' : undefined),
+          email: firebaseUser.email || '',
+          phoneNumber: profile.phoneNumber || (profile.phoneNumber === '' ? '' : undefined),
+          gameId: profile.gameId,
+          dateOfBirth: profile.dateOfBirth,
+          gender: profile.gender,
+          bloodGroup: profile.bloodGroup,
+          state: profile.state,
+          city: profile.city,
+          area: profile.area,
+          schoolName: profile.schoolName,
+          finalExamPercentage: profile.finalExamPercentage,
+        }),
+      })
+      saveAuth({ token: data.token, user: { ...data.user, firebaseUid: firebaseUser.uid } })
+      return data.user
+    })()
+
+    syncRequestsRef.current.set(requestKey, request)
+    try {
+      return await request
+    } finally {
+      if (syncRequestsRef.current.get(requestKey) === request) {
+        syncRequestsRef.current.delete(requestKey)
+      }
+    }
   }, [])
 
   useEffect(() => {

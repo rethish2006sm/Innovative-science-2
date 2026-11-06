@@ -23,7 +23,7 @@ const Signuppage = () => {
       await signInWithGoogle()
       navigate('/complete-profile', { replace: true })
     } catch (authActionError) {
-      setError(authError || authActionError.message)
+      setError(authActionError.message || authError)
     }
   }
 
