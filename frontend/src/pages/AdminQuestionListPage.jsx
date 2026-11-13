@@ -109,6 +109,7 @@ const AdminQuestionListPage = () => {
   const [showDownloadTool, setShowDownloadTool] = useState(false)
   const [actionQuestionId, setActionQuestionId] = useState('')
   const searchInputRef = useRef(null)
+  const questionListRef = useRef(null)
 
   const loadQuestions = useCallback(async () => {
     setLoading(true)
@@ -247,6 +248,13 @@ const AdminQuestionListPage = () => {
     if (nextIndex >= 0 && nextIndex < questions.length) {
       setSelectedQuestion(questions[nextIndex])
     }
+  }
+
+  const changePage = (nextPage) => {
+    setPage(nextPage)
+    window.setTimeout(() => {
+      questionListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 80)
   }
 
   const hasFilters = Boolean(
@@ -474,9 +482,10 @@ const AdminQuestionListPage = () => {
 
         {/* Question list */}
         <section
+          ref={questionListRef}
           aria-label="Question list"
           aria-busy={loading}
-          className="relative z-0"
+          className="question-list-anchor relative z-0"
         >
           {loading ? (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -532,7 +541,7 @@ const AdminQuestionListPage = () => {
           <nav className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Question pages">
             <button
               type="button"
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              onClick={() => changePage(Math.max(1, page - 1))}
               disabled={loading || page <= 1}
               className={`${buttonBase} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`}
             >
@@ -543,7 +552,7 @@ const AdminQuestionListPage = () => {
             </span>
             <button
               type="button"
-              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              onClick={() => changePage(Math.min(totalPages, page + 1))}
               disabled={loading || page >= totalPages}
               className={`${buttonBase} bg-slate-950 text-white hover:bg-slate-800`}
             >

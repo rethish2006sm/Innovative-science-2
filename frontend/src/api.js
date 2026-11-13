@@ -74,6 +74,18 @@ export const apiRequest = async (path, options = {}) => {
   if (canCache) {
     const cached = responseCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
+      // Let callers render cached data immediately while refreshing it in the
+      // background. The refresh deliberately bypasses the cache once so the
+      // visible page never waits on the network during navigation or focus.
+      if (options.revalidate) {
+        void apiRequest(path, {
+          ...options,
+          cache: 'no-store',
+          revalidate: false,
+        }).then((freshData) => {
+          responseCache.set(cacheKey, { data: freshData, expiresAt: Date.now() + CACHE_TTL })
+        }).catch(() => {})
+      }
       return cached.data
     }
   }

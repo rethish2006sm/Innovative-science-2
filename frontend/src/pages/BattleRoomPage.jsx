@@ -34,6 +34,22 @@ import BattleNavbar from '../components/BattleNavbar'
 
 const reactionChoices = ['🔥', '😂', '😎', '😱', '💪', '👏', '❤️', '🤣', '🚀', '🎯', '🧠']
 const battleQuestionCounts = [10, 15, 20, 25]
+
+const BattleRoomLoading = () => (
+  <section className="battle-room-loading" role="status" aria-label="Loading battle room">
+    <div className="battle-room-loading-arena" aria-hidden="true">
+      <div className="battle-room-loading-ring battle-room-loading-ring-one" />
+      <div className="battle-room-loading-ring battle-room-loading-ring-two" />
+      <div className="battle-room-loading-core"><Swords size={25} /></div>
+      <span className="battle-room-loading-spark battle-room-loading-spark-one" />
+      <span className="battle-room-loading-spark battle-room-loading-spark-two" />
+      <span className="battle-room-loading-spark battle-room-loading-spark-three" />
+    </div>
+    <p className="battle-room-loading-kicker">Battle arena</p>
+    <p className="battle-room-loading-title">Deploying your room<span className="battle-loading-dots">...</span></p>
+    <p className="battle-room-loading-subtitle">Syncing players and questions</p>
+  </section>
+)
 const battleTimeLimits = [10, 15]
 const battleDifficultyOptions = [
   { value: 'easy', label: 'Easy' },
@@ -894,13 +910,7 @@ const BattleRoomPage = () => {
   }
 
   if (loading) {
-    return (
-      <section className="min-h-[calc(100vh-6rem)] bg-[linear-gradient(180deg,#f8feff_0%,#f8fafc_45%,#eef9f6_100%)] px-4 py-8 text-slate-950">
-        <div className="mx-auto flex max-w-4xl items-center justify-center rounded-[2rem] border border-slate-200 bg-white p-10 shadow-sm">
-          Loading battle room...
-        </div>
-      </section>
-    )
+    return <BattleRoomLoading />
   }
 
   if (error && !room) {

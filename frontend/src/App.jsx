@@ -4,6 +4,9 @@ import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
 import StudentMessagePopup from './components/StudentMessagePopup'
+import DailyRewardsPopup from './components/DailyRewardsPopup'
+import LoadingState from './components/LoadingState'
+import HomeBottomNav from './components/HomeBottomNav'
 import SiteNoticeBanner from './components/SiteNoticeBanner'
 const Aboutpage = lazy(() => import('./pages/Aboutpage'))
 const ChapterWeightage = lazy(() => import('./pages/Chapter_weightage'))
@@ -15,6 +18,7 @@ const Diagrams = lazy(() => import('./pages/diagrams'))
 const Adminpage = lazy(() => import('./pages/Adminpage'))
 const AdminClassMaterialsPage = lazy(() => import('./pages/AdminClassMaterialsPage'))
 const AdminAnalysisPage = lazy(() => import('./pages/AdminAnalysisPage'))
+const AdminFeedbackPage = lazy(() => import('./pages/AdminFeedbackPage'))
 const AdminQuestionListPage = lazy(() => import('./pages/AdminQuestionListPage'))
 const AddTheoryQuestion = lazy(() => import('./pages/AddTheoryQuestion'))
 const Classpage = lazy(() => import('./pages/Classpage'))
@@ -28,6 +32,7 @@ const Identifysymbol = lazy(() => import('./pages/Identifysymbol'))
 const Homepage = lazy(() => import('./pages/Homepage'))
 const LeaderboardPage = lazy(() => import('./pages/LeaderboardPage'))
 const DailyStreakPage = lazy(() => import('./pages/DailyStreakPage'))
+const DailyPracticePage = lazy(() => import('./pages/DailyPracticePage'))
 const Matchthefollowing = lazy(() => import('./pages/Matchthefollowing'))
 const MCQs = lazy(() => import('./pages/MCQs'))
 const Numericals = lazy(() => import('./pages/Numericals'))
@@ -42,6 +47,7 @@ const BattleProfilePage = lazy(() => import('./pages/BattleProfilePage'))
 const BattleRankPage = lazy(() => import('./pages/BattleRankPage'))
 const BattleHistoryPage = lazy(() => import('./pages/BattleHistoryPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'))
 const PyqsPage = lazy(() => import('./pages/PyqsPage'))
 const Testbuilderpage = lazy(() => import('./pages/Testbuilderpage'))
 const Topicspage = lazy(() => import('./pages/Topicspage'))
@@ -295,10 +301,10 @@ const getSeoFromPathname = (pathname) => {
     }
   }
 
-  if (normalizedPath === '/questions' || normalizedPath === '/admin' || normalizedPath === '/dashboard' || normalizedPath === '/admin/analysis' || normalizedPath === '/admin/questions' || normalizedPath === '/admin/class-materials') {
+  if (normalizedPath === '/questions' || normalizedPath === '/admin' || normalizedPath === '/dashboard' || normalizedPath === '/admin/analysis' || normalizedPath === '/admin/questions' || normalizedPath === '/admin/class-materials' || normalizedPath === '/admin/feedback') {
     return {
-      title: normalizedPath === '/questions' ? 'Question Bank' : normalizedPath === '/admin/analysis' ? 'Student Analysis | Admin' : normalizedPath === '/admin/questions' ? 'Question List | Admin' : normalizedPath === '/admin/class-materials' ? 'Study Materials | Admin' : 'Admin Dashboard',
-      description: normalizedPath === '/questions' || normalizedPath === '/admin/questions' ? 'Browse and review science questions.' : 'Review student activity, brain cells, daily streaks, and performance.',
+      title: normalizedPath === '/questions' ? 'Question Bank' : normalizedPath === '/admin/analysis' ? 'Student Analysis | Admin' : normalizedPath === '/admin/questions' ? 'Question List | Admin' : normalizedPath === '/admin/class-materials' ? 'Study Materials | Admin' : normalizedPath === '/admin/feedback' ? 'Feedback Library | Admin' : 'Admin Dashboard',
+      description: normalizedPath === '/questions' || normalizedPath === '/admin/questions' ? 'Browse and review science questions.' : normalizedPath === '/admin/feedback' ? 'Review and filter student feedback.' : 'Review student activity, brain cells, daily streaks, and performance.',
       noindex: true,
     }
   }
@@ -394,17 +400,13 @@ const AuthRequiredScreen = () => (
   </section>
 )
 
-const PageLoading = () => (
-  <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">
-    Loading…
-  </div>
-)
+const PageLoading = () => <LoadingState label="Preparing your science space" />
 
 const ProtectedRoute = ({ children }) => {
   const { loading } = useAuth()
 
   if (loading) {
-    return <div className="grid min-h-[calc(100vh-6rem)] place-items-center bg-slate-50 text-sm font-bold text-slate-500">Checking your session…</div>
+    return <LoadingState label="Checking your session" />
   }
 
   return getStoredAuth()?.token ? children : <AuthRequiredScreen />
@@ -424,10 +426,33 @@ const AppLayout = () => {
   const isObjectivePracticeRoute = /\/objectives\/[^/]+$/.test(pathname)
   const isBattleRoute = pathname.startsWith('/battle-mode')
   const isDailyStreakRoute = pathname === '/daily-streak'
+  const isDailyPracticeRoute = pathname === '/daily-streak/dailypractice'
+  const showDailyRewards = Boolean(auth?.token && !auth?.user?.isAdmin && (pathname === '/' || isDailyStreakRoute))
   const isAuthRoute = pathname === '/signin' || pathname === '/signup'
   const seo = getSeoFromPathname(pathname)
   const siteNoticeKey = siteNotice?.id ? `${siteNotice.id}:${siteNotice.updatedAt || ''}` : ''
-  const showSiteNotice = Boolean(siteNotice?.message && !isObjectivePracticeRoute && !isBattleRoute && siteNoticeKey && dismissedNoticeKey !== siteNoticeKey)
+  const showSiteNotice = Boolean(siteNotice?.message && !isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && siteNoticeKey && dismissedNoticeKey !== siteNoticeKey)
+
+  useEffect(() => {
+    if (!auth?.token) return undefined
+
+    const sendPresence = () => {
+      if (document.visibilityState !== 'hidden') {
+        apiRequest('/api/auth/presence', { method: 'POST' }).catch(() => {})
+      }
+    }
+
+    sendPresence()
+    const intervalId = window.setInterval(sendPresence, 5 * 60 * 1000)
+    window.addEventListener('focus', sendPresence)
+    document.addEventListener('visibilitychange', sendPresence)
+
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', sendPresence)
+      document.removeEventListener('visibilitychange', sendPresence)
+    }
+  }, [auth?.token])
 
   useEffect(() => {
     if (!globalBattleInvite) {
@@ -757,6 +782,7 @@ const AppLayout = () => {
       />
       <RankNotifier />
       <StudentMessagePopup />
+      <DailyRewardsPopup enabled={showDailyRewards} showButton={isDailyStreakRoute} />
       {globalBattleInvite && (
         <div className="fixed inset-0 z-[999] grid place-items-center bg-slate-950/35 px-4 py-6 backdrop-blur-md">
           <div className="battle-invite-pop relative w-full max-w-md overflow-hidden rounded-[2rem] border border-orange-200 bg-white p-5 shadow-[0_30px_110px_rgba(255,105,0,.3)] sm:p-7">
@@ -802,6 +828,7 @@ const AppLayout = () => {
           <Route path="/feedback" element={<Feedbackpage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/daily-streak" element={<ProtectedRoute><DailyStreakPage /></ProtectedRoute>} />
+          <Route path="/daily-streak/dailypractice" element={<ProtectedRoute><DailyPracticePage /></ProtectedRoute>} />
           <Route path="/battle-mode" element={<BattleProfileRequired><BattleModeHome /></BattleProfileRequired>} />
           <Route path="/battle-mode/rank" element={<BattleProfileRequired><BattleRankPage /></BattleProfileRequired>} />
           <Route path="/battle-mode/history" element={<BattleProfileRequired><BattleHistoryPage /></BattleProfileRequired>} />
@@ -820,6 +847,14 @@ const AppLayout = () => {
           />
           <Route path="/admin" element={<Adminpage />} />
           <Route path="/dashboard" element={<Adminpage />} />
+          <Route path="/admin/students" element={<Adminpage initialTab="students" />} />
+          <Route path="/admin/classes" element={<Adminpage initialTab="classes" />} />
+          <Route path="/admin/streak" element={<Adminpage initialTab="streak" />} />
+          <Route path="/admin/reports" element={<Adminpage initialTab="reports" />} />
+          <Route path="/admin/contacts" element={<Adminpage initialTab="contacts" />} />
+          <Route path="/admin/feedback" element={<AdminFeedbackPage />} />
+          <Route path="/admin/deletion-requests" element={<Adminpage initialTab="deletion-requests" />} />
+          <Route path="/admin/message" element={<Adminpage initialTab="message" />} />
           <Route path="/admin/class-materials" element={<AdminClassMaterialsPage />} />
           <Route path="/admin/analysis" element={<AdminAnalysisPage />} />
           <Route path="/admin/questions" element={<AdminQuestionListPage />} />
@@ -843,6 +878,7 @@ const AppLayout = () => {
           <Route path="/profile" element={<ProtectedRoute><Profilepage /></ProtectedRoute>} />
           <Route path="/profile/performance" element={<ProtectedRoute><ProfilePerformancePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          <Route path="/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
           <Route path="/complete-profile" element={<ProtectedRoute><CompleteProfilePage /></ProtectedRoute>} />
           <Route path="/pyqs" element={<PyqsPage />} />
           <Route
@@ -865,7 +901,8 @@ const AppLayout = () => {
           </Suspense>
         </main>
       </div>
-      {!isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && <div className="app-footer"><Footer /></div>}
+      {!isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && <div className="app-footer"><Footer /></div>}
+      {pathname === '/' && <HomeBottomNav />}
       {showSigninReminder && !auth?.token && !isAuthRoute && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[2rem] border border-white/70 bg-white p-6 shadow-2xl">

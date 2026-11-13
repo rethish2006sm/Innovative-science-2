@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowRight, BookOpen, Brain, CalendarDays, Check, CheckCircle2, Flame, Gift, KeyRound, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
 import { getFeedbackClientKey } from '../lib/feedbackClient'
@@ -25,6 +25,20 @@ const formatTimeUntilTomorrow = () => {
   const seconds = remainingSeconds % 60
   return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s left`
 }
+
+// The countdown changes every second; isolate it so the whole homepage does
+// not re-render on every tick.
+const Countdown = memo(function Countdown() {
+  const [value, setValue] = useState(formatTimeUntilTomorrow)
+
+  useEffect(() => {
+    const update = () => setValue(formatTimeUntilTomorrow())
+    const intervalId = window.setInterval(update, 1000)
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  return <span className="ml-1 whitespace-nowrap text-[10px] font-bold text-slate-500 sm:text-xs">· {value}</span>
+})
 
 const polarToCartesian = (center, radius, angle) => {
   const radians = ((angle - 90) * Math.PI) / 180
@@ -214,16 +228,21 @@ const AnimatedActionLink = motion.create(Link)
 
 const Homepage = () => {
   const navigate = useNavigate()
+  // Rewards are now rendered on the Daily Streak page after a question is attempted.
+  const weeklyRewards = null
+  const showWeeklyRewards = false
+  const claimingRewardDate = ''
+  const rewardCalendarCells = []
+  const hasUnclaimedReward = false
+  const setShowWeeklyRewards = () => {}
+  const claimWeeklyReward = () => {}
+  const reduceMotion = useReducedMotion()
   const [leaderboard, setLeaderboard] = useState([])
   const [classOptions, setClassOptions] = useState([])
   const [leaderboardScope, setLeaderboardScope] = useState('all')
   const [selectedClassId, setSelectedClassId] = useState(() => getStoredAuth()?.user?.classId || '')
   const [chapters, setChapters] = useState([])
   const [dailyStreakData, setDailyStreakData] = useState(null)
-  const [weeklyRewards, setWeeklyRewards] = useState(null)
-  const [showWeeklyRewards, setShowWeeklyRewards] = useState(false)
-  const [claimingRewardDate, setClaimingRewardDate] = useState('')
-  const [timeUntilTomorrow, setTimeUntilTomorrow] = useState(formatTimeUntilTomorrow)
   const [featuredFeedback, setFeaturedFeedback] = useState([])
   const [feedbackForm, setFeedbackForm] = useState({ name: '', email: '', message: '' })
   const [feedbackRating, setFeedbackRating] = useState(5)
@@ -232,7 +251,6 @@ const Homepage = () => {
   const [feedbackSuccess, setFeedbackSuccess] = useState('')
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false)
   const [leaderboardLoading, setLeaderboardLoading] = useState(true)
-  const [chaptersLoading, setChaptersLoading] = useState(true)
   const [auth, setAuth] = useState(() => getStoredAuth())
   const [refreshTick, setRefreshTick] = useState(0)
   const [isAiTeacherOpen, setIsAiTeacherOpen] = useState(false)
@@ -248,17 +266,11 @@ const Homepage = () => {
   const studentClassId = auth?.user?.classId?._id || auth?.user?.classId || ''
 
   useEffect(() => {
-    const updateTimeUntilTomorrow = () => setTimeUntilTomorrow(formatTimeUntilTomorrow())
-    const intervalId = window.setInterval(updateTimeUntilTomorrow, 1000)
-
-    return () => window.clearInterval(intervalId)
-  }, [])
-
-  useEffect(() => {
     let cancelled = false
 
     const loadLeaderboard = async () => {
-      setLeaderboardLoading(true)
+      // Keep existing rows visible while a focus/progress refresh is running.
+      if (!leaderboard.length) setLeaderboardLoading(true)
 
       if (leaderboardScope === 'class' && !selectedClassId && classOptions.length) {
         setSelectedClassId(classOptions[0]._id)
@@ -333,26 +345,16 @@ const Homepage = () => {
     let cancelled = false
 
     const loadChapterData = async () => {
-      setChaptersLoading(true)
-
-      try {
-        const chaptersData = await apiRequest('/api/chapters').catch(() => null)
-
-        if (cancelled) return
-
-        setChapters(chaptersData?.chapters || [])
-      } finally {
-        if (!cancelled) {
-          setChaptersLoading(false)
-        }
-      }
+      const chaptersData = await apiRequest('/api/chapters', { revalidate: true }).catch(() => null)
+      if (cancelled) return
+      setChapters(chaptersData?.chapters || [])
     }
 
     const loadBackgroundData = async () => {
       try {
         const [classesData, feedbackData] = await Promise.all([
-          apiRequest('/api/classes').catch(() => null),
-          apiRequest('/api/feedback/featured?limit=3').catch(() => ({ feedback: [] })),
+          apiRequest('/api/classes', { revalidate: true }).catch(() => null),
+          apiRequest('/api/feedback/featured?limit=3', { revalidate: true }).catch(() => ({ feedback: [] })),
         ])
 
         if (cancelled) return
@@ -369,29 +371,14 @@ const Homepage = () => {
       }
     }
 
-    loadChapterData().catch(() => {
-      if (!cancelled) {
-        setChaptersLoading(false)
-      }
-    })
+    loadChapterData().catch(() => {})
 
-    const scheduleBackgroundLoad = () => {
-      loadBackgroundData()
-    }
-
-    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-      const idleId = window.requestIdleCallback(scheduleBackgroundLoad)
-      return () => {
-        cancelled = true
-        window.cancelIdleCallback(idleId)
-      }
-    }
-
-    const timeoutId = window.setTimeout(scheduleBackgroundLoad, 0)
+    // Start independent below-the-fold requests during the initial mount so
+    // scrolling never becomes the trigger for fetching their content.
+    loadBackgroundData()
 
     return () => {
       cancelled = true
-      window.clearTimeout(timeoutId)
     }
   }, [auth?.token])
 
@@ -418,54 +405,6 @@ const Homepage = () => {
       cancelled = true
     }
   }, [auth?.token, refreshTick])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!auth?.token) {
-      setWeeklyRewards(null)
-      return undefined
-    }
-    apiRequest('/api/daily-streak/rewards', { cache: 'no-store' })
-      .then((data) => {
-        if (!cancelled) setWeeklyRewards(data.rewards || null)
-      })
-      .catch(() => {
-        if (!cancelled) setWeeklyRewards(null)
-      })
-    return () => { cancelled = true }
-  }, [auth?.token, refreshTick])
-
-  const claimWeeklyReward = async (localDate) => {
-    if (claimingRewardDate) return
-    setClaimingRewardDate(localDate)
-    try {
-      const data = await apiRequest('/api/daily-streak/rewards/claim', { method: 'POST', body: JSON.stringify({ localDate }) })
-      setWeeklyRewards(data.rewards || null)
-    } catch (error) {
-      setFeedbackError(error.message || 'Could not claim this reward.')
-    } finally {
-      setClaimingRewardDate('')
-    }
-  }
-
-  const rewardCalendarCells = useMemo(() => {
-    if (!weeklyRewards?.days?.length) return []
-    const firstDay = new Date(`${weeklyRewards.days[0].localDate}T00:00:00`).getDay()
-    return [
-      ...Array.from({ length: firstDay }, () => null),
-      ...weeklyRewards.days,
-    ]
-  }, [weeklyRewards])
-
-  const hasUnclaimedReward = Boolean(
-    weeklyRewards?.days?.some((day) => day.isToday && !day.claimed),
-  )
-
-  useEffect(() => {
-    if (!hasUnclaimedReward) return
-
-    setShowWeeklyRewards(true)
-  }, [hasUnclaimedReward])
 
   useEffect(() => {
     if (!auth?.user?.classId) {
@@ -641,13 +580,13 @@ const Homepage = () => {
       {/* Animated Background Effects */}
       <div className="absolute inset-0 z-0 hidden overflow-hidden pointer-events-none sm:block">
         <motion.div 
-          animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.4, 0.3] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+           animate={reduceMotion ? { scale: 1, opacity: 0.3 } : { scale: [1, 1.1, 1], opacity: [0.3, 0.4, 0.3] }}
+           transition={reduceMotion ? { duration: 0 } : { duration: 8, repeat: Infinity, ease: "easeInOut" }}
           className="absolute -top-[20%] -left-[10%] h-[500px] w-[500px] rounded-full bg-cyan-400/20 blur-[120px]" 
         />
         <motion.div 
-          animate={{ scale: [1, 1.2, 1], opacity: [0.2, 0.3, 0.2] }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+           animate={reduceMotion ? { scale: 1, opacity: 0.2 } : { scale: [1, 1.2, 1], opacity: [0.2, 0.3, 0.2] }}
+           transition={reduceMotion ? { duration: 0 } : { duration: 10, repeat: Infinity, ease: "easeInOut", delay: 1 }}
           className="absolute top-[20%] -right-[10%] h-[600px] w-[600px] rounded-full bg-emerald-400/20 blur-[120px]" 
         />
       </div>
@@ -657,8 +596,8 @@ const Homepage = () => {
           
           {/* Main Hero Card */}
           <motion.div 
-            initial="hidden"
-            animate="visible"
+             initial={reduceMotion ? false : 'hidden'}
+             animate={reduceMotion ? undefined : 'visible'}
             variants={staggerContainer}
             className="flex min-w-0 flex-col rounded-2xl border border-white/70 bg-white/75 p-3 shadow-[0_8px_32px_-14px_rgba(0,0,0,0.12)] backdrop-blur-lg min-[380px]:p-4 sm:rounded-[2rem] sm:backdrop-blur-2xl sm:p-7 lg:p-9"
           >
@@ -676,7 +615,7 @@ const Homepage = () => {
                     >
                       <Flame className="h-4 w-4" fill="currentColor" />
                       <span>{dailyStreakData?.streak?.currentStreak || 0}</span>
-                      <span className="ml-1 whitespace-nowrap text-[10px] font-bold text-slate-500 sm:text-xs">· {timeUntilTomorrow}</span>
+                      <Countdown />
                     </div>
                   </div>
                 </div>
@@ -709,8 +648,8 @@ const Homepage = () => {
               >
                 <motion.span
                   aria-hidden="true"
-                  animate={{ y: [0, -3, 0], rotate: [-6, 8, -6], scale: [1, 1.08, 1] }}
-                  transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                  animate={reduceMotion ? undefined : { y: [0, -3, 0], rotate: [-6, 8, -6], scale: [1, 1.08, 1] }}
+                  transition={reduceMotion ? { duration: 0 } : { duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
                   className="relative z-10"
                 >
                   <Flame className="h-4 w-4 text-yellow-100 drop-shadow-[0_0_10px_rgba(255,255,255,0.35)]" />
@@ -719,8 +658,8 @@ const Homepage = () => {
                 <Swords className="relative z-10 h-4 w-4 text-white/90 transition-transform group-hover:translate-x-1" />
                 <motion.span
                   aria-hidden="true"
-                  animate={{ x: ['-30%', '130%'] }}
-                  transition={{ duration: 2.4, repeat: Infinity, ease: 'linear' }}
+                  animate={reduceMotion ? undefined : { x: ['-30%', '130%'] }}
+                  transition={reduceMotion ? { duration: 0 } : { duration: 2.4, repeat: Infinity, ease: 'linear' }}
                   className="absolute inset-y-0 left-0 w-1/2 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.35),transparent)] opacity-70"
                 />
                 <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.3),_transparent_40%)] opacity-70" />
@@ -766,7 +705,7 @@ const Homepage = () => {
 
             <motion.div variants={staggerContainer} className="mt-4 grid grid-cols-3 gap-2 sm:mt-7 sm:gap-3">
               {stats.map((stat, i) => (
-                <motion.div key={stat.label} variants={fadeUp} whileHover={{ y: -5 }} className="min-w-0 rounded-xl border border-white/70 bg-white/65 p-2.5 shadow-sm backdrop-blur-md transition-colors hover:bg-white/85 min-[380px]:p-3 sm:rounded-2xl sm:p-4">
+                <motion.div key={stat.label} variants={fadeUp} whileHover={reduceMotion ? undefined : { y: -5 }} className="min-w-0 rounded-xl border border-white/70 bg-white/65 p-2.5 shadow-sm backdrop-blur-md transition-colors hover:bg-white/85 min-[380px]:p-3 sm:rounded-2xl sm:p-4">
                   <stat.icon className="h-4 w-4 text-cyan-600 sm:h-5 sm:w-5" />
                   <p className="mt-2 text-[9px] font-bold uppercase tracking-wide text-slate-500 min-[380px]:text-[10px] sm:mt-3 sm:text-xs sm:tracking-widest">{stat.label}</p>
                   <p className="mt-1 text-lg font-black text-slate-900 min-[380px]:text-xl sm:text-2xl">{stat.value}</p>
@@ -898,8 +837,8 @@ const Homepage = () => {
 
         <motion.div
           id="home-feedback"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
+          initial={reduceMotion ? false : { opacity: 0, y: 16 }}
+          whileInView={reduceMotion ? undefined : { opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-60px' }}
           transition={{ duration: 0.4 }}
           className="mt-5 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:mt-7 sm:p-6 lg:p-8"

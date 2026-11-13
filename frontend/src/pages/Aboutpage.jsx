@@ -173,7 +173,7 @@ const Aboutpage = () => {
               whileInView="visible"
               viewport={{ once: true }}
             >
-              <Stat label="Brain cells" value="1000 / chapter" />
+              <Stat label="Brain cells" value="1 / correct question" />
               <Stat label="Practice modes" value="Objective + tests" />
               <Stat label="Support" value="Reports + AI teacher" />
             </motion.div>

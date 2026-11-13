@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import LoadingState from '../components/LoadingState';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertCircle,
@@ -308,9 +309,7 @@ const Chapter_weightage = () => {
               </div>
             </div>
 
-            <p className="mt-4 text-sm sm:text-base text-gray-500 font-medium">
-              Loading chapter insights...
-            </p>
+            <LoadingState label="Loading chapter insights" compact />
           </div>
         ) : error ? (
           <div className="rounded-2xl bg-red-50 border border-red-100 p-6 sm:p-8 text-center animate-shake">

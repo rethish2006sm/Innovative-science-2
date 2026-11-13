@@ -6,6 +6,7 @@ import { getStoredAuth } from '../authStorage'
 import { getFeedbackClientKey } from '../lib/feedbackClient'
 import { sendCurrentDevicePush } from '../lib/webPush'
 import PageBreadcrumbs from '../components/PageBreadcrumbs'
+import LoadingState from '../components/LoadingState'
 
 const emptyForm = { name: '', description: '', studyText: '' }
 
@@ -289,9 +290,7 @@ const Topicspage = () => {
   if (isLoading) {
     return (
       <section className="flex min-h-[calc(100vh-6rem)] items-center justify-center bg-[#fbfbfa] px-4">
-        <div className="rounded-3xl border border-stone-200 bg-white p-8 text-stone-500 shadow-xl">
-          Loading topics...
-        </div>
+        <LoadingState label="Loading topics" compact />
       </section>
     )
   }

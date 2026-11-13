@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, Edit3, Plus, Trash2, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
+import LoadingState from '../components/LoadingState'
 
 const emptyForm = { number: '', name: '', marks: '', marksWithoutOption: '' }
 
@@ -259,7 +260,7 @@ const Chapters = () => {
 
         <div className="mt-4 rounded-[1.5rem] border border-slate-200/80 bg-white/70 p-2 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:mt-6 sm:p-4">
           {isLoading ? (
-            <div className="rounded-2xl border border-stone-200 bg-white p-12 text-center text-stone-500">Loading chapters...</div>
+            <LoadingState label="Loading chapters" compact />
           ) : filteredChapters.length > 0 ? (
             <div className="grid gap-3 sm:grid-cols-2">
               {filteredChapters.map((chapter, idx) => (

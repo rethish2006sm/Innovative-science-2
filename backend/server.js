@@ -331,6 +331,7 @@ const userSchema = new mongoose.Schema(
     schoolName: { type: String, trim: true, default: '' },
     finalExamPercentage: { type: Number, min: 0, max: 100, default: null },
     lastLoginAt: { type: Date, default: null },
+    lastOnlineAt: { type: Date, default: null },
     password: {
       type: String,
       default: '',
@@ -900,6 +901,7 @@ const studentStreakSchema = new mongoose.Schema(
     lastCreditedDate: { type: String, default: null },
     streakBeforeBreak: { type: Number, default: 0, min: 0 },
     streakBrokenAt: { type: Date, default: null },
+    manualBreakDate: { type: String, default: null },
     restoreKeys: { type: Number, default: 0, min: 0 },
     rewardClaims: [{
       localDate: { type: String, required: true },
@@ -988,6 +990,12 @@ const messageSchema = new mongoose.Schema(
       required: true,
       trim: true,
       maxlength: 2000,
+    },
+    bodyHtml: {
+      type: String,
+      trim: true,
+      maxlength: 6000,
+      default: '',
     },
     audienceCount: {
       type: Number,
@@ -1200,6 +1208,7 @@ const notificationSchema = new mongoose.Schema(
     type: { type: String, required: true, default: 'CONTENT_UPDATE' },
     title: { type: String, required: true, trim: true, maxlength: 180 },
     message: { type: String, required: true, trim: true, maxlength: 2000 },
+    bodyHtml: { type: String, default: '', maxlength: 12000 },
     link: { type: String, trim: true, default: '' },
     source: { type: String, trim: true, default: 'ai-content-audit' },
     facts: { type: [mongoose.Schema.Types.Mixed], default: [] },
@@ -1338,31 +1347,6 @@ const siteNoticeSchema = new mongoose.Schema(
   { timestamps: true },
 )
 const Science2SiteNotice = mongoose.model('SiteNotice', siteNoticeSchema)
-const giftSchema = new mongoose.Schema(
-  {
-    classId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Class',
-      required: true,
-      unique: true,
-    },
-    image: {
-      data: Buffer,
-      contentType: String,
-      originalName: String,
-      updatedAt: Date,
-    },
-    updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      default: null,
-    },
-  },
-  { timestamps: true },
-)
-
-const Science2Gift = mongoose.model('Gift', giftSchema)
-
 const auditSnapshot = (value) => {
   if (!value) return null
   const plain = typeof value.toObject === 'function' ? value.toObject() : { ...value }
@@ -1892,7 +1876,6 @@ const science2Models = {
   Message: Science2Message,
   Pyq: Science2Pyq,
   SiteNotice: Science2SiteNotice,
-  Gift: Science2Gift,
   ContactMessage: Science2ContactMessage,
   Feedback: Science2Feedback,
 }
@@ -1958,7 +1941,6 @@ const Report = scienceModel('Report')
 const Message = scienceModel('Message')
 const Pyq = scienceModel('Pyq')
 const SiteNotice = scienceModel('SiteNotice')
-const Gift = scienceModel('Gift')
 const ContactMessage = scienceModel('ContactMessage')
 const Feedback = scienceModel('Feedback')
 
@@ -2074,7 +2056,11 @@ const publicQuestionImageUrl = (question) => (
       }&science=${getActiveScience()}`
     : ''
 )
-
+/*
+  const exposedCorrectAnswer = objectiveType.type === 'match-the-following' && Array.isArray(question.correctOptions)
+    ? question.correctOptions.map((optionIndex, pairIndex) => `${question.pairs?.[pairIndex]?.left || `Item ${pairIndex + 1}`}: ${question.options?.[optionIndex] || 'Unknown'}`).join(' Â· ')
+    : question.options?.[question.correctOption] || question.solution || 'See the solution.'
+*/
 const publicAnswerImageUrl = (question) => (
   question.answerImage?.data || question.answerImage?.updatedAt
     ? `/api/objective-questions/${question._id}/answer-image?v=${
@@ -2147,28 +2133,6 @@ const publicSiteNotice = (notice) => {
   }
 }
 
-const publicGift = (gift) => {
-  if (!gift?.image?.data) return null
-  const imageData = Buffer.isBuffer(gift.image.data)
-    ? gift.image.data
-    : gift.image.data.buffer
-      ? Buffer.from(gift.image.data.buffer)
-      : typeof gift.image.data.value === 'function'
-        ? Buffer.from(gift.image.data.value(true))
-        : Buffer.from(gift.image.data)
-  const contentType = String(gift.image.contentType || 'image/webp')
-
-  return {
-    id: String(gift._id),
-    classId: String(gift.classId?._id || gift.classId || ''),
-    className: String(gift.classId?.name || ''),
-    originalName: String(gift.image.originalName || 'gift-image'),
-    contentType,
-    imageData: `data:${contentType};base64,${imageData.toString('base64')}`,
-    updatedAt: gift.updatedAt,
-  }
-}
-
 const publicDailyStreakImage = (image, fallbackName) => {
   if (!image?.data) return null
   const imageData = normalizeStoredImageBuffer(image.data)
@@ -2201,17 +2165,65 @@ const publicMessage = (message) => {
     targetUserIds: Array.isArray(message.targetUserIds)
       ? message.targetUserIds.map((item) => String(item?._id || item || '')).filter(Boolean)
       : [],
+    targetUserNames: Array.isArray(message.targetUserIds)
+      ? message.targetUserIds.map((item) => String(item?.name || '')).filter(Boolean)
+      : [],
     targetClassId: String(message.targetClassId?._id || message.targetClassId || ''),
     targetClassName: String(message.targetClassId?.name || ''),
     subject: String(message.subject || ''),
     body: String(message.body || ''),
+    bodyHtml: String(
+      message.bodyHtml || (/<\s*(b|strong|i|em|u|a|br|p|ul|ol|li)\b/i.test(String(message.body || '')) ? message.body : ''),
+    ),
     audienceCount: Number(message.audienceCount || 0),
     sentUserEmails: Array.isArray(message.sentUserEmails) ? message.sentUserEmails.map((item) => String(item || '')) : [],
     acknowledgedCount: Array.isArray(message.acknowledgements) ? message.acknowledgements.length : 0,
+    pendingCount: Math.max(0, Number(message.audienceCount || 0) - (Array.isArray(message.acknowledgements) ? message.acknowledgements.length : 0)),
+    acknowledgementRate: Number(message.audienceCount || 0) > 0
+      ? Math.round((Math.min(Array.isArray(message.acknowledgements) ? message.acknowledgements.length : 0, Number(message.audienceCount || 0)) / Number(message.audienceCount || 0)) * 100)
+      : 0,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
   }
 }
+
+const sanitizeMessageHtml = (value = '') => {
+  let html = String(value || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<\s*(script|style|iframe|object|embed)[^>]*>[\s\S]*?<\/\s*\1\s*>/gi, '')
+
+  // Browsers may represent execCommand('bold') as a styled span.
+  // Normalize that form to a semantic tag before removing unsafe markup.
+  html = html.replace(
+    /<\s*(?:span|font)\b[^>]*style\s*=\s*["'][^"']*font-weight\s*:\s*(?:bold|bolder|[6-9]00)[^"']*["'][^>]*>([\s\S]*?)<\/\s*(?:span|font)\s*>/gi,
+    '<strong>$1</strong>',
+  )
+
+  html = html.replace(/<\s*a\b([^>]*)>/gi, (match, attributes) => {
+    const hrefMatch = String(attributes).match(/href\s*=\s*["'](https?:\/\/[^"']+)["']/i)
+    return hrefMatch
+      ? `<a href="${hrefMatch[1]}" target="_blank" rel="noopener noreferrer">`
+      : '<a>'
+  })
+
+  html = html.replace(/<\s*\/?\s*(strong|b|em|i|u|br|p|div|ul|ol|li)\b[^>]*>/gi, (tag, name) => {
+    const closing = /^<\s*\//.test(tag)
+    return `<${closing ? '/' : ''}${String(name).toLowerCase()}>`
+  })
+
+  return html.replace(/<[^>]*>/g, '').trim() ? html.trim().slice(0, 6000) : ''
+}
+
+const richTextToPlainText = (value = '') => String(value || '')
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<\/p\s*>/gi, '\n')
+  .replace(/<[^>]*>/g, '')
+  .replace(/&nbsp;/gi, ' ')
+  .replace(/&amp;/gi, '&')
+  .replace(/&lt;/gi, '<')
+  .replace(/&gt;/gi, '>')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim()
 
 const bufferToDataUrl = (file = {}) => {
   if (!file?.data || !file?.contentType) {
@@ -2403,7 +2415,11 @@ const getPracticeQuestionBrainCells = (totalQuestions = 0) => {
     return 0
   }
 
-  return Math.max(1, Math.round(1000 / count))
+  // Normal question rewards use the same unit as leaderboard totals:
+  // one brain cell for each newly-correct question.  Keep this helper so
+  // callers cannot accidentally reintroduce a per-question fraction of the
+  // separate 1000-cell chapter-completion reward.
+  return 1
 }
 
 const allocateBrainCellsByWeight = (entries = [], totalBrainCells = 0, getWeight = (entry) => entry?.totalQuestions || 0) => {
@@ -2626,9 +2642,11 @@ const summarizeAttemptHistory = (attempts = [], { includeChapterProgress = true 
 
         current.score += safeNumber(chapterEntry.score)
         current.totalQuestions += safeNumber(chapterEntry.totalQuestions)
+        current.brainCells += safeNumber(chapterEntry.brainCells)
         current.percent = current.totalQuestions
           ? Math.round((current.score / current.totalQuestions) * 100)
           : 0
+        totalBrainCells += safeNumber(chapterEntry.brainCells)
         chapterAttemptMap.set(chapterId, current)
       })
     }
@@ -3729,6 +3747,9 @@ const dailyQuestionView = (question, challenge) => {
   const chapter = topic.chapter || {}
   const answer = (challenge.answers || []).find((item) => String(item.questionId) === String(question._id))
   const answerOnlyQuestion = ['complete-the-tables', 'diagram-based-question', 'identify-symbol'].includes(objectiveType.type)
+  const exposedCorrectAnswer = objectiveType.type === 'match-the-following' && Array.isArray(question.correctOptions)
+    ? question.correctOptions.map((optionIndex, pairIndex) => `${question.pairs?.[pairIndex]?.left || `Item ${pairIndex + 1}`}: ${question.options?.[optionIndex] || 'Unknown'}`).join(' Â· ')
+    : question.options?.[question.correctOption] || question.solution || 'See the solution.'
   const correctAnswer = answer && (answerOnlyQuestion || !answer.isCorrect)
     ? objectiveType.type === 'match-the-following' && Array.isArray(question.correctOptions)
       ? question.correctOptions.map((optionIndex, pairIndex) => `${question.pairs?.[pairIndex]?.left || `Item ${pairIndex + 1}`}: ${question.options?.[optionIndex] || 'Unknown'}`).join(' · ')
@@ -3752,7 +3773,7 @@ const dailyQuestionView = (question, challenge) => {
     submitted: Boolean(answer),
     selectedAnswer: answer?.selectedAnswer,
     isCorrect: answer?.isCorrect,
-    correctAnswer,
+          correctAnswer,
     // Special visual/structured questions are practice only and never add
     // marks to the daily challenge score.
     isScored: dailyScoredObjectiveTypes.has(objectiveType.type || ''),
@@ -3765,14 +3786,11 @@ const dailyQuestionView = (question, challenge) => {
 const dailySpecialObjectiveTypes = new Set([
   'complete-the-tables',
   'diagram-based-question',
-  'identify-symbol',
 ])
 const dailyScoredObjectiveTypes = new Set([
   'mcqs',
-  'odd-man-out',
   'true-or-false',
   'correlation',
-  'numericals',
 ])
 const dailyAllowedObjectiveTypes = new Set([
   ...dailyScoredObjectiveTypes,
@@ -3892,16 +3910,39 @@ const selectDailyQuestions = async (userId, eligibleChapterIds, localDate) => {
     })
   })
 
-  const candidates = eligibleChapterIds.length
-    ? await ObjectiveQuestion.find({}).populate({
-      path: 'objectiveType',
-      populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } },
-    }).lean()
-    : []
-  const allEligibleQuestions = candidates
-    .filter((question) => eligibleChapterIds.includes(String(question.objectiveType?.topic?.chapter?._id)))
-    .filter((question) => dailyAllowedObjectiveTypes.has(question.objectiveType?.type))
-    .filter((question) => !dailyExcludedObjectiveTypes.has(question.objectiveType?.type))
+  let allEligibleQuestions = []
+  if (eligibleChapterIds.length) {
+    const eligibleTopics = await Topic.find({ chapter: { $in: eligibleChapterIds } })
+      .select('_id chapter')
+      .lean()
+    const eligibleTopicIds = eligibleTopics.map((topic) => topic._id)
+    const allowedTypes = [...dailyAllowedObjectiveTypes].filter((type) => !dailyExcludedObjectiveTypes.has(type))
+    const eligibleObjectiveTypes = await ObjectiveType.find({
+      topic: { $in: eligibleTopicIds },
+      type: { $in: allowedTypes },
+    }).select('_id topic type').lean()
+    const objectiveTypeIds = eligibleObjectiveTypes.map((objectiveType) => objectiveType._id)
+    const topicById = new Map(eligibleTopics.map((topic) => [String(topic._id), topic]))
+    const objectiveTypeById = new Map(eligibleObjectiveTypes.map((objectiveType) => [String(objectiveType._id), objectiveType]))
+    const candidates = objectiveTypeIds.length
+      ? await ObjectiveQuestion.find({ objectiveType: { $in: objectiveTypeIds } }).lean()
+      : []
+
+    allEligibleQuestions = candidates.map((question) => {
+      const objectiveType = objectiveTypeById.get(String(question.objectiveType))
+      const topic = topicById.get(String(objectiveType?.topic))
+      return {
+        ...question,
+        objectiveType: {
+          ...objectiveType,
+          topic: {
+            ...topic,
+            chapter: topic?.chapter,
+          },
+        },
+      }
+    }).filter((question) => question.objectiveType?.topic?.chapter)
+  }
   const filtered = allEligibleQuestions
     // Do not repeat a question within the same calendar month. Questions
     // become eligible again automatically when the next month starts. If the
@@ -3978,8 +4019,11 @@ const generateDailyChallenge = async ({ userId, localDate, timezone }) => {
 }
 
 const getDailyChallenge = async (userId, localDate, timezone) => {
-  await syncExpiredStreakBreak(userId, localDate, timezone)
-  let challenge = await DailyChallenge.findOne({ user: userId, subject: getActiveScience(), localDate })
+  const [, existingChallenge] = await Promise.all([
+    syncExpiredStreakBreak(userId, localDate, timezone),
+    DailyChallenge.findOne({ user: userId, subject: getActiveScience(), localDate }),
+  ])
+  let challenge = existingChallenge
   if (!challenge) {
     try {
       ({ challenge } = await generateDailyChallenge({ userId, localDate, timezone }))
@@ -3989,7 +4033,7 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
     }
   }
 
-  const existingQuestionDocs = challenge?.questionIds?.length
+  const existingQuestionDocs = challenge?.questionIds?.length && challenge.status !== 'completed'
     ? await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds } })
       .populate({ path: 'objectiveType', select: 'type' })
       .select('objectiveType')
@@ -4098,6 +4142,41 @@ app.get('/api/daily-challenge/history', authRequired, async (req, res) => {
   }
 })
 
+app.get('/api/daily-challenge/history/:id', authRequired, async (req, res) => {
+  try {
+    const challenge = await DailyChallenge.findOne({
+      _id: req.params.id,
+      user: req.user._id,
+      subject: getActiveScience(),
+    }).lean()
+    if (!challenge) return res.status(404).json({ message: 'Daily challenge history not found.' })
+
+    const questions = await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds || [] } })
+      .populate({ path: 'objectiveType', populate: { path: 'topic', populate: { path: 'chapter', select: '_id number name' } } })
+      .lean()
+    const questionMap = new Map(questions.map((question) => [String(question._id), question]))
+    const orderedQuestions = (challenge.questionIds || [])
+      .map((questionId) => questionMap.get(String(questionId)))
+      .filter(Boolean)
+
+    res.set('Cache-Control', 'no-store')
+    res.json({
+      id: challenge._id,
+      localDate: challenge.localDate,
+      status: challenge.status,
+      completedAt: challenge.completedAt,
+      attemptedCount: Number(challenge.attemptedCount || 0),
+      correctCount: Number(challenge.correctCount || 0),
+      score: Number(challenge.score || 0),
+      questionCount: (challenge.questionIds || []).length,
+      questions: orderedQuestions.map((question) => dailyQuestionView(question, challenge)),
+    })
+  } catch (error) {
+    console.error('Daily challenge history detail failed:', error.message)
+    res.status(500).json({ message: 'Could not load this daily challenge.' })
+  }
+})
+
 app.get('/api/daily-streak/rewards', authRequired, async (req, res) => {
   try {
     const timezone = dailyTimezone(req)
@@ -4152,6 +4231,7 @@ app.post('/api/daily-streak/restore', authRequired, async (req, res) => {
     streak.lastCreditedDate = today
     streak.streakBeforeBreak = 0
     streak.streakBrokenAt = null
+    streak.manualBreakDate = null
     await streak.save()
     res.json({ message: 'Your streak was restored.', streak: streak.toObject(), rewards: await dailyRewardState(req.user._id, today, timezone) })
   } catch (error) {
@@ -4174,17 +4254,14 @@ app.post('/api/admin/daily-streak/settings/image', authRequired, adminRequired, 
       return res.status(400).json({ message: 'Please select an image.' })
     }
 
-    const image = await sharp(req.file.buffer)
-      .rotate()
-      .resize({ width: 320, height: 320, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 86 })
-      .toBuffer()
+    // Preserve the uploaded image at its original resolution and quality.
+    const image = req.file.buffer
     const setting = await DailyStreakSetting.findOneAndUpdate(
       {},
       {
         milestoneImage: {
           data: image,
-          contentType: 'image/webp',
+          contentType: String(req.file.mimetype || 'image/jpeg'),
           originalName: req.file.originalname || 'streak-milestone.webp',
           updatedAt: new Date(),
         },
@@ -4260,11 +4337,15 @@ app.post('/api/daily-challenge/:id/complete', authRequired, async (req, res) => 
     const qualifiesForStreak = streakEligibleCorrectCount >= 10
     if (!streak) streak = await StudentStreak.create({ user: req.user._id, subject: getActiveScience() })
     if (qualifiesForStreak && streak.lastCreditedDate !== challenge.localDate) {
-      streak.currentStreak = streak.lastCreditedDate === previousLocalDate(challenge.localDate) ? streak.currentStreak + 1 : 1
+      const manuallyBrokenToday = streak.manualBreakDate === challenge.localDate
+      streak.currentStreak = manuallyBrokenToday
+        ? Number(streak.streakBeforeBreak || 0) + 1
+        : streak.lastCreditedDate === previousLocalDate(challenge.localDate) ? streak.currentStreak + 1 : 1
       streak.longestStreak = Math.max(streak.longestStreak, streak.currentStreak)
       streak.lastCreditedDate = challenge.localDate
       streak.streakBeforeBreak = 0
       streak.streakBrokenAt = null
+      streak.manualBreakDate = null
       await streak.save()
     } else if (!qualifiesForStreak && streak.currentStreak !== 0) {
       streak.streakBeforeBreak = streak.currentStreak
@@ -4287,6 +4368,7 @@ app.post('/api/admin/streaks/reset', authRequired, adminRequired, async (req, re
         lastCreditedDate: null,
         streakBeforeBreak: 0,
         streakBrokenAt: null,
+        manualBreakDate: null,
       },
     })
 
@@ -4319,6 +4401,7 @@ app.post('/api/admin/streaks/:userId/restore', authRequired, adminRequired, asyn
     streak.lastCreditedDate = today
     streak.streakBeforeBreak = 0
     streak.streakBrokenAt = null
+    streak.manualBreakDate = null
     await streak.save()
     res.json({ message: 'Today\'s streak was restored for the student.', streak: streak.toObject() })
   } catch (error) {
@@ -4334,18 +4417,21 @@ app.get('/api/admin/streaks/:userId/questions', authRequired, adminRequired, asy
 
     const timezone = dailyTimezone(req)
     const today = localDateForTimezone(timezone)
-    const streak = await StudentStreak.findOne({ user: user._id, subject: getActiveScience() }).select('lastCreditedDate').lean()
-    if (String(streak?.lastCreditedDate || '') !== today) {
-      return res.status(400).json({ message: 'Today\'s streak has not been completed.' })
-    }
-
-    const challenge = await DailyChallenge.findOne({
+    let challenge = await DailyChallenge.findOne({
       user: user._id,
       subject: getActiveScience(),
       localDate: today,
-      status: 'completed',
     }).lean()
-    if (!challenge) return res.status(404).json({ message: 'No completed streak challenge found for today.' })
+    // Admin analysis may be opened with a different active-science header
+    // than the one used when the student's daily challenge was created. The
+    // user's date-owned daily challenge is still the source of truth here.
+    if (!challenge) {
+      challenge = await DailyChallenge.findOne({ user: user._id, localDate: today })
+        .sort({ createdAt: -1 })
+        .lean()
+    }
+    if (!challenge) return res.status(404).json({ message: 'No daily streak practice found for today.' })
+    if (!challenge.answers?.length) return res.status(404).json({ message: 'The student has not answered any daily streak questions today.' })
 
     const questions = await ObjectiveQuestion.find({ _id: { $in: challenge.questionIds } })
       .populate({ path: 'objectiveType', select: 'type' })
@@ -4355,6 +4441,8 @@ app.get('/api/admin/streaks/:userId/questions', authRequired, adminRequired, asy
 
     res.json({
       date: today,
+      status: challenge.status,
+      attemptedCount: Number(challenge.attemptedCount || challenge.answers.length || 0),
       questions: challenge.questionIds.map((questionId, index) => {
         const question = questionMap.get(String(questionId))
         const answer = answerMap.get(String(questionId))
@@ -4402,12 +4490,81 @@ app.post('/api/admin/streaks/:userId/set', authRequired, adminRequired, async (r
     streak.lastCreditedDate = requestedStreak > 0 ? today : null
     streak.streakBeforeBreak = 0
     streak.streakBrokenAt = null
+    streak.manualBreakDate = null
     await streak.save()
 
     res.json({ message: 'Student streak updated.', streak: streak.toObject() })
   } catch (error) {
     console.error('Admin set streak failed:', error.message)
     res.status(500).json({ message: 'Could not update the student streak.' })
+  }
+})
+
+app.post('/api/admin/streaks/:userId/keys', authRequired, adminRequired, async (req, res) => {
+  try {
+    const user = await User.findOne({ _id: req.params.userId, isAdmin: { $ne: true } }).select('_id')
+    if (!user) return res.status(404).json({ message: 'Student not found.' })
+    const requestedKeys = Number(req.body?.restoreKeys)
+    if (!Number.isInteger(requestedKeys) || requestedKeys < 0) {
+      return res.status(400).json({ message: 'Restore keys must be a whole number greater than or equal to zero.' })
+    }
+    let streak = await StudentStreak.findOne({ user: user._id, subject: getActiveScience() })
+    if (!streak) streak = new StudentStreak({ user: user._id, subject: getActiveScience() })
+    streak.restoreKeys = requestedKeys
+    await streak.save()
+    res.json({ message: 'Restore keys updated.', streak: streak.toObject() })
+  } catch (error) {
+    console.error('Admin set restore keys failed:', error.message)
+    res.status(500).json({ message: 'Could not update restore keys.' })
+  }
+})
+
+app.post('/api/admin/streaks/:userId/break-today', authRequired, adminRequired, async (req, res) => {
+  try {
+    const user = await User.findOne({ _id: req.params.userId, isAdmin: { $ne: true } }).select('_id')
+    if (!user) return res.status(404).json({ message: 'Student not found.' })
+    const timezone = dailyTimezone(req)
+    const today = localDateForTimezone(timezone)
+    const challenge = await DailyChallenge.findOne({ user: user._id, subject: getActiveScience(), localDate: today })
+    await DailyChallenge.deleteOne({ user: user._id, subject: getActiveScience(), localDate: today })
+    const streak = await StudentStreak.findOne({ user: user._id, subject: getActiveScience() })
+    if (streak && streak.lastCreditedDate === today) {
+      streak.currentStreak = Math.max(0, Number(streak.currentStreak || 0) - 1)
+      streak.lastCreditedDate = previousLocalDate(today)
+      streak.streakBeforeBreak = 0
+      streak.streakBrokenAt = null
+      streak.manualBreakDate = null
+      await streak.save()
+    }
+    res.json({
+      message: challenge ? 'Today\'s streak practice was deleted. The student can practise again.' : 'Today\'s daily practice was reset.',
+      deleted: Boolean(challenge),
+      streak: streak?.toObject() || null,
+    })
+  } catch (error) {
+    console.error('Admin break today streak failed:', error.message)
+    res.status(500).json({ message: 'Could not reset today\'s streak practice.' })
+  }
+})
+
+app.post('/api/admin/streaks/:userId/break', authRequired, adminRequired, async (req, res) => {
+  try {
+    const user = await User.findOne({ _id: req.params.userId, isAdmin: { $ne: true } }).select('_id')
+    if (!user) return res.status(404).json({ message: 'Student not found.' })
+    const today = localDateForTimezone(dailyTimezone(req))
+    let streak = await StudentStreak.findOne({ user: user._id, subject: getActiveScience() })
+    if (!streak) streak = new StudentStreak({ user: user._id, subject: getActiveScience() })
+    const previousStreak = Number(streak.currentStreak || 0)
+    streak.currentStreak = 0
+    streak.streakBeforeBreak = previousStreak
+    streak.lastCreditedDate = previousLocalDate(today)
+    streak.streakBrokenAt = new Date()
+    streak.manualBreakDate = today
+    await streak.save()
+    res.json({ message: 'Student streak broken. A restore key can recover it.', streak: streak.toObject() })
+  } catch (error) {
+    console.error('Admin break streak failed:', error.message)
+    res.status(500).json({ message: 'Could not break the student streak.' })
   }
 })
 
@@ -4747,6 +4904,16 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
   res.json({ user: publicUser(req.user) })
 })
 
+app.post('/api/auth/presence', authRequired, async (req, res) => {
+  try {
+    const lastOnlineAt = new Date()
+    await User.updateOne({ _id: req.user._id }, { $set: { lastOnlineAt } })
+    res.json({ lastOnlineAt })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not update online status.' })
+  }
+})
+
 const permanentlyDeleteAccount = async (user) => {
   const userId = user._id
   const userIdString = String(userId)
@@ -4778,7 +4945,6 @@ const permanentlyDeleteAccount = async (user) => {
     ),
     AccountDeletionRequest.deleteMany({ user: userId }),
     SiteNotice.updateMany({ updatedBy: userId }, { $set: { updatedBy: null } }),
-    Gift.updateMany({ updatedBy: userId }, { $set: { updatedBy: null } }),
     ...(BattleRoomModel
       ? [
           BattleRoomModel.deleteMany({ createdBy: userId }),
@@ -5155,6 +5321,10 @@ app.get('/api/objective-questions/:id/image', async (req, res) => {
 
     res.set('Content-Type', question.questionImage.contentType || 'image/webp')
     res.set('Content-Length', String(imageBuffer.length))
+    if (req.query.download === '1') {
+      const extension = String(question.questionImage.contentType || '').includes('png') ? 'png' : String(question.questionImage.contentType || '').includes('jpeg') || String(question.questionImage.contentType || '').includes('jpg') ? 'jpg' : 'webp'
+      res.set('Content-Disposition', `attachment; filename="daily-practice-question-image.${extension}"`)
+    }
     res.set('Cache-Control', 'no-store')
     res.send(imageBuffer)
   } catch (error) {
@@ -5173,6 +5343,10 @@ app.get('/api/objective-questions/:id/answer-image', async (req, res) => {
 
     res.set('Content-Type', question.answerImage.contentType || 'image/webp')
     res.set('Content-Length', String(imageBuffer.length))
+    if (req.query.download === '1') {
+      const extension = String(question.answerImage.contentType || '').includes('png') ? 'png' : String(question.answerImage.contentType || '').includes('jpeg') || String(question.answerImage.contentType || '').includes('jpg') ? 'jpg' : 'webp'
+      res.set('Content-Disposition', `attachment; filename="daily-practice-answer-image.${extension}"`)
+    }
     res.set('Cache-Control', 'no-store')
     res.send(imageBuffer)
   } catch (error) {
@@ -7031,7 +7205,7 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
     const classId = String(req.query.classId || '').trim()
     const query = await buildAdminStudentQuery({ search, classId })
     const users = await User.find(query)
-      .select('name email classId totalBrainCells totalMarks totalCorrect totalAttempts lastLoginAt createdAt')
+      .select('name email classId totalBrainCells totalMarks totalCorrect totalAttempts lastLoginAt lastOnlineAt createdAt')
       .populate('classId', 'name grade')
       .sort({ name: 1, _id: 1 })
       .limit(5000)
@@ -7043,7 +7217,7 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
     await Promise.all(userIds.map((userId) => syncExpiredStreakBreak(userId, today, timezone)))
     const [streaks, dailyStats, todayChallenges] = await Promise.all([
       StudentStreak.find({ user: { $in: userIds }, subject: getActiveScience() })
-        .select('user currentStreak longestStreak lastCreditedDate streakBeforeBreak streakBrokenAt')
+        .select('user currentStreak longestStreak restoreKeys lastCreditedDate streakBeforeBreak streakBrokenAt')
         .lean(),
       DailyChallenge.aggregate([
         { $match: { user: { $in: userIds }, subject: getActiveScience() } },
@@ -7072,18 +7246,19 @@ app.get('/api/admin/analysis', authRequired, adminRequired, async (req, res) => 
       const streak = streakMap.get(String(user._id)) || {}
       const daily = dailyMap.get(String(user._id)) || {}
       const todayChallenge = todayChallengeMap.get(String(user._id)) || {}
-      const lastLoginAt = user.lastLoginAt || null
+      const lastOnlineAt = user.lastOnlineAt || null
       const lastCreditedDate = String(streak.lastCreditedDate || '')
       const currentStreakIsActive = lastCreditedDate === today || lastCreditedDate === previousLocalDate(today)
 
       return {
         ...row,
         email: String(user.email || '').trim(),
-        lastLoginAt,
+        lastOnlineAt,
         createdAt: user.createdAt || null,
-        online: Boolean(lastLoginAt && new Date(lastLoginAt).getTime() >= onlineCutoff),
+        online: Boolean(lastOnlineAt && new Date(lastOnlineAt).getTime() >= onlineCutoff),
         currentStreak: currentStreakIsActive ? Number(streak.currentStreak || 0) : 0,
         longestStreak: Number(streak.longestStreak || 0),
+        restoreKeys: Number(streak.restoreKeys || 0),
         lastCreditedDate: streak.lastCreditedDate || null,
         streakTodayDone: String(streak.lastCreditedDate || '') === today,
         todayChallengeCompleted: todayChallenge.status === 'completed',
@@ -7794,18 +7969,63 @@ app.get('/api/feedback/featured', async (req, res) => {
 
 app.get('/api/admin/feedback', authRequired, adminRequired, async (req, res) => {
   try {
-    const feedback = await Feedback.find()
+    const page = Math.max(Number(req.query.page) || 1, 1)
+    const limit = Math.min(Math.max(Number(req.query.limit) || 24, 1), 100)
+    const query = {}
+    const rating = Number(req.query.rating)
+    const featured = String(req.query.featured || '').trim().toLowerCase()
+    const sourceType = String(req.query.sourceType || '').trim().toLowerCase()
+    const status = String(req.query.status || '').trim().toLowerCase()
+    const student = String(req.query.student || '').trim()
+    const classId = String(req.query.classId || '').trim()
+    const objective = String(req.query.objective || '').trim()
+
+    if ([1, 2, 3, 4, 5].includes(rating)) query.rating = rating
+    if (featured === 'true' || featured === 'false') query.featured = featured === 'true'
+    if (['general', 'objective', 'test', 'topic'].includes(sourceType)) query.sourceType = sourceType
+    if (['new', 'reviewed'].includes(status)) query.status = status
+    if (mongoose.Types.ObjectId.isValid(classId)) query.classId = classId
+
+    if (student) {
+      const studentPattern = { $regex: escapeRegex(student), $options: 'i' }
+      query.$or = [{ name: studentPattern }, { email: studentPattern }, { className: studentPattern }]
+    }
+
+    if (objective) {
+      const objectivePattern = { $regex: escapeRegex(objective), $options: 'i' }
+      query.$and = [
+        ...(query.$and || []),
+        { $or: [{ sourceLabel: objectivePattern }, { sourceKey: objectivePattern }] },
+      ]
+    }
+
+    const sortKey = String(req.query.sort || 'newest') === 'oldest' ? { createdAt: 1 } : String(req.query.sort || 'newest') === 'rating' ? { rating: -1, createdAt: -1 } : { createdAt: -1 }
+    const featuredQuery = { ...query }
+    delete featuredQuery.featured
+    const [total, featuredTotal, feedback] = await Promise.all([
+      Feedback.countDocuments(query),
+      Feedback.countDocuments({ ...featuredQuery, featured: true }),
+      Feedback.find(query)
       .select('user classId clientKey name className rating message featured status sourceType sourceKey sourceLabel createdAt')
-      .sort({ createdAt: -1 })
-      .limit(Math.min(Math.max(Number(req.query.limit) || 100, 1), 500))
+      .sort(sortKey)
+      .skip((page - 1) * limit)
+      .limit(limit)
       .populate([
         { path: 'user', select: 'name email classId' },
         { path: 'classId', select: 'name grade' },
       ])
-      .lean()
+      .lean(),
+    ])
 
     res.json({
       feedback: feedback.map(publicFeedback),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+      summary: { featured: featuredTotal },
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not load feedback.' })
@@ -7920,7 +8140,7 @@ app.get('/api/messages/me', authRequired, async (req, res) => {
       ],
     })
       .sort({ createdAt: -1 })
-      .populate('createdBy targetClassId')
+      .populate('createdBy targetClassId targetUserIds', 'name email')
       .lean()
 
     res.json({
@@ -8060,6 +8280,28 @@ app.patch('/api/notifications/:id/read', authRequired, async (req, res) => {
     res.json({ notification })
   } catch (error) {
     res.status(500).json({ message: 'Could not mark notification as read.' })
+  }
+})
+
+app.patch('/api/notifications/read-all', authRequired, async (req, res) => {
+  try {
+    const result = await Notification.updateMany(
+      { recipient: req.user._id, readAt: null },
+      { $set: { readAt: new Date() } },
+    )
+    res.json({ markedCount: result.modifiedCount || 0 })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not mark notifications as read.' })
+  }
+})
+
+app.delete('/api/notifications/:id', authRequired, async (req, res) => {
+  try {
+    const notification = await Notification.findOneAndDelete({ _id: req.params.id, recipient: req.user._id })
+    if (!notification) return res.status(404).json({ message: 'Notification not found.' })
+    res.json({ message: 'Notification deleted successfully.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not delete notification.' })
   }
 })
 
@@ -8244,7 +8486,7 @@ app.get('/api/admin/messages', authRequired, adminRequired, async (req, res) => 
     const messages = await Message.find()
       .sort({ createdAt: -1 })
       .limit(limit)
-      .populate('createdBy targetClassId acknowledgements.user', 'name email')
+        .populate('createdBy targetClassId targetUserIds acknowledgements.user', 'name email')
       .lean()
 
     res.json({
@@ -8280,66 +8522,6 @@ app.get('/api/announcement', async (req, res) => {
   }
 })
 
-app.get('/api/gift', authRequired, async (req, res) => {
-  try {
-    if (req.user.isAdmin || !req.user.classId) return res.json({ gift: null })
-    const gift = await Gift.findOne({ classId: req.user.classId }).populate('classId', 'name').lean()
-    res.set('Cache-Control', 'no-store')
-    res.json({ gift: publicGift(gift) })
-  } catch (error) {
-    res.status(500).json({ message: 'Could not load gift.' })
-  }
-})
-
-app.get('/api/admin/gifts', authRequired, adminRequired, async (req, res) => {
-  try {
-    const gifts = await Gift.find().populate('classId', 'name grade').select('classId image.originalName image.contentType updatedAt').sort({ updatedAt: -1 }).lean()
-    res.json({ gifts: gifts.map((gift) => ({
-      id: String(gift._id),
-      classId: String(gift.classId?._id || ''),
-      className: String(gift.classId?.name || ''),
-      originalName: String(gift.image?.originalName || 'gift-image'),
-      updatedAt: gift.updatedAt,
-    })) })
-  } catch (error) {
-    res.status(500).json({ message: 'Could not load gifts.' })
-  }
-})
-
-app.post('/api/admin/gifts', authRequired, adminRequired, upload.single('image'), async (req, res) => {
-  try {
-    const classId = String(req.body.classId || '').trim()
-    const classDoc = await Class.findById(classId).select('name')
-    if (!classDoc) return res.status(404).json({ message: 'Class not found.' })
-    if (!req.file?.buffer || !String(req.file.mimetype || '').startsWith('image/')) {
-      return res.status(400).json({ message: 'Please select an image.' })
-    }
-
-    const image = await sharp(req.file.buffer).rotate().webp({ quality: 86 }).toBuffer()
-    const gift = await Gift.findOneAndUpdate(
-      { classId: classDoc._id },
-      {
-        classId: classDoc._id,
-        image: { data: image, contentType: 'image/webp', originalName: req.file.originalname || 'gift-image.webp', updatedAt: new Date() },
-        updatedBy: req.user._id,
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    )
-    res.status(201).json({ gift: publicGift(await gift.populate('classId', 'name')), message: 'Gift saved successfully.' })
-  } catch (error) {
-    res.status(500).json({ message: 'Could not save gift.' })
-  }
-})
-
-app.delete('/api/admin/gifts/:classId', authRequired, adminRequired, async (req, res) => {
-  try {
-    await Gift.deleteOne({ classId: req.params.classId })
-    res.json({ message: 'Gift removed successfully.' })
-  } catch (error) {
-    res.status(500).json({ message: 'Could not remove gift.' })
-  }
-})
-
 app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) => {
   try {
     const {
@@ -8348,10 +8530,12 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
       targetClassId = '',
       subject = '',
       body = '',
+      bodyHtml = '',
     } = req.body
     const normalizedTargetType = String(targetType || 'all')
     const normalizedSubject = String(subject || '').trim()
-    const normalizedBody = String(body || '').trim()
+    const normalizedBodyHtml = sanitizeMessageHtml(bodyHtml || body)
+    const normalizedBody = richTextToPlainText(normalizedBodyHtml)
 
     if (!normalizedBody) {
       return res.status(400).json({ message: 'Message text is required.' })
@@ -8400,9 +8584,20 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
       targetClassId: classDoc?._id || null,
       subject: normalizedSubject,
       body: normalizedBody,
+      bodyHtml: normalizedBodyHtml,
       audienceCount: recipients.length,
       sentUserEmails: recipients.map((item) => item.email),
     })
+
+    await Notification.insertMany(recipients.map((recipient) => ({
+      recipient: recipient._id,
+      type: 'ADMIN_POPUP_MESSAGE',
+      title: normalizedSubject || 'New message from Innovative Science 2',
+      message: normalizedBody,
+      bodyHtml: normalizedBodyHtml,
+      link: '/#/notifications',
+      source: `admin-popup-message-${messageDoc._id}`,
+    })))
 
     const push = await sendWebPushToUsers(recipients.map((item) => item._id), {
       title: normalizedSubject || 'New message from Innovative Science 2',

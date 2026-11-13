@@ -62,7 +62,7 @@ const AdminAnalysisPage = () => {
 
   const visibleStudents = useMemo(() => {
     const rows = [...students]
-    if (activeView === 'online') return rows.filter((student) => student.online).sort((a, b) => new Date(b.lastLoginAt || 0) - new Date(a.lastLoginAt || 0))
+    if (activeView === 'online') return rows.filter((student) => student.online).sort((a, b) => new Date(b.lastOnlineAt || 0) - new Date(a.lastOnlineAt || 0))
     if (activeView === 'brain') return rows.sort((a, b) => Number(b.totalBrainCells || 0) - Number(a.totalBrainCells || 0))
     if (activeView === 'streak') return rows.sort((a, b) => Number(b.currentStreak || 0) - Number(a.currentStreak || 0))
     return rows.sort((a, b) => Number(b.averagePercent || 0) - Number(a.averagePercent || 0))
@@ -125,7 +125,7 @@ const AdminAnalysisPage = () => {
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
               <div>
                 <h2 className="text-xl font-black text-slate-950">{views.find((view) => view.id === activeView)?.label}</h2>
-                <p className="mt-1 text-xs font-semibold text-slate-500">{activeView === 'online' ? 'Online means the student logged in within the last 15 minutes.' : 'Select a student row to review the performance figures shown below.'}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{activeView === 'online' ? 'Online means the student was active within the last 15 minutes.' : 'Select a student row to review the performance figures shown below.'}</p>
               </div>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">{visibleStudents.length} shown</span>
             </div>
@@ -155,7 +155,7 @@ const AnalysisRow = ({ student, view }) => {
     ['Brain cells', Number(student.totalBrainCells || 0)],
     ['Streak', `${Number(student.currentStreak || 0)} days`],
   ]
-  return <article className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate text-lg font-black text-slate-950">{student.name || 'Unnamed student'}</h3>{student.online && <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" title="Online" />}</div><p className="mt-1 truncate text-sm text-slate-500">{student.email || 'No email'} · {student.className || 'No class'}</p><p className="mt-1 text-xs font-semibold text-slate-400">Last login: {formatDate(student.lastLoginAt)}</p></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">{performance.map(([label, value]) => <div key={label} className={`rounded-2xl p-3 text-center ${view === 'brain' && label === 'Brain cells' ? 'bg-violet-50' : view === 'streak' && label === 'Streak' ? 'bg-orange-50' : 'bg-slate-50'}`}><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-slate-950">{value}</p></div>)}</div></div><div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-500"><span className="rounded-full bg-slate-100 px-3 py-1">Daily challenges: {Number(student.completedDailyChallenges || 0)}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-orange-700">Current streak: {Number(student.currentStreak || 0)} days</span><span className="rounded-full bg-slate-100 px-3 py-1">Daily correct: {Number(student.dailyCorrect || 0)}</span></div>{view === 'streak' && <StreakTracker student={student} />}</article>
+  return <article className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate text-lg font-black text-slate-950">{student.name || 'Unnamed student'}</h3>{student.online && <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" title="Online" />}</div><p className="mt-1 truncate text-sm text-slate-500">{student.email || 'No email'} · {student.className || 'No class'}</p><p className="mt-1 text-xs font-semibold text-slate-400">Last online: {formatDate(student.lastOnlineAt)}</p></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">{performance.map(([label, value]) => <div key={label} className={`rounded-2xl p-3 text-center ${view === 'brain' && label === 'Brain cells' ? 'bg-violet-50' : view === 'streak' && label === 'Streak' ? 'bg-orange-50' : 'bg-slate-50'}`}><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-slate-950">{value}</p></div>)}</div></div><div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-500"><span className="rounded-full bg-slate-100 px-3 py-1">Daily challenges: {Number(student.completedDailyChallenges || 0)}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-orange-700">Current streak: {Number(student.currentStreak || 0)} days</span><span className="rounded-full bg-slate-100 px-3 py-1">Daily correct: {Number(student.dailyCorrect || 0)}</span></div>{view === 'streak' && <StreakTracker student={student} />}</article>
 }
 
 const SetStreakControl = ({ student }) => {
@@ -184,6 +184,61 @@ const SetStreakControl = ({ student }) => {
   return <form onSubmit={save} className="mt-3 flex flex-wrap items-end gap-2 rounded-2xl border border-orange-200 bg-orange-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-orange-800">Set streak<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-orange-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-orange-400" /></label><button type="submit" disabled={saving || value === ''} className="h-9 rounded-xl bg-orange-600 px-3 text-xs font-black text-white transition hover:bg-orange-700 disabled:opacity-60">{saving ? 'Saving...' : 'Update streak'}</button>{message && <span className="text-xs font-bold text-orange-800">{message}</span>}</form>
 }
 
+const SetRestoreKeysControl = ({ student }) => {
+  const [value, setValue] = useState(String(Number(student.restoreKeys || 0)))
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const save = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setMessage('')
+    try {
+      await apiRequest(`/api/admin/streaks/${student.id}/keys`, { method: 'POST', body: JSON.stringify({ restoreKeys: Number(value) }) })
+      setMessage('Updated')
+      window.location.reload()
+    } catch (error) {
+      setMessage(error.message || 'Could not update')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return <form onSubmit={save} className="mt-2 flex flex-wrap items-end gap-2 rounded-2xl border border-violet-200 bg-violet-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-violet-800">Set restore keys<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-violet-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-violet-400" /></label><button type="submit" disabled={saving || value === ''} className="h-9 rounded-xl bg-violet-600 px-3 text-xs font-black text-white transition hover:bg-violet-700 disabled:opacity-60">{saving ? 'Saving...' : 'Update keys'}</button>{message && <span className="text-xs font-bold text-violet-800">{message}</span>}</form>
+}
+
+const BreakTodayControl = ({ student }) => {
+  const [breaking, setBreaking] = useState(false)
+  const breakToday = async () => {
+    if (!window.confirm(`Delete today\'s daily practice for ${student.name || 'this student'} and let them practise again?`)) return
+    setBreaking(true)
+    try {
+      await apiRequest(`/api/admin/streaks/${student.id}/break-today`, { method: 'POST' })
+      window.location.reload()
+    } catch (error) {
+      window.alert(error.message || 'Could not reset today\'s practice.')
+    } finally {
+      setBreaking(false)
+    }
+  }
+  return <button type="button" onClick={breakToday} disabled={breaking} className="mt-2 inline-flex h-9 items-center justify-center rounded-xl bg-rose-600 px-3 text-xs font-black text-white transition hover:bg-rose-700 disabled:opacity-60">{breaking ? 'Resetting...' : 'Break today / redo practice'}</button>
+}
+
+const BreakStreakControl = ({ student }) => {
+  const [breaking, setBreaking] = useState(false)
+  const breakStreak = async () => {
+    if (!window.confirm(`Break ${student.name || 'this student'}\'s streak and enable restore?`)) return
+    setBreaking(true)
+    try {
+      await apiRequest(`/api/admin/streaks/${student.id}/break`, { method: 'POST' })
+      window.location.reload()
+    } catch (error) {
+      window.alert(error.message || 'Could not break streak.')
+    } finally {
+      setBreaking(false)
+    }
+  }
+  return <button type="button" onClick={breakStreak} disabled={breaking} className="mt-2 inline-flex h-9 items-center justify-center rounded-xl border border-rose-300 bg-white px-3 text-xs font-black text-rose-700 transition hover:bg-rose-50 disabled:opacity-60">{breaking ? 'Breaking...' : 'Break streak'}</button>
+}
+
 const StreakTracker = ({ student }) => {
   const [remaining, setRemaining] = useState(Math.max(0, new Date(student.streakDayEndsAt || 0).getTime() - Date.now()))
   useEffect(() => {
@@ -195,7 +250,7 @@ const StreakTracker = ({ student }) => {
   const totalMinutes = Math.floor(remaining / 60000)
   const countdown = `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m remaining`
   const done = Boolean(student.streakTodayDone)
-  return <><SetStreakControl student={student} />{student.todayChallengeCompleted && <ViewStreakQuestions student={student} />}<StreakStatus student={student} /></>
+  return <><SetStreakControl student={student} /><SetRestoreKeysControl student={student} /><div className="flex flex-wrap gap-2"><BreakStreakControl student={student} /><BreakTodayControl student={student} /></div>{Number(student.streakTodayAttempted || 0) > 0 && <ViewStreakQuestions student={student} />}<StreakStatus student={student} /></>
   return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : 'Today’s streak is not done yet'}</span><span>{remaining ? countdown : 'New streak day started'}</span></div>
 }
 

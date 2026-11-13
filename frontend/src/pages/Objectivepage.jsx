@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, BookOpen, Plus, Trash2 } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 import PageBreadcrumbs from '../components/PageBreadcrumbs'
+import LoadingState from '../components/LoadingState'
 
 export const objectiveOptions = [
   { type: 'mcqs', label: 'MCQs', description: 'Multiple choice objective questions.' },
@@ -101,9 +102,7 @@ const Objectivepage = () => {
   if (isLoading) {
     return (
       <section className="flex min-h-[calc(100vh-6rem)] items-center justify-center bg-[#fbfbfa] px-4">
-        <div className="rounded-3xl border border-stone-200 bg-white p-8 text-stone-500 shadow-xl">
-          Loading objective types...
-        </div>
+        <LoadingState label="Loading objective types" compact />
       </section>
     )
   }

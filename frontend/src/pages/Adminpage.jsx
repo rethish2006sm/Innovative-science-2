@@ -3,12 +3,13 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import {
   BadgePlus,
   BellRing,
+  Bold,
   CalendarDays,
   Download,
   Edit3,
   FileText,
-  Gift,
   Image as ImageIcon,
+  Link2,
   Loader2,
   MessageCircleMore,
   RotateCcw,
@@ -105,11 +106,11 @@ const formatPopupAudienceLabel = (message = {}) => {
   return 'Student message'
 }
 
-const Adminpage = () => {
+const Adminpage = ({ initialTab = 'students' }) => {
   const navigate = useNavigate()
   const auth = getStoredAuth()
   const isAdmin = Boolean(auth?.user?.isAdmin)
-  const [activeTab, setActiveTab] = useState('students')
+  const [activeTab, setActiveTab] = useState(initialTab)
   const [science, setScience] = useState(() => getActiveScience())
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -133,10 +134,6 @@ const Adminpage = () => {
   const [studentsReady, setStudentsReady] = useState(false)
   const [classes, setClasses] = useState([])
   const [classesLoading, setClassesLoading] = useState(true)
-  const [gifts, setGifts] = useState([])
-  const [giftClassId, setGiftClassId] = useState('')
-  const [giftFile, setGiftFile] = useState(null)
-  const [giftSaving, setGiftSaving] = useState(false)
   const [streakImage, setStreakImage] = useState(null)
   const [streakImageFile, setStreakImageFile] = useState(null)
   const [streakImageSaving, setStreakImageSaving] = useState(false)
@@ -153,6 +150,8 @@ const Adminpage = () => {
   const [messageTargetType, setMessageTargetType] = useState('all')
   const [messageSubject, setMessageSubject] = useState('')
   const [messageBody, setMessageBody] = useState('')
+  const [hasMessageSelection, setHasMessageSelection] = useState(false)
+  const [messageSelectionPosition, setMessageSelectionPosition] = useState({ top: 0, left: 0 })
   const [messageRecipients, setMessageRecipients] = useState([])
   const [messageRecipientsLoading, setMessageRecipientsLoading] = useState(false)
   const [messageRecipientsLoaded, setMessageRecipientsLoaded] = useState(false)
@@ -207,11 +206,17 @@ const Adminpage = () => {
   const [contactsLoading, setContactsLoading] = useState(false)
   const [feedbackLoading, setFeedbackLoading] = useState(false)
 
+  useEffect(() => {
+    setActiveTab(initialTab)
+  }, [initialTab])
+
   const dashboardRequestRef = useRef(0)
   const studentsRequestRef = useRef(0)
   const classesRequestRef = useRef(0)
   const adminMessagesRequestRef = useRef(0)
   const studentQueryRef = useRef(null)
+  const messageEditorRef = useRef(null)
+  const messageSelectionRangeRef = useRef(null)
 
   useEffect(() => {
     const syncScience = () => setScience(getActiveScience())
@@ -565,16 +570,11 @@ const Adminpage = () => {
   }
 
   const loadFeedback = async () => {
-    if (feedbackLoading || feedbacks.length) {
-      return
-    }
-
+    if (feedbackLoading || feedbacks.length) return
     setFeedbackLoading(true)
-
     try {
       const data = await apiRequest('/api/admin/feedback?limit=50')
-      const nextFeedback = data.feedback || []
-      setFeedbacks(nextFeedback)
+      setFeedbacks(data.feedback || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -796,6 +796,100 @@ const Adminpage = () => {
     setMessageSelectedUserIds([])
   }
 
+  const syncMessageEditor = () => {
+    setMessageBody(messageEditorRef.current?.innerHTML || '')
+  }
+
+  const getMessageHtml = () => String(messageEditorRef.current?.innerHTML || messageBody || '')
+    .replace(/<(?:span|font)\b[^>]*style\s*=\s*["'][^"']*font-weight\s*:\s*(?:bold|bolder|[6-9]00)[^"']*["'][^>]*>([\s\S]*?)<\/(?:span|font)>/gi, '<strong>$1</strong>')
+    .replace(/<\/?b\b[^>]*>/gi, (tag) => /^<\s*\//.test(tag) ? '</strong>' : '<strong>')
+
+  const updateMessageSelection = () => {
+    const selection = window.getSelection()
+    const editor = messageEditorRef.current
+    const isValidSelection = Boolean(
+      selection?.rangeCount &&
+      !selection.isCollapsed &&
+      editor &&
+      editor.contains(selection.anchorNode) &&
+      editor.contains(selection.focusNode),
+    )
+
+    setHasMessageSelection(isValidSelection)
+    if (isValidSelection) {
+      const range = selection.getRangeAt(0)
+      messageSelectionRangeRef.current = range.cloneRange()
+      const rangeRects = Array.from(range.getClientRects())
+      const rect = rangeRects[rangeRects.length - 1] || range.getBoundingClientRect()
+      if (!rect.width && !rect.height) return
+      const editorRect = editor.getBoundingClientRect()
+      const toolbarHeight = 44
+      const toolbarWidth = 76
+      const rightSideLeft = rect.right - editorRect.left + 8
+      const leftSideLeft = rect.left - editorRect.left - toolbarWidth - 8
+      const left = rightSideLeft + toolbarWidth <= editorRect.width
+        ? rightSideLeft
+        : Math.max(8, leftSideLeft)
+      const top = Math.max(8, Math.min(editorRect.height - toolbarHeight - 8, rect.top - editorRect.top - 4))
+      setMessageSelectionPosition({ top, left })
+    }
+  }
+
+  const wrapSelectedMessageText = (elementName, attributes = {}) => {
+    const savedRange = messageSelectionRangeRef.current
+    if (!hasMessageSelection || !savedRange || savedRange.collapsed) return
+
+    const wrapper = document.createElement(elementName)
+    Object.entries(attributes).forEach(([name, value]) => wrapper.setAttribute(name, value))
+    wrapper.appendChild(savedRange.extractContents())
+    savedRange.insertNode(wrapper)
+
+    const selection = window.getSelection()
+    const nextRange = document.createRange()
+    nextRange.selectNodeContents(wrapper)
+    selection?.removeAllRanges()
+    selection?.addRange(nextRange)
+    messageSelectionRangeRef.current = nextRange.cloneRange()
+    setHasMessageSelection(true)
+    syncMessageEditor()
+  }
+
+  const toggleSelectedBold = () => {
+    const savedRange = messageSelectionRangeRef.current
+    const editor = messageEditorRef.current
+    if (!hasMessageSelection || !savedRange || !editor) return
+
+    const startElement = savedRange.startContainer.nodeType === Node.TEXT_NODE
+      ? savedRange.startContainer.parentElement
+      : savedRange.startContainer
+    const boldElement = startElement?.closest?.('strong, b')
+
+    if (boldElement && editor.contains(boldElement)) {
+      const fragment = document.createDocumentFragment()
+      while (boldElement.firstChild) fragment.appendChild(boldElement.firstChild)
+      boldElement.replaceWith(fragment)
+      syncMessageEditor()
+      setHasMessageSelection(false)
+      messageSelectionRangeRef.current = null
+      return
+    }
+
+    wrapSelectedMessageText('strong')
+  }
+
+  const addMessageLink = () => {
+    if (!hasMessageSelection) return
+    const url = window.prompt('Enter a full link, for example https://example.com')
+    if (!url?.trim()) return
+
+    const normalizedUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`
+    wrapSelectedMessageText('a', {
+      href: normalizedUrl,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+    })
+  }
+
   const sendStudentPopupMessage = async (event) => {
     event.preventDefault()
     setMessageSending(true)
@@ -803,10 +897,11 @@ const Adminpage = () => {
     setMessageSuccess('')
 
     try {
-      const normalizedBody = messageBody.trim()
+      const messageHtml = getMessageHtml().trim()
+      const normalizedBodyText = messageHtml.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').trim()
       const normalizedSubject = messageSubject.trim()
 
-      if (!normalizedBody) {
+      if (!normalizedBodyText) {
         throw new Error('Please write the popup message first.')
       }
 
@@ -820,12 +915,17 @@ const Adminpage = () => {
           targetType: messageTargetType,
           targetUserIds: messageTargetType === 'user' ? messageSelectedUserIds : [],
           subject: normalizedSubject,
-          body: normalizedBody,
+          body: messageHtml,
+          bodyHtml: messageHtml,
         }),
       })
 
       setMessageSuccess(`Popup message sent to ${data.audienceCount || 0} student${Number(data.audienceCount || 0) === 1 ? '' : 's'}.`)
       setMessageBody('')
+      setHasMessageSelection(false)
+      setMessageSelectionPosition({ top: 0, left: 0 })
+      messageSelectionRangeRef.current = null
+      if (messageEditorRef.current) messageEditorRef.current.innerHTML = ''
       setMessageSubject('')
       setMessageSelectedUserIds([])
       setMessageTargetType('all')
@@ -834,49 +934,6 @@ const Adminpage = () => {
       setMessageError(err.message)
     } finally {
       setMessageSending(false)
-    }
-  }
-
-  const loadGifts = async () => {
-    try {
-      const data = await apiRequest('/api/admin/gifts', { cache: 'no-store' })
-      setGifts(Array.isArray(data.gifts) ? data.gifts : [])
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
-  const saveGift = async (event) => {
-    event.preventDefault()
-    if (!giftClassId || !giftFile) {
-      setError('Choose a class and an image for the gift.')
-      return
-    }
-    setGiftSaving(true)
-    setError('')
-    try {
-      const formData = new FormData()
-      formData.append('classId', giftClassId)
-      formData.append('image', giftFile)
-      const data = await apiRequest('/api/admin/gifts', { method: 'POST', body: formData })
-      const nextGift = data.gift
-      setGifts((current) => [nextGift, ...current.filter((item) => item.classId !== nextGift.classId)])
-      setGiftFile(null)
-      event.target.reset()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setGiftSaving(false)
-    }
-  }
-
-  const removeGift = async (classId) => {
-    if (!window.confirm('Remove this class gift?')) return
-    try {
-      await apiRequest(`/api/admin/gifts/${classId}`, { method: 'DELETE' })
-      setGifts((current) => current.filter((gift) => gift.classId !== classId))
-    } catch (err) {
-      setError(err.message)
     }
   }
 
@@ -1229,7 +1286,6 @@ const Adminpage = () => {
       return () => window.clearInterval(timer)
     }
 
-    if (activeTab === 'gift') loadGifts()
     if (activeTab === 'streak') loadStreakImage()
   }, [activeTab])
 
@@ -1403,10 +1459,7 @@ const Adminpage = () => {
         method: 'PATCH',
         body: JSON.stringify({ featured: !feedbackItem.featured }),
       })
-
-      setFeedbacks((current) => current.map((item) => (
-        item.id === feedbackItem.id ? { ...item, featured: data.feedback?.featured ?? !feedbackItem.featured } : item
-      )))
+      setFeedbacks((current) => current.map((item) => item.id === feedbackItem.id ? { ...item, ...data.feedback } : item))
     } catch (err) {
       setError(err.message)
     }
@@ -1418,25 +1471,16 @@ const Adminpage = () => {
         method: 'PATCH',
         body: JSON.stringify({ status: 'reviewed' }),
       })
-
-      setFeedbacks((current) => current.map((item) => (
-        item.id === feedbackItem.id ? { ...item, status: data.feedback?.status || 'reviewed' } : item
-      )))
+      setFeedbacks((current) => current.map((item) => item.id === feedbackItem.id ? { ...item, ...data.feedback } : item))
     } catch (err) {
       setError(err.message)
     }
   }
 
   const deleteFeedback = async (feedbackId) => {
-    if (!window.confirm('Delete this feedback?')) {
-      return
-    }
-
+    if (!window.confirm('Delete this feedback?')) return
     try {
-      await apiRequest(`/api/admin/feedback/${feedbackId}`, {
-        method: 'DELETE',
-      })
-
+      await apiRequest(`/api/admin/feedback/${feedbackId}`, { method: 'DELETE' })
       setFeedbacks((current) => current.filter((item) => item.id !== feedbackId))
       updateDashboardCount('totalFeedback', -1)
     } catch (err) {
@@ -2028,15 +2072,14 @@ const Adminpage = () => {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'gift', 'streak', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
-              <button
+            {['students', 'classes', 'streak', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
+              <Link
                 key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
+                to={`/admin/${tab}`}
                 className={`rounded-full px-5 py-3 text-sm font-black capitalize transition ${activeTab === tab ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
               >
                 {tab === 'class-board' ? 'class board' : tab === 'deletion-requests' ? 'deletion requests' : tab}
-              </button>
+              </Link>
             ))}
             <Link
               to="/admin/analysis"
@@ -2058,19 +2101,8 @@ const Adminpage = () => {
             </div>
           )}
 
-          <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_0.85fr]">
+          <div className={`mt-8 grid gap-6 ${activeTab === 'message' ? 'lg:grid-cols-1' : 'lg:grid-cols-[1fr_0.85fr]'}`}>
             <div className="grid gap-6">
-              {activeTab === 'gift' && (
-                <div className="rounded-[1.75rem] border border-amber-200 bg-white p-5 shadow-sm sm:p-7">
-                  <div className="flex items-center gap-3"><Gift className="h-6 w-6 text-amber-600" /><div><h2 className="font-serif text-3xl text-slate-950">Class gift</h2><p className="mt-1 text-sm text-slate-500">Upload one image for a class. Students in that class see it as a popup whenever they reload.</p></div></div>
-                  <form onSubmit={saveGift} className="mt-6 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                    <label className="grid gap-2 text-sm font-bold text-slate-600">Class<select value={giftClassId} onChange={(event) => setGiftClassId(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 text-slate-900"><option value="">Select class</option>{classes.map((item) => <option key={item._id} value={item._id}>{item.name}{item.grade ? ` · ${item.grade}` : ''}</option>)}</select></label>
-                    <label className="grid gap-2 text-sm font-bold text-slate-600">Photo<input type="file" accept="image/*" onChange={(event) => setGiftFile(event.target.files?.[0] || null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm" /></label>
-                    <button type="submit" disabled={giftSaving} className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-bold text-white hover:bg-black disabled:opacity-60">{giftSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}{giftSaving ? 'Saving...' : 'Save gift'}</button>
-                  </form>
-                  <div className="mt-6 grid gap-3">{gifts.length ? gifts.map((gift) => <div key={gift.id} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"><div><p className="font-black text-slate-900">{gift.className}</p><p className="text-xs text-slate-500">{gift.originalName}</p></div><button type="button" onClick={() => removeGift(gift.classId)} className="inline-flex items-center gap-2 rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-black text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /> Remove</button></div>) : <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-sm text-slate-500">No class gifts saved yet.</p>}</div>
-                </div>
-              )}
               {activeTab === 'streak' && (
                 <div className="rounded-[1.75rem] border border-red-200 bg-white p-5 shadow-sm sm:p-7">
                   <div className="flex items-start gap-3">
@@ -2986,9 +3018,8 @@ const Adminpage = () => {
                           Popup overlay
                         </div>
                       </div>
-                      <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                        Send an attention-grabbing popup to all students or to selected students only. On the student side,
-                        the close and dislike actions are temporary, while thumbs up hides the message after reload.
+                        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                        Send a titled popup to all students or selected students. Students can react once to hide it permanently from their popup queue.
                       </p>
 
                       {messageError && (
@@ -3129,13 +3160,51 @@ const Adminpage = () => {
 
                         <label className="grid gap-2 text-sm font-bold text-slate-600">
                           Popup text
-                          <textarea
-                            value={messageBody}
-                            onChange={(event) => setMessageBody(event.target.value)}
-                            rows={6}
-                            placeholder="Write the message that should appear as a popup on student screens..."
-                            className="rounded-[1.5rem] border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-cyan-400"
-                          />
+                          <div className="relative overflow-visible rounded-[1.5rem] border border-slate-200 bg-white focus-within:border-cyan-400">
+                            {hasMessageSelection && (
+                              <div
+                                className="pointer-events-auto absolute z-[260] flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_12px_30px_rgba(15,23,42,0.2)]"
+                                style={{ top: messageSelectionPosition.top, left: messageSelectionPosition.left }}
+                                onMouseDown={(event) => event.preventDefault()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={toggleSelectedBold}
+                                  className="grid h-8 w-8 place-items-center rounded-lg text-slate-700 transition hover:bg-cyan-100 hover:text-cyan-800"
+                                  aria-label="Bold selected text"
+                                  title="Bold selected text"
+                                >
+                                  <Bold className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={addMessageLink}
+                                  className="grid h-8 w-8 place-items-center rounded-lg text-slate-700 transition hover:bg-cyan-100 hover:text-cyan-800"
+                                  aria-label="Insert link on selected text"
+                                  title="Insert link on selected text"
+                                >
+                                  <Link2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            )}
+                            <div
+                              ref={messageEditorRef}
+                              contentEditable
+                              role="textbox"
+                              aria-multiline="true"
+                              onInput={syncMessageEditor}
+                              onBlur={() => {
+                                syncMessageEditor()
+                                setHasMessageSelection(false)
+                              }}
+                              onKeyUp={updateMessageSelection}
+                              onMouseUp={updateMessageSelection}
+                              onSelect={updateMessageSelection}
+                              data-placeholder="Write the message that should appear as a popup on student screens..."
+                              className="min-h-[150px] px-4 py-3 font-normal text-base text-slate-900 outline-none [&_a]:text-blue-600 [&_a]:underline [&_b]:font-black [&_strong]:font-black empty:before:pointer-events-none empty:before:text-slate-400 empty:before:content-[attr(data-placeholder)]"
+                              suppressContentEditableWarning
+                            />
+                          </div>
                         </label>
 
                         {messageTargetType === 'user' && (
@@ -3325,10 +3394,21 @@ const Adminpage = () => {
                                 </div>
                               </div>
 
+                              <div className="mt-4 grid gap-2 rounded-2xl border border-white/80 bg-white/75 p-3 text-xs font-semibold text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+                                <div><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Audience</span><span className="mt-1 block font-black text-slate-800">{formatPopupAudienceLabel(message)}</span></div>
+                                <div><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Recipients</span><span className="mt-1 block font-black text-slate-800">{message.audienceCount || 0}</span></div>
+                                <div><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Reacted</span><span className="mt-1 block font-black text-emerald-700">{message.acknowledgedCount || 0} ({message.acknowledgementRate || 0}%)</span></div>
+                                <div><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Pending</span><span className="mt-1 block font-black text-amber-700">{message.pendingCount || 0}</span></div>
+                                {message.targetClassName ? <div className="sm:col-span-2"><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Class</span><span className="mt-1 block font-black text-slate-800">{message.targetClassName}</span></div> : null}
+                                {message.targetType === 'user' ? <div className="sm:col-span-2 lg:col-span-4"><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Student{(message.targetUserNames || []).length === 1 ? '' : 's'}</span><span className="mt-1 block font-black text-slate-800">{message.targetUserNames?.length ? message.targetUserNames.join(', ') : 'Specific student recipient'}</span></div> : null}
+                                <div className="sm:col-span-2"><span className="block text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Sent</span><span className="mt-1 block font-black text-slate-800">{new Date(message.createdAt).toLocaleString()}</span></div>
+                              </div>
+
                               {message.body ? (
-                                <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">
-                                  {message.body}
-                                </p>
+                                <div
+                                  className="student-rich-message mt-3 break-words text-sm leading-7 text-slate-600 [&_a]:text-blue-600 [&_a]:underline"
+                                  dangerouslySetInnerHTML={{ __html: message.bodyHtml || message.body }}
+                                />
                               ) : null}
                             </article>
                           ))

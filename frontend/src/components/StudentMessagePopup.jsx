@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import { MessageCircleMore, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { ThumbsUp, X } from 'lucide-react'
 import { apiRequest } from '../api'
 import { getStoredAuth } from '../authStorage'
 
+const normalizeRichHtml = (value = '') => String(value || '')
+  .replace(/<(?:span|font)\b[^>]*style\s*=\s*["'][^"']*font-weight\s*:\s*(?:bold|bolder|[6-9]00)[^"']*["'][^>]*>([\s\S]*?)<\/(?:span|font)>/gi, '<strong>$1</strong>')
+  .replace(/<\/?b\b[^>]*>/gi, (tag) => /^<\s*\//.test(tag) ? '</strong>' : '<strong>')
+
 const normalizeMessage = (message = {}) => ({
   id: String(message.id || message._id || '').trim(),
+  subject: String(message.subject || '').trim(),
   body: String(message.body || '').trim(),
+  bodyHtml: normalizeRichHtml(message.bodyHtml || message.body).trim(),
   acknowledgedByMe: Boolean(message.acknowledgedByMe),
 })
 
 const StudentMessagePopup = () => {
   const auth = getStoredAuth()
   const shouldLoad = Boolean(auth?.token) && !auth?.user?.isAdmin
+  const reduceMotion = useReducedMotion()
+  const closeButtonRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [temporaryHiddenIds, setTemporaryHiddenIds] = useState([])
+  const [reacting, setReacting] = useState(false)
+  const [reacted, setReacted] = useState(false)
 
   useEffect(() => {
     if (!shouldLoad) {
@@ -28,19 +38,15 @@ const StudentMessagePopup = () => {
     const loadMessages = async () => {
       try {
         const data = await apiRequest('/api/messages/me')
-
-        if (cancelled) {
-          return
-        }
+        if (cancelled) return
 
         setMessages(Array.isArray(data.messages) ? data.messages.map(normalizeMessage).filter((item) => item.id) : [])
       } catch {
-        // Keep the last known popup visible if a refresh fails.
+        // Keep the last known announcement visible if a refresh fails.
       }
     }
 
     loadMessages()
-
     const timer = window.setInterval(loadMessages, 60000)
 
     return () => {
@@ -56,102 +62,110 @@ const StudentMessagePopup = () => {
   const activeMessage = visibleMessages[0] || null
 
   const dismissCurrentMessage = () => {
-    if (!activeMessage?.id) {
-      return
-    }
+    if (!activeMessage?.id) return
 
     setTemporaryHiddenIds((current) => (
       current.includes(activeMessage.id) ? current : [...current, activeMessage.id]
     ))
   }
 
-  const acknowledgeCurrentMessage = async () => {
-    if (!activeMessage?.id) {
-      return
-    }
+  const reactToCurrentMessage = async () => {
+    if (!activeMessage?.id || reacting) return
 
+    setReacting(true)
+    setReacted(true)
     try {
-      await apiRequest(`/api/messages/${activeMessage.id}/acknowledge`, {
-        method: 'POST',
-      })
-
-      setMessages((current) => current.map((message) => (
-        message.id === activeMessage.id
-          ? { ...message, acknowledgedByMe: true }
-          : message
-      )))
+      await apiRequest(`/api/messages/${activeMessage.id}/acknowledge`, { method: 'POST' })
     } catch {
-      // Keep the popup usable even if the acknowledgement call fails.
+      setReacted(false)
     } finally {
-      dismissCurrentMessage()
+      setReacting(false)
     }
   }
 
-  if (!shouldLoad || !activeMessage) {
-    return null
-  }
+  useEffect(() => {
+    if (!activeMessage) return undefined
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') dismissCurrentMessage()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    closeButtonRef.current?.focus()
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [activeMessage?.id])
+
+  if (!shouldLoad) return null
 
   return (
-    <div className="fixed inset-0 z-[220] pointer-events-none">
+    <div className="pointer-events-none fixed inset-0 z-[220] overflow-hidden">
       <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={activeMessage.id}
-          initial={{ opacity: 0, y: 24, scale: 0.96 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.96 }}
-          transition={{ type: 'spring', stiffness: 360, damping: 28, mass: 0.9 }}
-          className="pointer-events-auto fixed bottom-4 left-4 right-4 mx-auto w-auto max-w-[420px] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.18)] sm:left-auto sm:right-5"
-          role="alertdialog"
-          aria-modal="true"
-          aria-labelledby="student-message-title"
-        >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-500 via-emerald-500 to-amber-500" />
+        {activeMessage && (
+          <>
+            <motion.div
+              key={`announcement-backdrop-${activeMessage.id}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduceMotion ? 0.01 : 0.2 }}
+              className="pointer-events-auto fixed inset-0 bg-slate-950/45 backdrop-blur-[3px]"
+              aria-hidden="true"
+            />
 
-          <div className="flex items-start justify-between gap-4 px-4 py-4 sm:px-5">
-            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-cyan-50 text-cyan-600">
-              <MessageCircleMore className="h-6 w-6" />
-            </div>
-
-            <button
-              type="button"
-              onClick={dismissCurrentMessage}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-950"
-              aria-label="Close message"
+            <motion.div
+              key={activeMessage.id}
+              initial={{ opacity: 0, y: reduceMotion ? 0 : 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: reduceMotion ? 0 : 12 }}
+              transition={reduceMotion ? { duration: 0.01 } : { duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="pointer-events-auto fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-3 right-3 max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto rounded-2xl border border-orange-100 bg-white p-4 shadow-[0_14px_40px_rgba(15,23,42,0.2)] sm:bottom-5 sm:left-auto sm:right-5 sm:w-[min(24rem,calc(100vw-2.5rem))]"
+              role="status"
+              aria-labelledby="student-message-title"
             >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <h2 id="student-message-title" className="truncate text-base font-black leading-tight tracking-[-0.02em] text-slate-950">
+                    {activeMessage.subject || 'Important announcement'}
+                  </h2>
+                  <div
+                    className="student-rich-message mt-1.5 break-words text-sm leading-5 text-slate-600 [overflow-wrap:anywhere] [&_a]:text-cyan-700 [&_a]:underline [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:mb-1 [&_u]:underline [&_ul]:list-disc"
+                    dangerouslySetInnerHTML={{ __html: activeMessage.bodyHtml || activeMessage.body || 'No announcement text was provided.' }}
+                  />
+                </div>
 
-          <div className="px-4 pb-4 sm:px-5 sm:pb-5">
-            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-4 sm:px-5 sm:py-5">
-              <p
-                id="student-message-title"
-                className="whitespace-pre-wrap text-[15px] leading-8 text-slate-700 sm:text-base"
-              >
-                {activeMessage.body || 'No message text was provided.'}
-              </p>
-            </div>
+                <button
+                  ref={closeButtonRef}
+                  type="button"
+                  onClick={dismissCurrentMessage}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-slate-200 text-slate-500 transition hover:border-orange-200 hover:bg-orange-50 hover:text-orange-700 active:scale-95"
+                  aria-label="Close announcement"
+                >
+                  <X className="h-4 w-4" strokeWidth={2} />
+                </button>
+              </div>
 
-            <div className="mt-4 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={dismissCurrentMessage}
-                className="grid h-12 w-12 place-items-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
-                aria-label="Dismiss message"
-              >
-                <ThumbsDown className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={acknowledgeCurrentMessage}
-                className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-white transition hover:bg-black"
-                aria-label="Acknowledge message"
-              >
-                <ThumbsUp className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </motion.div>
+              <div className="mt-3 text-right">
+                <button
+                  type="button"
+                  onClick={reactToCurrentMessage}
+                  disabled={reacting || reacted}
+                  className="ml-auto grid h-9 w-9 place-items-center rounded-full bg-gradient-to-r from-orange-500 to-pink-500 text-white shadow-[0_8px_18px_rgba(249,115,22,0.22)] transition hover:-translate-y-0.5 hover:shadow-[0_10px_22px_rgba(249,115,22,0.3)] active:translate-y-0 disabled:cursor-wait disabled:opacity-100"
+                  aria-label="React to announcement and hide it permanently"
+                  title="React"
+                >
+                  <ThumbsUp className={`h-4 w-4 ${reacted ? 'fill-yellow-300 text-yellow-300' : 'text-white'}`} />
+                </button>
+                <p className="mt-1 text-[9px] font-medium text-slate-400">click on 👍 so message will not appear</p>
+              </div>
+            </motion.div>
+          </>
+        )}
       </AnimatePresence>
     </div>
   )
