@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -26,7 +26,10 @@ import { getStoredAuth } from "../authStorage";
 import LoadingState from "../components/LoadingState";
 
 const DailyStreakPage = ({ dailyPracticePage = false }) => {
+  const { pathname } = useLocation();
   const navigate = useNavigate();
+  const showDailyStreakBottomNav =
+    pathname === "/daily-streak" && !dailyPracticePage;
   const [data, setData] = useState(null);
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState(null);
@@ -1123,19 +1126,21 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
           </section>
         )}
       </div>
-      <nav className="daily-streak-bottom-nav" aria-label="Daily streak navigation">
-        <button type="button" onClick={openHistory} className="daily-streak-bottom-nav-item">
-          <History size={19} />
-          <span>History</span>
-        </button>
-        <button type="button" onClick={() => navigate("/")} className="daily-streak-bottom-nav-home" aria-label="Open home page">
-          <Home size={22} />
-        </button>
-        <button type="button" onClick={() => window.dispatchEvent(new Event("daily-rewards:open"))} className="daily-streak-bottom-nav-item">
-          <Gift size={19} />
-          <span>Rewards</span>
-        </button>
-      </nav>
+      {showDailyStreakBottomNav && (
+        <nav className="daily-streak-bottom-nav" aria-label="Daily streak navigation">
+          <button type="button" onClick={openHistory} className="daily-streak-bottom-nav-item">
+            <History size={19} />
+            <span>History</span>
+          </button>
+          <button type="button" onClick={() => navigate("/")} className="daily-streak-bottom-nav-home" aria-label="Open home page">
+            <Home size={22} />
+          </button>
+          <button type="button" onClick={() => window.dispatchEvent(new Event("daily-rewards:open"))} className="daily-streak-bottom-nav-item">
+            <Gift size={19} />
+            <span>Rewards</span>
+          </button>
+        </nav>
+      )}
       {showHistory && (
         <div className="fixed inset-0 z-[1500] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Daily streak history">
           <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl">
@@ -1348,7 +1353,9 @@ const StreakCelebration = ({ from, to, qualified, onClose }) => {
         setDisplayStreak((current) =>
           qualified ? Math.min(to, current + 1) : Math.max(to, current - 1),
         ),
-      850,
+      // Resetting from a high streak should finish quickly instead of
+      // blocking the user for several seconds per displayed number.
+      qualified ? 850 : 45,
     );
     return () => window.clearTimeout(timer);
   }, [displayStreak, qualified, to]);
