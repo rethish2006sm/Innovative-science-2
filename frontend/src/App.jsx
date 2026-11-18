@@ -850,6 +850,7 @@ const AppLayout = () => {
           <Route path="/admin/students" element={<Adminpage initialTab="students" />} />
           <Route path="/admin/classes" element={<Adminpage initialTab="classes" />} />
           <Route path="/admin/streak" element={<Adminpage initialTab="streak" />} />
+          <Route path="/admin/streak-gifts" element={<Adminpage initialTab="streak-gifts" />} />
           <Route path="/admin/reports" element={<Adminpage initialTab="reports" />} />
           <Route path="/admin/contacts" element={<Adminpage initialTab="contacts" />} />
           <Route path="/admin/feedback" element={<AdminFeedbackPage />} />
@@ -901,7 +902,7 @@ const AppLayout = () => {
           </Suspense>
         </main>
       </div>
-      {!isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && <div className="app-footer"><Footer /></div>}
+      {!isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && pathname !== '/notifications' && <div className="app-footer"><Footer /></div>}
       {pathname === '/' && <HomeBottomNav />}
       {showSigninReminder && !auth?.token && !isAuthRoute && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">

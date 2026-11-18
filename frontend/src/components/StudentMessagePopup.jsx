@@ -8,13 +8,21 @@ const normalizeRichHtml = (value = '') => String(value || '')
   .replace(/<(?:span|font)\b[^>]*style\s*=\s*["'][^"']*font-weight\s*:\s*(?:bold|bolder|[6-9]00)[^"']*["'][^>]*>([\s\S]*?)<\/(?:span|font)>/gi, '<strong>$1</strong>')
   .replace(/<\/?b\b[^>]*>/gi, (tag) => /^<\s*\//.test(tag) ? '</strong>' : '<strong>')
 
-const normalizeMessage = (message = {}) => ({
-  id: String(message.id || message._id || '').trim(),
-  subject: String(message.subject || '').trim(),
-  body: String(message.body || '').trim(),
-  bodyHtml: normalizeRichHtml(message.bodyHtml || message.body).trim(),
-  acknowledgedByMe: Boolean(message.acknowledgedByMe),
-})
+const normalizeMessage = (message = {}) => {
+  const subject = String(message.subject || '').trim()
+  const type = String(message.type || '').trim()
+  const isRewardMessage = type === '100_DAY_REWARD_CLAIMED' || subject === '100-day reward claimed'
+  const bodyHtml = normalizeRichHtml(message.bodyHtml || message.body).trim()
+  return {
+    id: String(message.id || message._id || '').trim(),
+    type,
+    link: String(message.link || '').trim(),
+    subject,
+    body: String(message.body || '').trim(),
+    bodyHtml: isRewardMessage ? bodyHtml.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '') : bodyHtml,
+    acknowledgedByMe: Boolean(message.acknowledgedByMe),
+  }
+}
 
 const StudentMessagePopup = () => {
   const auth = getStoredAuth()
@@ -48,10 +56,17 @@ const StudentMessagePopup = () => {
 
     loadMessages()
     const timer = window.setInterval(loadMessages, 60000)
+    const handleNewMessage = (event) => {
+      const message = normalizeMessage(event.detail || {})
+      if (!message.id) return
+      setMessages((current) => [message, ...current.filter((item) => item.id !== message.id)])
+    }
+    window.addEventListener('student-message:new', handleNewMessage)
 
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      window.removeEventListener('student-message:new', handleNewMessage)
     }
   }, [shouldLoad])
 
@@ -83,6 +98,17 @@ const StudentMessagePopup = () => {
     }
   }
 
+  const openRewardMessageLink = (event) => {
+    event.preventDefault()
+    sessionStorage.setItem('open-100-day-reward', '1')
+    dismissCurrentMessage()
+    if (window.location.hash === '#/daily-streak') {
+      window.dispatchEvent(new Event('daily-streak:open-100-reward'))
+    } else {
+      window.location.assign('/#/daily-streak')
+    }
+  }
+
   useEffect(() => {
     if (!activeMessage) return undefined
 
@@ -104,7 +130,7 @@ const StudentMessagePopup = () => {
   if (!shouldLoad) return null
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[220] overflow-hidden">
+    <div className="pointer-events-none fixed inset-0 z-[1400] overflow-hidden">
       <AnimatePresence mode="wait" initial={false}>
         {activeMessage && (
           <>
@@ -137,6 +163,7 @@ const StudentMessagePopup = () => {
                     className="student-rich-message mt-1.5 break-words text-sm leading-5 text-slate-600 [overflow-wrap:anywhere] [&_a]:text-cyan-700 [&_a]:underline [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:mb-1 [&_u]:underline [&_ul]:list-disc"
                     dangerouslySetInnerHTML={{ __html: activeMessage.bodyHtml || activeMessage.body || 'No announcement text was provided.' }}
                   />
+                  {(activeMessage.type === '100_DAY_REWARD_CLAIMED' || activeMessage.subject === '100-day reward claimed') && <a href="/#/daily-streak" onClick={openRewardMessageLink} className="mt-2 inline-flex font-bold text-cyan-700 underline underline-offset-2">Open and download your reward letter</a>}
                 </div>
 
                 <button

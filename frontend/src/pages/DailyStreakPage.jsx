@@ -25,6 +25,21 @@ import signature from "../assets/rethish_sign-removebg-preview.png";
 import { getStoredAuth } from "../authStorage";
 import LoadingState from "../components/LoadingState";
 
+const dailyHistoryDateLabel = (localDate) => {
+  const date = new Date(`${localDate}T00:00:00`);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const sameDay = (left, right) =>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate();
+
+  if (sameDay(date, today)) return "Today";
+  if (sameDay(date, yesterday)) return "Yesterday";
+  return localDate;
+};
+
 const DailyStreakPage = ({ dailyPracticePage = false }) => {
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -44,6 +59,25 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
   const [submitting, setSubmitting] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [claimingFiftyDayKey, setClaimingFiftyDayKey] = useState(false);
+  const [showFiftyReward, setShowFiftyReward] = useState(false);
+  const [fiftyRewardCount, setFiftyRewardCount] = useState(0);
+  const [fiftyKeyVisible, setFiftyKeyVisible] = useState(false);
+  const [showHundredReward, setShowHundredReward] = useState(false);
+  const [hundredRewardCount, setHundredRewardCount] = useState(0);
+  const [hundredRewardVisible, setHundredRewardVisible] = useState(false);
+  const [selectedHundredGiftId, setSelectedHundredGiftId] = useState(null);
+  const [hundredTermsVisible, setHundredTermsVisible] = useState(false);
+  const [hundredTermsAtBottom, setHundredTermsAtBottom] = useState(false);
+  const [hundredTermsAccepted, setHundredTermsAccepted] = useState(false);
+  const hundredTermsScrollRef = useRef(null);
+  const [claimingHundredReward, setClaimingHundredReward] = useState(false);
+  const [claimedHundredGift, setClaimedHundredGift] = useState(null);
+  const [downloadingGiftLetter, setDownloadingGiftLetter] = useState(false);
+  const [hundredClaimNotice, setHundredClaimNotice] = useState(null);
+  const [hundredSkyShotKey, setHundredSkyShotKey] = useState(null);
+  const hundredVisitCelebrationShown = useRef(false);
+  const [hundredClaimMessage, setHundredClaimMessage] = useState("");
   const [celebrating, setCelebrating] = useState(false);
   const [streakCelebration, setStreakCelebration] = useState(null);
   const [previewStreakImage, setPreviewStreakImage] = useState(false);
@@ -127,10 +161,16 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
 
   const questions = challenge?.questions || [];
   const question = questions[index];
+  const selectedHundredGift = (challenge?.streakGifts || []).find((gift) => gift.id === selectedHundredGiftId);
   const streakCountedToday = Boolean(
     challenge?.status === "completed" &&
       challenge?.streakQualified &&
       String(streak?.lastCreditedDate || "") === String(challenge?.localDate || ""),
+  );
+  const fiftyDayKeyClaimed = Boolean(
+    (streak?.rewardClaims || []).some(
+      (claim) => String(claim.localDate) === "milestone-50" && claim.type === "restore-key",
+    ),
   );
 
   const preventQuestionCapture = (event) => {
@@ -281,6 +321,351 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
     }
   };
 
+  const claimFiftyDayKey = async () => {
+    if (claimingFiftyDayKey || Number(streak?.currentStreak || 0) < 50 || fiftyDayKeyClaimed) return false;
+    setClaimingFiftyDayKey(true);
+    setError("");
+    try {
+      const result = await apiRequest("/api/daily-streak/milestone-50/claim", {
+        method: "POST",
+        body: "{}",
+      });
+      setData((previous) => ({ ...previous, streak: result.streak }));
+      return true;
+    } catch (claimError) {
+      setError(claimError.message || "Could not claim the 50-day reward.");
+      return false;
+    } finally {
+      setClaimingFiftyDayKey(false);
+    }
+  };
+
+  const openFiftyReward = () => {
+    setFiftyRewardCount(0);
+    setShowFiftyReward(true);
+  };
+
+  const openHundredReward = () => {
+    setHundredRewardCount(0);
+    setHundredRewardVisible(false);
+    const existingClaim = (streak?.rewardClaims || []).find((claim) => (
+      String(claim.localDate) === "milestone-100" && claim.type === "100-day-gift"
+    ));
+    setClaimedHundredGift(existingClaim || null);
+    setSelectedHundredGiftId(existingClaim?.giftId || null);
+    setHundredTermsVisible(false);
+    setHundredTermsAtBottom(false);
+    setHundredTermsAccepted(false);
+    setHundredClaimMessage("");
+    setShowHundredReward(true);
+  };
+
+  const openHundredTerms = () => {
+    if (!selectedHundredGiftId) return;
+    setHundredTermsVisible(true);
+    setHundredTermsAtBottom(false);
+    setHundredTermsAccepted(false);
+  };
+
+  useEffect(() => {
+    if (!data) return undefined;
+    const openReward = () => openHundredReward();
+    window.addEventListener('daily-streak:open-100-reward', openReward);
+    if (sessionStorage.getItem('open-100-day-reward') === '1') {
+      sessionStorage.removeItem('open-100-day-reward');
+      window.setTimeout(openReward, 0);
+    }
+    return () => window.removeEventListener('daily-streak:open-100-reward', openReward);
+  }, [data]);
+
+  useEffect(() => {
+    if (!hundredTermsVisible) return undefined;
+    const checkScrollableContent = () => {
+      const element = hundredTermsScrollRef.current;
+      if (element && element.scrollHeight <= element.clientHeight + 8) {
+        setHundredTermsAtBottom(true);
+      }
+    };
+    const timer = window.setTimeout(checkScrollableContent, 0);
+    return () => window.clearTimeout(timer);
+  }, [hundredTermsVisible, selectedHundredGiftId]);
+
+  const handleHundredTermsScroll = (event) => {
+    const element = event.currentTarget;
+    if (element.scrollTop + element.clientHeight >= element.scrollHeight - 8) {
+      setHundredTermsAtBottom(true);
+    }
+  };
+
+  const claimHundredReward = async () => {
+    if (claimingHundredReward || !selectedHundredGiftId || !hundredTermsAccepted) return;
+    if (Number(streak?.currentStreak || 0) < 100) {
+      setHundredClaimMessage("Reach 100 days to claim this reward.");
+      return;
+    }
+    setClaimingHundredReward(true);
+    setError("");
+    try {
+      const result = await apiRequest("/api/daily-streak/milestone-100/claim", {
+        method: "POST",
+        body: JSON.stringify({ giftId: selectedHundredGiftId, termsAccepted: true }),
+      });
+      if (result.popupMessage) {
+        window.dispatchEvent(new CustomEvent("student-message:new", { detail: result.popupMessage }));
+      }
+      setClaimedHundredGift(result.claim);
+      setHundredClaimNotice({ ...result.claim, imageData: selectedHundredGift?.image?.imageData });
+      playHundredSkyShots();
+      window.setTimeout(() => setHundredClaimNotice(null), 4500);
+      setData((previous) => ({ ...previous, streak: result.streak }));
+    } catch (claimError) {
+      setError(claimError.message || "Could not claim the 100-day reward.");
+    } finally {
+      setClaimingHundredReward(false);
+    }
+  };
+
+  const downloadClaimedGiftLetter = async () => {
+    if (!claimedHundredGift || downloadingGiftLetter) return;
+    setDownloadingGiftLetter(true);
+    try {
+      const gift = (challenge?.streakGifts || []).find((item) => item.id === claimedHundredGift.giftId);
+      const studentName = getStoredAuth()?.user?.name || "Student";
+      const loadImage = (source) => new Promise((resolve) => {
+        if (!source) return resolve(null);
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        image.src = source;
+      });
+      const [logoImage, giftImage, signatureImage] = await Promise.all([
+        loadImage(logo),
+        loadImage(gift?.image?.imageData),
+        loadImage(signature),
+      ]);
+      const canvas = document.createElement("canvas");
+      canvas.width = 1200;
+      canvas.height = 1700;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#fffdf7";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = "#0f766e";
+      context.lineWidth = 18;
+      context.strokeRect(24, 24, 1152, 1652);
+      if (logoImage) context.drawImage(logoImage, 540, 55, 120, 120);
+      context.textAlign = "center";
+      context.fillStyle = "#b45309";
+      context.font = "800 28px Arial";
+      context.fillText("INNOVATIVE SCIENCE 2", 600, 220);
+      context.fillStyle = "#0f172a";
+      context.font = "bold 44px Georgia";
+      context.fillText("100-Day Streak Reward Letter", 600, 290);
+      context.textAlign = "left";
+      context.fillStyle = "#334155";
+      context.font = "24px Arial";
+      context.fillText(`Student: ${studentName}`, 90, 365);
+      context.fillText(`Gift: ${claimedHundredGift.giftName || gift?.name || "Reward"}`, 90, 405);
+      if (giftImage) context.drawImage(giftImage, 90, 445, 210, 170);
+      context.fillStyle = "#0f172a";
+      context.font = "bold 26px Arial";
+      context.fillText("Letter", 90, 680);
+      context.fillStyle = "#334155";
+      context.font = "22px Arial";
+      const richLines = [];
+      let currentLine = [];
+      const breakLine = () => {
+        if (currentLine.length) richLines.push(currentLine);
+        currentLine = [];
+      };
+      const addRichText = (text, style) => {
+        String(text).replace(/\s+/g, " ").trim().split(" ").filter(Boolean).forEach((word) => {
+          const font = `${style.bold ? "bold " : ""}22px Arial`;
+          context.font = font;
+          const prefix = currentLine.length ? " " : "";
+          const candidate = `${prefix}${word}`;
+          const width = currentLine.reduce((sum, item) => {
+            context.font = `${item.bold ? "bold " : ""}22px Arial`;
+            return sum + context.measureText(item.text).width;
+          }, 0) + context.measureText(candidate).width;
+          if (width > 980 && currentLine.length) breakLine();
+          currentLine.push({ text: `${currentLine.length ? "" : ""}${word}`, ...style, leadingSpace: currentLine.length > 0 });
+        });
+      };
+      const walkLetter = (node, style = {}) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          addRichText(node.textContent, style);
+          return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = node.tagName.toLowerCase();
+        if (tag === "br") { breakLine(); return; }
+        const nextStyle = { bold: style.bold || tag === "strong" || tag === "b", link: style.link || tag === "a" };
+        node.childNodes.forEach((child) => walkLetter(child, nextStyle));
+        if (["p", "div", "li", "h1", "h2", "h3"].includes(tag)) breakLine();
+      };
+      const parsedLetter = new DOMParser().parseFromString(
+        claimedHundredGift.letterHtml || `<p>${claimedHundredGift.letterText || "Your reward letter is ready."}</p>`,
+        "text/html",
+      );
+      parsedLetter.body.childNodes.forEach((node) => walkLetter(node));
+      breakLine();
+      richLines.slice(0, 21).forEach((lineSegments, lineIndex) => {
+        let x = 90;
+        lineSegments.forEach((segment) => {
+          context.font = `${segment.bold ? "bold " : ""}22px Arial`;
+          context.fillStyle = segment.link ? "#c2410c" : "#334155";
+          const text = `${segment.leadingSpace ? " " : ""}${segment.text}`;
+          context.fillText(text, x, 730 + lineIndex * 34);
+          const width = context.measureText(text).width;
+          if (segment.link) {
+            context.strokeStyle = "#c2410c";
+            context.lineWidth = 1;
+            context.beginPath(); context.moveTo(x, 734 + lineIndex * 34); context.lineTo(x + width, 734 + lineIndex * 34); context.stroke();
+          }
+          x += width;
+        });
+      });
+      const signatureY = richLines.length > 21 ? 1800 : Math.min(1530, 770 + Math.max(1, richLines.length) * 34 + 100);
+      context.strokeStyle = "#64748b";
+      context.lineWidth = 2;
+      context.beginPath(); context.moveTo(90, signatureY); context.lineTo(420, signatureY); context.stroke();
+      context.beginPath(); context.moveTo(780, signatureY); context.lineTo(1110, signatureY); context.stroke();
+      if (signatureImage) context.drawImage(signatureImage, 815, signatureY - 80, 180, 62);
+      context.fillStyle = "#475569";
+      context.font = "18px Arial";
+      context.fillText("Student Signature", 165, signatureY + 32);
+      context.fillText("Authorized Signature — Rethish Sir", 805, signatureY + 32);
+      context.textAlign = "center";
+      context.font = "18px Arial";
+      context.fillText(`Issued on ${new Date().toLocaleDateString()}`, 600, 1630);
+
+      const pageCanvases = [canvas];
+      let overflowLines = richLines.slice(21);
+      let finalPageLineCount = 0;
+      while (overflowLines.length) {
+        const page = document.createElement("canvas");
+        page.width = 1200; page.height = 1700;
+        const pageContext = page.getContext("2d");
+        pageContext.fillStyle = "#fffdf7"; pageContext.fillRect(0, 0, 1200, 1700);
+        pageContext.strokeStyle = "#0f766e"; pageContext.lineWidth = 18; pageContext.strokeRect(24, 24, 1152, 1652);
+        pageContext.textAlign = "center"; pageContext.fillStyle = "#b45309"; pageContext.font = "800 26px Arial"; pageContext.fillText("INNOVATIVE SCIENCE 2 — REWARD LETTER", 600, 110);
+        pageContext.textAlign = "left"; pageContext.fillStyle = "#334155"; pageContext.font = "18px Arial"; pageContext.fillText("Letter continuation", 90, 160);
+        const pageLines = overflowLines.splice(0, 32);
+        finalPageLineCount = pageLines.length;
+        pageLines.forEach((lineSegments, lineIndex) => {
+          let x = 90;
+          lineSegments.forEach((segment) => {
+            pageContext.font = `${segment.bold ? "bold " : ""}22px Arial`;
+            pageContext.fillStyle = segment.link ? "#c2410c" : "#334155";
+            const text = `${segment.leadingSpace ? " " : ""}${segment.text}`;
+            pageContext.fillText(text, x, 220 + lineIndex * 34);
+            const width = pageContext.measureText(text).width;
+            if (segment.link) { pageContext.strokeStyle = "#c2410c"; pageContext.lineWidth = 1; pageContext.beginPath(); pageContext.moveTo(x, 224 + lineIndex * 34); pageContext.lineTo(x + width, 224 + lineIndex * 34); pageContext.stroke(); }
+            x += width;
+          });
+        });
+        pageCanvases.push(page);
+      }
+      if (pageCanvases.length > 1) {
+        const finalPage = pageCanvases[pageCanvases.length - 1];
+        const finalContext = finalPage.getContext("2d");
+        const signatureYForFinalPage = Math.min(1510, 220 + finalPageLineCount * 34 + 150);
+        finalContext.strokeStyle = "#64748b"; finalContext.lineWidth = 2;
+        finalContext.beginPath(); finalContext.moveTo(90, signatureYForFinalPage); finalContext.lineTo(420, signatureYForFinalPage); finalContext.stroke();
+        finalContext.beginPath(); finalContext.moveTo(780, signatureYForFinalPage); finalContext.lineTo(1110, signatureYForFinalPage); finalContext.stroke();
+        if (signatureImage) finalContext.drawImage(signatureImage, 815, signatureYForFinalPage - 80, 180, 62);
+        finalContext.fillStyle = "#475569"; finalContext.font = "18px Arial"; finalContext.textAlign = "left";
+        finalContext.fillText("Student Signature", 165, signatureYForFinalPage + 32);
+        finalContext.fillText("Authorized Signature — Rethish Sir", 805, signatureYForFinalPage + 32);
+        finalContext.textAlign = "center"; finalContext.fillText(`Issued on ${new Date().toLocaleDateString()}`, 600, 1630);
+      }
+      const encoder = new TextEncoder(); const chunks = []; const offsets = []; let length = 0;
+      const add = (chunk) => { const bytes = typeof chunk === "string" ? encoder.encode(chunk) : chunk; chunks.push(bytes); length += bytes.length; };
+      const object = (number, content) => { offsets[number] = length; add(`${number} 0 obj\n${content}\nendobj\n`); };
+      add("%PDF-1.3\n%\xFF\xFF\xFF\xFF\n");
+      object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+      const pageObjects = pageCanvases.map((_, index) => 3 + index * 3);
+      object(2, `<< /Type /Pages /Kids [${pageObjects.map((number) => `${number} 0 R`).join(" ")}] /Count ${pageCanvases.length} >>`);
+      pageCanvases.forEach((page, index) => {
+        const pageNumber = 3 + index * 3;
+        const contentNumber = pageNumber + 1;
+        const imageNumber = pageNumber + 2;
+        object(pageNumber, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im0 ${imageNumber} 0 R >> >> /Contents ${contentNumber} 0 R >>`);
+        const content = "q\n595 0 0 842 0 0 cm\n/Im0 Do\nQ";
+        object(contentNumber, `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`);
+        const jpegBytes = Uint8Array.from(atob(page.toDataURL("image/jpeg", 0.94).split(",")[1]), (character) => character.charCodeAt(0));
+        add(`${imageNumber} 0 obj\n<< /Type /XObject /Subtype /Image /Width 1200 /Height 1700 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`);
+        add(jpegBytes); add("\nendstream\nendobj\n");
+      });
+      const xrefOffset = length;
+      const objectCount = 3 + pageCanvases.length * 3;
+      add(`xref\n0 ${objectCount}\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objectCount} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob(chunks, { type: "application/pdf" }));
+      link.download = `innovative-science-100-day-reward-${String(studentName).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.pdf`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } finally {
+      setDownloadingGiftLetter(false);
+    }
+  };
+
+  const playHundredSkyShots = useCallback(() => {
+    setHundredSkyShotKey(Date.now());
+    window.setTimeout(() => setHundredSkyShotKey(null), 4200);
+  }, []);
+
+  useEffect(() => {
+    const hasClaimedHundredReward = (streak?.rewardClaims || []).some((claim) => (
+      String(claim.localDate) === "milestone-100" && claim.type === "100-day-gift"
+    ));
+    if (hasClaimedHundredReward && !hundredVisitCelebrationShown.current) {
+      hundredVisitCelebrationShown.current = true;
+      playHundredSkyShots();
+    }
+  }, [playHundredSkyShots, streak?.rewardClaims]);
+
+
+  useEffect(() => {
+    if (!showFiftyReward) return undefined;
+    setFiftyRewardCount(0);
+    setFiftyKeyVisible(false);
+    const startedAt = Date.now();
+    const targetDays = 50;
+    let revealTimer;
+    const timer = window.setInterval(() => {
+      const progress = Math.min(1, (Date.now() - startedAt) / 1200);
+      setFiftyRewardCount(Math.round(progress * targetDays));
+      if (progress >= 1) {
+        window.clearInterval(timer);
+        revealTimer = window.setTimeout(() => setFiftyKeyVisible(true), 650);
+      }
+    }, 24);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(revealTimer);
+    };
+  }, [showFiftyReward, streak?.currentStreak]);
+
+  useEffect(() => {
+    if (!showHundredReward) return undefined;
+    const startedAt = Date.now();
+    let revealTimer;
+    const timer = window.setInterval(() => {
+      const progress = Math.min(1, (Date.now() - startedAt) / 1400);
+      setHundredRewardCount(Math.round(progress * 100));
+      if (progress >= 1) {
+        window.clearInterval(timer);
+        revealTimer = window.setTimeout(() => setHundredRewardVisible(true), 650);
+      }
+    }, 24);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(revealTimer);
+    };
+  }, [showHundredReward]);
+
+
   const nextQuestion = () => {
     if (index + 1 < questions.length) {
       goToQuestion(index + 1);
@@ -422,7 +807,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
             </div>
           </section>
         )}
-        <section className="daily-streak-journey mb-4 rounded-[1.6rem] border border-orange-100 bg-gradient-to-br from-white via-orange-50/50 to-amber-50 p-4 shadow-sm sm:p-5">
+        <section className="daily-streak-journey relative mb-4 rounded-[1.6rem] border border-orange-100 bg-gradient-to-br from-white via-orange-50/50 to-amber-50 p-4 shadow-sm sm:p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-black uppercase tracking-[.16em] text-orange-700">
@@ -447,25 +832,49 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
               </button>
             )}
           </div>
-          <div className="relative mt-5 h-3 rounded-full bg-orange-100">
-            <div
-              className="h-3 rounded-full bg-gradient-to-r from-orange-500 via-amber-400 to-yellow-300 transition-all duration-700"
-              style={{ width: `${Math.min(100, Number(streak.currentStreak || 0))}%` }}
-            />
+          <div className="relative mt-5 flex items-center gap-3">
+            <div className="relative flex h-4 min-w-0 flex-1 gap-10">
+            <div className="relative h-4 w-1/2 overflow-hidden rounded-l-full bg-orange-100 shadow-inner">
+              <div
+                className="h-4 rounded-l-full bg-gradient-to-r from-orange-500 to-amber-400 transition-[width] duration-1000 ease-out"
+                style={{ width: `${Math.min(100, (Number(streak.currentStreak || 0) / 50) * 100)}%` }}
+              />
+            </div>
+            <div className="relative h-4 w-1/2 overflow-hidden rounded-r-full bg-amber-100 shadow-inner">
+              <div
+                className="h-4 rounded-r-full bg-gradient-to-r from-amber-400 to-yellow-300 transition-[width] duration-1000 ease-out"
+                style={{ width: `${Math.max(0, Math.min(100, ((Number(streak.currentStreak || 0) - 50) / 50) * 100))}%` }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={openFiftyReward}
+              disabled={claimingFiftyDayKey}
+              className="pointer-events-auto absolute left-1/2 top-1/2 z-10 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border-2 border-white bg-gradient-to-br from-pink-500 via-rose-500 to-orange-400 p-0 text-white leading-none shadow-lg transition hover:scale-110 disabled:cursor-not-allowed"
+              aria-label={fiftyDayKeyClaimed ? "View claimed 50-day restore key" : "Claim 50-day restore key"}
+              title={fiftyDayKeyClaimed ? "View 50-day claimed reward" : Number(streak.currentStreak || 0) < 50 ? "Reach day 50 to unlock" : "Claim one restore key"}
+            >
+              <span className="flex h-5 w-5 items-center justify-center text-white"><Gift size={17} strokeWidth={2.5} /></span>
+            </button>
+            </div>
+            <button type="button" onClick={openHundredReward} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border-2 border-white bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500 p-0 text-white shadow-lg transition hover:scale-110" aria-label="Open 100-day streak gift" title={Number(streak.currentStreak || 0) < 100 ? "Preview the 100-day reward" : "Open 100-day streak gift"}><span className="flex h-5 w-5 items-center justify-center text-white"><Gift size={17} strokeWidth={3} /></span></button>
           </div>
-          <div className="mt-2 flex justify-between text-[10px] font-bold text-orange-700/70">
-            <span>Start</span>
+          <div className="mt-2 grid grid-cols-2 text-[10px] font-bold text-orange-700/70">
+            <span>1–50</span>
+            <span className="text-right">51–100</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[10px] font-black text-slate-500">
+            <span>{fiftyDayKeyClaimed ? "50-day key claimed" : "Gift at day 50"}</span>
             <span>{Math.min(100, Number(streak.currentStreak || 0))}% complete</span>
-            <span>100 days</span>
           </div>
           <div className="mt-4 flex justify-center">
-            <button
+            {Number(streak.currentStreak || 0) >= 100 && <button
               type="button"
               onClick={() => setShowStreakCertificate(true)}
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-5 py-2 text-xs font-black text-white shadow-md shadow-orange-200 transition hover:-translate-y-0.5 hover:shadow-lg"
             >
               <Trophy size={15} /> Claim reward
-            </button>
+            </button>}
           </div>
         </section>
         <section className="daily-practice-hero mb-4 rounded-[1.6rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -1156,7 +1565,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
                 <button type="button" onClick={() => setHistoryDetail(null)} className="mb-4 inline-flex items-center gap-1 text-xs font-black text-slate-500 hover:text-orange-700"><ArrowLeft size={14} /> All history</button>
                 <div className="mb-4 rounded-2xl bg-orange-50 p-4">
                   <p className="text-xs font-black uppercase tracking-wider text-orange-700">{new Date(`${historyDetail.localDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" })}</p>
-                  <p className="mt-1 text-lg font-black text-slate-950">{historyDetail.localDate}</p>
+                  <p className="mt-1 text-lg font-black text-slate-950">{dailyHistoryDateLabel(historyDetail.localDate)}</p>
                   <p className="mt-2 text-xs font-bold text-slate-600">{historyDetail.attemptedCount}/{historyDetail.questionCount} attempted · {historyDetail.correctCount} correct · {historyDetail.score} valid marks</p>
                 </div>
                 <div className="grid gap-3">
@@ -1181,7 +1590,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
                 {historyLoading && <p className="py-10 text-center text-sm font-semibold text-slate-500">Loading history...</p>}
                 {historyError && <p className="rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700">{historyError}</p>}
                 {!historyLoading && !historyError && !history.length && <p className="py-10 text-center text-sm font-semibold text-slate-500">No daily practice history yet.</p>}
-                <div className="grid gap-3">{history.map((item) => <button key={item._id} type="button" onClick={() => openHistoryDetail(item)} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:-translate-y-0.5 hover:border-orange-300 hover:bg-orange-50/40"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wide text-orange-700">{new Date(`${item.localDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" })}</p><p className="mt-1 font-black text-slate-900">{item.localDate}</p></div><ArrowRight size={18} className="text-slate-400" /></div><p className="mt-2 text-xs font-bold text-slate-500">{item.attemptedCount || 0} attempted · {item.correctCount || 0} correct · {item.score || 0} valid marks</p><span className="mt-3 inline-flex rounded-full bg-white px-2.5 py-1 text-[10px] font-black uppercase text-slate-500">{item.status}</span></button>)}</div>
+                <div className="grid gap-3">{history.map((item) => <button key={item._id} type="button" onClick={() => openHistoryDetail(item)} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:-translate-y-0.5 hover:border-orange-300 hover:bg-orange-50/40"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wide text-orange-700">{new Date(`${item.localDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" })}</p><p className="mt-1 font-black text-slate-900">{dailyHistoryDateLabel(item.localDate)}</p></div><ArrowRight size={18} className="text-slate-400" /></div><p className="mt-2 text-xs font-bold text-slate-500">{item.attemptedCount || 0} attempted · {item.correctCount || 0} correct · {item.score || 0} valid marks</p><span className="mt-3 inline-flex rounded-full bg-white px-2.5 py-1 text-[10px] font-black uppercase text-slate-500">{item.status}</span></button>)}</div>
                 {historyDetailLoading && <p className="mt-3 text-center text-xs font-bold text-slate-500">Loading questions...</p>}
               </div>
             )}
@@ -1227,6 +1636,58 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
           </div>
         </div>
       )}
+      {showFiftyReward && (
+        <div className="fixed inset-0 z-[1450] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="50-day streak reward">
+          <div className="relative w-full max-w-sm overflow-hidden rounded-[2rem] border border-orange-100 bg-white p-6 text-center shadow-2xl">
+            <button type="button" onClick={() => setShowFiftyReward(false)} className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-full bg-slate-100 text-slate-500" aria-label="Close reward"><X size={16} /></button>
+            <p className="text-xs font-black uppercase tracking-[.2em] text-orange-600">Streak 50 🔥 Reward</p>
+            <div className={`mt-4 flex items-center justify-center gap-2 text-6xl font-black tabular-nums text-slate-950 transition-all duration-700 ${fiftyRewardCount >= 50 ? "-translate-y-3 scale-75" : "translate-y-0 scale-100"}`}><span>{fiftyRewardCount}</span><span className="text-4xl" aria-hidden="true">🔥</span></div>
+            <p className={`mt-1 text-sm font-bold text-slate-500 transition-all duration-500 ${fiftyRewardCount >= 50 ? "-translate-y-3 opacity-0" : "opacity-100"}`}>days completed</p>
+            <div className={`mx-auto mt-1 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-pink-500 via-rose-500 to-orange-400 text-white shadow-xl transition-all duration-1000 ${fiftyRewardCount >= 50 ? "translate-y-0 scale-100 opacity-100" : "-translate-y-5 scale-75 opacity-0"}`}>
+              <KeyRound size={38} strokeWidth={2.2} />
+            </div>
+            {fiftyKeyVisible && <>
+              <p className="mt-4 animate-[reward-pop_700ms_ease-out] font-black text-slate-900">One restore key unlocked</p>
+              {fiftyDayKeyClaimed && <div className="mt-3 inline-flex animate-[reward-pop_700ms_ease-out] items-center gap-2 rounded-full bg-emerald-100 px-4 py-2 text-sm font-black text-emerald-700"><CheckCircle2 size={17} /> Reward claimed successfully</div>}
+              <button type="button" onClick={claimFiftyDayKey} disabled={claimingFiftyDayKey || fiftyDayKeyClaimed} className={`mt-5 inline-flex min-h-11 animate-[reward-pop_900ms_ease-out] items-center justify-center gap-2 rounded-full px-6 py-2 text-sm font-black text-white shadow-lg transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-100 ${fiftyDayKeyClaimed ? "bg-emerald-600" : "bg-gradient-to-r from-pink-500 via-rose-500 to-orange-400 disabled:opacity-50"}`}>
+                <Gift size={17} /> {fiftyDayKeyClaimed ? "Reward claimed" : claimingFiftyDayKey ? "Claiming..." : "Claim reward"}
+              </button>
+            </>}
+          </div>
+        </div>
+      )}
+      {showHundredReward && (
+        <div className="fixed inset-0 z-[1450] flex items-center justify-center bg-slate-950/65 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="100-day streak reward">
+          <div ref={hundredTermsScrollRef} onScroll={handleHundredTermsScroll} className={`relative h-[100dvh] max-h-[100dvh] w-full max-w-none overflow-y-auto border border-orange-100 bg-white p-5 text-center shadow-2xl sm:p-8 ${hundredTermsVisible ? "hundred-review" : ""}`}>
+            <button type="button" onClick={() => setShowHundredReward(false)} className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-full bg-slate-100 text-slate-500" aria-label="Close reward"><X size={16} /></button>
+            {claimedHundredGift ? <div className="mt-5 text-left">
+              <p className="text-center text-xs font-black uppercase tracking-[.2em] text-orange-600">Reward claimed successfully</p>
+              <h2 className="mt-3 text-center text-2xl font-black text-slate-950 sm:text-3xl">Your {claimedHundredGift.giftName} letter</h2>
+              <div className="mt-5 flex items-center gap-3 rounded-2xl border-2 border-orange-400 bg-orange-50 p-3 text-left"><img src={challenge.streakGifts?.find((gift) => gift.id === claimedHundredGift.giftId)?.image?.imageData} alt={claimedHundredGift.giftName} className="h-16 w-16 shrink-0 rounded-xl object-cover" /><span className="min-w-0 flex-1 text-sm font-black text-slate-900">{claimedHundredGift.giftName}</span><Check size={18} className="shrink-0 text-orange-600" /></div>
+              <article className="streak-gift-letter mt-5 rounded-2xl border border-amber-200 bg-[#fffdf7] p-5 text-left text-sm leading-7 text-slate-700 shadow-inner sm:p-8" dangerouslySetInnerHTML={{ __html: claimedHundredGift.letterHtml || `<p>${claimedHundredGift.letterText || "Your reward letter is ready."}</p>` }} />
+              <button type="button" onClick={downloadClaimedGiftLetter} disabled={downloadingGiftLetter} className="mx-auto mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-black text-white shadow-lg transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"><Download size={17} /> {downloadingGiftLetter ? "Preparing PDF..." : "Download reward letter"}</button>
+            </div> : <>
+              <p className="text-xs font-black uppercase tracking-[.2em] text-orange-600">Streak 100 🔥 Reward</p>
+              <div className={`mt-4 flex items-center justify-center gap-2 text-6xl font-black tabular-nums text-slate-950 transition-all duration-700 ${hundredRewardVisible ? "-translate-y-3 scale-75" : "translate-y-0 scale-100"}`}><span>{hundredRewardCount}</span><span className="text-4xl" aria-hidden="true">🔥</span></div>
+              <p className={`mt-1 text-sm font-bold text-slate-500 transition-all duration-500 ${hundredRewardVisible ? "-translate-y-3 opacity-0" : "opacity-100"}`}>days completed</p>
+              {(!challenge.streakGifts || challenge.streakGifts.length === 0) && <div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">The admin has not added a gift yet.</div>}
+              {hundredRewardVisible && !hundredTermsVisible && challenge.streakGifts?.length > 0 && <div className="mt-4 grid gap-3 text-left sm:grid-cols-2">{challenge.streakGifts.map((gift) => { const selectedGift = selectedHundredGiftId === gift.id; return <button key={gift.id} type="button" onClick={() => setSelectedHundredGiftId(gift.id)} className={`flex min-w-0 items-center gap-3 rounded-2xl border p-3 text-left transition ${selectedGift ? "border-orange-500 bg-orange-100 ring-2 ring-orange-300" : "border-amber-200 bg-amber-50 hover:border-orange-300"}`}><img src={gift.image?.imageData} alt={gift.name} className="h-16 w-16 shrink-0 rounded-xl object-cover" /><span className="min-w-0 flex-1 text-sm font-black text-slate-900">{gift.name}</span>{selectedGift && <Check size={18} className="shrink-0 text-orange-600" />}</button> })}</div>}
+              {hundredRewardVisible && !hundredTermsVisible && challenge.streakGifts?.length > 0 && <button type="button" onClick={openHundredTerms} disabled={!selectedHundredGiftId} className="mx-auto mt-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-6 py-2 text-sm font-black text-white shadow-lg transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"><Gift size={17} /> Claim reward</button>}
+              {hundredRewardVisible && hundredTermsVisible && selectedHundredGift && <>
+                <div className="mt-4 flex items-center gap-3 rounded-2xl border-2 border-orange-400 bg-orange-50 p-3 text-left"><img src={selectedHundredGift.image?.imageData} alt={selectedHundredGift.name} className="h-16 w-16 shrink-0 rounded-xl object-cover" /><span className="min-w-0 flex-1 text-sm font-black text-slate-900">{selectedHundredGift.name}</span><Check size={18} className="shrink-0 text-orange-600" /></div>
+                <article className="streak-gift-letter mt-4 rounded-xl border border-orange-100 bg-[#fffdf7] p-4 text-left text-xs leading-6 text-slate-600" dangerouslySetInnerHTML={{ __html: selectedHundredGift.letterHtml || `<p>${selectedHundredGift.letterText || "Your reward letter is ready."}</p>` }} />
+                {hundredTermsAtBottom && <div className="fixed inset-x-0 bottom-0 z-20 bg-white px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-10px_30px_rgba(15,23,42,.12)] sm:px-8"><div className="mx-auto max-w-2xl">
+                  {hundredClaimMessage && <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-center text-xs font-black text-amber-800">{hundredClaimMessage}</p>}
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50 p-3 text-left text-xs font-semibold leading-5 text-slate-600"><input type="checkbox" checked={hundredTermsAccepted} onChange={(event) => setHundredTermsAccepted(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-orange-500" />I agree to the reward terms and policy.</label>
+                  <button type="button" onClick={claimHundredReward} disabled={!hundredTermsAccepted || claimingHundredReward} className="mx-auto mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-6 py-2 text-sm font-black text-white shadow-lg transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"><Gift size={17} /> {claimingHundredReward ? "Claiming..." : "Claim reward"}</button>
+                </div></div>}
+              </>}
+            </>}
+          </div>
+        </div>
+      )}
+      {hundredClaimNotice && <div className="fixed inset-x-0 top-4 z-[2200] mx-auto flex w-[calc(100%-2rem)] max-w-md items-center gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-3 text-left shadow-2xl streak-claim-success" role="status"><div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-xl bg-white"><img src={hundredClaimNotice.imageData} alt={hundredClaimNotice.giftName} className="h-full w-full object-cover" /></div><div className="min-w-0"><p className="text-xs font-black uppercase tracking-[.15em] text-emerald-700">Reward claimed</p><p className="truncate text-sm font-black text-emerald-950">{hundredClaimNotice.giftName}</p><p className="text-xs font-semibold text-emerald-700">Your gift has been claimed successfully.</p></div><CheckCircle2 className="ml-auto shrink-0 text-emerald-600" size={24} /></div>}
+      {hundredSkyShotKey && <SkyShotCelebration key={hundredSkyShotKey} />}
       {showStreakCertificate && (
         <StreakCertificateModal
           challenge={challenge}
@@ -1238,6 +1699,14 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
     </main>
   );
 };
+
+const SkyShotCelebration = () => (
+  <div className="sky-shot-celebration" aria-live="polite" aria-label="100-day streak celebration">
+    {[0, 1, 2].map((shot) => <div key={shot} className={`sky-shot sky-shot-${shot}`} aria-hidden="true">
+      {Array.from({ length: 12 }, (_, index) => <span key={index} style={{ "--shot-angle": `${index * 30}deg` }} />)}
+    </div>)}
+  </div>
+);
 
 const StreakCertificateModal = ({ challenge, unlocked, onClose }) => {
   const [downloading, setDownloading] = useState(false);
@@ -1628,7 +2097,7 @@ const Completed = ({ challenge, streak, celebrate = false }) => {
           <span>100 days</span>
         </div>
         <>
-          <button
+          {currentStreak >= 100 && <button
             type="button"
             onClick={() => setShowReward(true)}
             className="ml-auto mt-3 flex w-fit min-h-8 items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-violet-600 via-fuchsia-600 to-amber-500 px-4 py-1.5 text-xs font-black text-white shadow-md shadow-fuchsia-200 transition hover:scale-[1.03] hover:shadow-lg"
@@ -1636,7 +2105,7 @@ const Completed = ({ challenge, streak, celebrate = false }) => {
             <Sparkles size={13} />
             Claim reward
             <Sparkles size={13} />
-          </button>
+          </button>}
         </>
       </div>
       <div className="bg-gradient-to-br from-teal-700 to-cyan-700 px-4 py-7 text-center text-white sm:px-8 sm:py-9">

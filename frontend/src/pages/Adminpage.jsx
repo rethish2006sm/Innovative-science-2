@@ -70,6 +70,12 @@ const CLASS_POST_CATEGORIES = [
 
 const STUDENT_PAGE_SIZE = 20
 
+const rememberAdminScrollPosition = () => {
+  if (typeof window !== 'undefined') {
+    sessionStorage.setItem('admin-scroll-y', String(window.scrollY))
+  }
+}
+
 const syncClassShareTargets = (classItems = [], currentTargets = []) => {
   const targetMap = new Map(currentTargets.map((target) => [String(target.classId), target]))
 
@@ -112,6 +118,17 @@ const Adminpage = ({ initialTab = 'students' }) => {
   const isAdmin = Boolean(auth?.user?.isAdmin)
   const [activeTab, setActiveTab] = useState(initialTab)
   const [science, setScience] = useState(() => getActiveScience())
+
+  useEffect(() => {
+    const savedScrollY = Number(sessionStorage.getItem('admin-scroll-y'))
+    if (!Number.isFinite(savedScrollY)) return undefined
+    const restore = () => window.scrollTo(0, savedScrollY)
+    const firstFrame = window.requestAnimationFrame(() => {
+      restore()
+      window.setTimeout(restore, 80)
+    })
+    return () => window.cancelAnimationFrame(firstFrame)
+  }, [])
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [studentClassFilter, setStudentClassFilter] = useState('')
@@ -137,6 +154,13 @@ const Adminpage = ({ initialTab = 'students' }) => {
   const [streakImage, setStreakImage] = useState(null)
   const [streakImageFile, setStreakImageFile] = useState(null)
   const [streakImageSaving, setStreakImageSaving] = useState(false)
+  const [streakGifts, setStreakGifts] = useState([])
+  const [streakGiftName, setStreakGiftName] = useState('')
+  const [streakGiftLetter, setStreakGiftLetter] = useState('')
+  const [streakGiftFile, setStreakGiftFile] = useState(null)
+  const [streakGiftSaving, setStreakGiftSaving] = useState(false)
+  const [editingStreakGiftId, setEditingStreakGiftId] = useState('')
+  const streakGiftLetterRef = useRef(null)
   const [streakResetting, setStreakResetting] = useState(false)
   const [streakResetSuccess, setStreakResetSuccess] = useState('')
   const [reports, setReports] = useState([])
@@ -941,6 +965,57 @@ const Adminpage = ({ initialTab = 'students' }) => {
     try {
       const data = await apiRequest('/api/admin/daily-streak/settings', { cache: 'no-store' })
       setStreakImage(data.setting || null)
+      setStreakGifts(data.setting?.gifts || [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const saveStreakGift = async (event) => {
+    event.preventDefault()
+    setStreakGiftSaving(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.append('name', streakGiftName.trim())
+      formData.append('letterHtml', streakGiftLetterRef.current?.innerHTML || streakGiftLetter)
+      if (streakGiftFile) formData.append('image', streakGiftFile)
+      const endpoint = editingStreakGiftId ? `/api/admin/daily-streak/settings/gifts/${editingStreakGiftId}` : '/api/admin/daily-streak/settings/gifts'
+      const data = await apiRequest(endpoint, { method: editingStreakGiftId ? 'PUT' : 'POST', body: formData })
+      setStreakGifts(data.setting?.gifts || [])
+      setStreakGiftName('')
+      setStreakGiftLetter('')
+      setStreakGiftFile(null)
+      setEditingStreakGiftId('')
+      event.target.reset()
+      if (streakGiftLetterRef.current) streakGiftLetterRef.current.innerHTML = ''
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setStreakGiftSaving(false)
+    }
+  }
+
+  const editStreakGift = (gift) => {
+    setEditingStreakGiftId(gift.id)
+    setStreakGiftName(gift.name || '')
+    setStreakGiftLetter(gift.letterHtml || gift.letterText || '')
+    if (streakGiftLetterRef.current) streakGiftLetterRef.current.innerHTML = gift.letterHtml || gift.letterText || ''
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const cancelEditStreakGift = () => {
+    setEditingStreakGiftId('')
+    setStreakGiftName('')
+    setStreakGiftLetter('')
+    setStreakGiftFile(null)
+    if (streakGiftLetterRef.current) streakGiftLetterRef.current.innerHTML = ''
+  }
+
+  const removeStreakGift = async (giftId) => {
+    try {
+      const data = await apiRequest(`/api/admin/daily-streak/settings/gifts/${giftId}`, { method: 'DELETE' })
+      setStreakGifts(data.setting?.gifts || [])
     } catch (err) {
       setError(err.message)
     }
@@ -1286,7 +1361,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
       return () => window.clearInterval(timer)
     }
 
-    if (activeTab === 'streak') loadStreakImage()
+    if (activeTab === 'streak' || activeTab === 'streak-gifts') loadStreakImage()
   }, [activeTab])
 
   const openStudentDetail = async (student) => {
@@ -2071,14 +2146,14 @@ const Adminpage = ({ initialTab = 'students' }) => {
             </label>
           </div>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            {['students', 'classes', 'streak', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
+          <div className="mt-6 flex flex-wrap gap-3" onClickCapture={rememberAdminScrollPosition}>
+            {['students', 'classes', 'streak', 'streak-gifts', 'reports', 'contacts', 'feedback', 'deletion-requests', 'message'].map((tab) => (
               <Link
                 key={tab}
                 to={`/admin/${tab}`}
                 className={`rounded-full px-5 py-3 text-sm font-black capitalize transition ${activeTab === tab ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
               >
-                {tab === 'class-board' ? 'class board' : tab === 'deletion-requests' ? 'deletion requests' : tab}
+                {tab === 'class-board' ? 'class board' : tab === 'deletion-requests' ? 'deletion requests' : tab === 'streak-gifts' ? '100-day gifts' : tab}
               </Link>
             ))}
             <Link
@@ -2165,6 +2240,25 @@ const Adminpage = ({ initialTab = 'students' }) => {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+              {activeTab === 'streak-gifts' && (
+                <div className="rounded-[1.75rem] border border-amber-200 bg-white p-5 shadow-sm sm:p-7">
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-amber-50 text-amber-600"><Star className="h-6 w-6" /></div>
+                    <div><h2 className="font-serif text-3xl text-slate-950">100-day streak gifts</h2><p className="mt-1 text-sm leading-6 text-slate-600">Add multiple gift options with a gift name, image, and letter. Students choose one gift, agree to the terms, and receive its letter after claiming.</p></div>
+                  </div>
+                  <form onSubmit={saveStreakGift} className="mt-6 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+                    <label className="grid gap-2 text-sm font-bold text-slate-600">Gift name<input value={streakGiftName} onChange={(event) => setStreakGiftName(event.target.value)} placeholder="Smart watch" className="h-11 rounded-xl border border-amber-200 bg-white px-3 text-slate-900 outline-none focus:border-amber-400" /></label>
+                    <label className="grid gap-2 text-sm font-bold text-slate-600">Gift image<input type="file" accept="image/*" onChange={(event) => setStreakGiftFile(event.target.files?.[0] || null)} className="h-11 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm" /></label>
+                    <div className="sm:col-span-2">
+                      <p className="mb-2 text-sm font-bold text-slate-600">Gift letter</p>
+                      <div className="mb-2 flex gap-2"><button type="button" onClick={() => { streakGiftLetterRef.current?.focus(); document.execCommand('bold') }} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-black text-amber-700"><Bold className="h-3.5 w-3.5" /> Bold</button><button type="button" onClick={() => { streakGiftLetterRef.current?.focus(); const url = window.prompt('Enter a full link, for example https://example.com'); if (url) document.execCommand('createLink', false, url) }} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-black text-amber-700"><Link2 className="h-3.5 w-3.5" /> Insert link</button></div>
+                      <div ref={streakGiftLetterRef} contentEditable suppressContentEditableWarning onInput={(event) => setStreakGiftLetter(event.currentTarget.innerHTML)} className="min-h-28 rounded-xl border border-amber-200 bg-white p-3 text-sm leading-6 text-slate-700 outline-none focus:border-amber-400" data-placeholder="Write the letter for this gift..." />
+                    </div>
+                    <div className="flex gap-2"><button type="submit" disabled={streakGiftSaving} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 font-bold text-white hover:bg-amber-700 disabled:opacity-60"><Upload className="h-4 w-4" />{streakGiftSaving ? 'Saving...' : editingStreakGiftId ? 'Update gift' : 'Save gift'}</button>{editingStreakGiftId && <button type="button" onClick={cancelEditStreakGift} className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600">Cancel</button>}</div>
+                  </form>
+                  {streakGifts.length > 0 && <div className="mt-6 grid gap-3 sm:grid-cols-2">{streakGifts.map((gift) => <div key={gift.id} className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50/40 p-3"><img src={gift.image?.imageData} alt={gift.name} className="h-16 w-16 rounded-xl object-cover" /><p className="min-w-0 flex-1 truncate text-sm font-black text-slate-800">{gift.name}</p><button type="button" onClick={() => editStreakGift(gift)} className="rounded-lg p-2 text-amber-700 hover:bg-amber-100" aria-label={`Edit ${gift.name}`}><Edit3 className="h-4 w-4" /></button><button type="button" onClick={() => removeStreakGift(gift.id)} className="rounded-lg p-2 text-red-600 hover:bg-red-50" aria-label={`Remove ${gift.name}`}><Trash2 className="h-4 w-4" /></button></div>)}</div>}
                 </div>
               )}
               {activeTab === 'students' && (

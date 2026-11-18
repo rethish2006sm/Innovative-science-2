@@ -68,6 +68,32 @@ const AdminAnalysisPage = () => {
     return rows.sort((a, b) => Number(b.averagePercent || 0) - Number(a.averagePercent || 0))
   }, [activeView, students])
 
+  const updateStudentStreakLocally = useCallback((studentId, nextStreak) => {
+    if (!nextStreak) return
+    setStudents((current) => current.map((student) => String(student.id) === String(studentId)
+      ? { ...student, currentStreak: Number(nextStreak.currentStreak || 0), restoreKeys: Number(nextStreak.restoreKeys || 0), streakBroken: Boolean(nextStreak.streakBrokenAt && Number(nextStreak.currentStreak || 0) === 0), streakRestoreAvailable: Boolean(nextStreak.streakBrokenAt) }
+      : student))
+  }, [])
+
+  const updateStudentBrainCellsLocally = useCallback((studentId, totalBrainCells, previousTotal) => {
+    setStudents((current) => current.map((student) => String(student.id) === String(studentId)
+      ? { ...student, totalBrainCells: Number(totalBrainCells || 0) }
+      : student))
+    setSummary((current) => ({ ...current, totalBrainCells: Number(current.totalBrainCells || 0) + Number(totalBrainCells || 0) - Number(previousTotal || 0) }))
+  }, [])
+
+  useEffect(() => {
+    const handleStreakUpdate = (event) => updateStudentStreakLocally(event.detail?.studentId, event.detail?.streak)
+    window.addEventListener('admin-streak:updated', handleStreakUpdate)
+    return () => window.removeEventListener('admin-streak:updated', handleStreakUpdate)
+  }, [updateStudentStreakLocally])
+
+  useEffect(() => {
+    const handleBrainCellsUpdate = (event) => updateStudentBrainCellsLocally(event.detail?.studentId, event.detail?.totalBrainCells, event.detail?.previousTotal)
+    window.addEventListener('admin-brain-cells:updated', handleBrainCellsUpdate)
+    return () => window.removeEventListener('admin-brain-cells:updated', handleBrainCellsUpdate)
+  }, [updateStudentBrainCellsLocally])
+
   if (!isAdmin) return <Navigate to="/" replace />
 
   return (
@@ -133,7 +159,7 @@ const AdminAnalysisPage = () => {
             {error && <p className="m-4 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
             {loading ? <div className="p-8 text-center text-sm font-semibold text-slate-500">Loading student analysis...</div> : visibleStudents.length ? (
               <div className="grid gap-3 p-3 sm:p-4">
-                {visibleStudents.map((student) => <AnalysisRow key={student.id} student={student} view={activeView} />)}
+                {visibleStudents.map((student) => <AnalysisRow key={student.id} student={student} view={activeView} onStudentUpdated={updateStudentStreakLocally} />)}
               </div>
             ) : <div className="p-10 text-center text-sm font-semibold text-slate-500">No students match the selected filters.</div>}
           </div>
@@ -148,7 +174,7 @@ const Metric = ({ label, value, tone = 'sky' }) => {
   return <div className={`rounded-3xl p-4 ${tones[tone]}`}><p className="text-xs font-black uppercase tracking-[0.18em] opacity-70">{label}</p><p className="mt-2 text-2xl font-black">{value}</p></div>
 }
 
-const AnalysisRow = ({ student, view }) => {
+const AnalysisRow = ({ student, view, onStudentUpdated }) => {
   const performance = [
     ['Average', `${Number(student.averagePercent || 0)}%`],
     ['Attempts', Number(student.attemptCount || 0)],
@@ -168,12 +194,12 @@ const SetStreakControl = ({ student }) => {
     setMessage('')
     setSaving(true)
     try {
-      await apiRequest(`/api/admin/streaks/${student.id}/set`, {
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/set`, {
         method: 'POST',
         body: JSON.stringify({ streak: Number(value) }),
       })
+      window.dispatchEvent(new CustomEvent('admin-streak:updated', { detail: { studentId: student.id, streak: data.streak } }))
       setMessage('Updated')
-      window.location.reload()
     } catch (error) {
       setMessage(error.message || 'Could not update')
     } finally {
@@ -181,7 +207,28 @@ const SetStreakControl = ({ student }) => {
     }
   }
 
-  return <form onSubmit={save} className="mt-3 flex flex-wrap items-end gap-2 rounded-2xl border border-orange-200 bg-orange-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-orange-800">Set streak<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-orange-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-orange-400" /></label><button type="submit" disabled={saving || value === ''} className="h-9 rounded-xl bg-orange-600 px-3 text-xs font-black text-white transition hover:bg-orange-700 disabled:opacity-60">{saving ? 'Saving...' : 'Update streak'}</button>{message && <span className="text-xs font-bold text-orange-800">{message}</span>}</form>
+  return <form onSubmit={save} className="mt-3 flex flex-wrap items-end gap-2 rounded-2xl border border-orange-200 bg-orange-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-orange-800">Set streak<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-orange-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-orange-400" /></label><button type="submit" disabled={saving || value === ''} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-orange-600 px-3 text-xs font-black text-white transition hover:bg-orange-700 disabled:opacity-60">{saving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}{saving ? 'Saving...' : 'Update streak'}</button>{message && <span className="text-xs font-bold text-orange-800">{message}</span>}</form>
+}
+
+const SetBrainCellsControl = ({ student }) => {
+  const [value, setValue] = useState(String(Number(student.totalBrainCells || 0)))
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const save = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setMessage('')
+    try {
+      const data = await apiRequest(`/api/admin/users/${student.id}/brain-cells`, { method: 'POST', body: JSON.stringify({ totalBrainCells: Number(value) }) })
+      window.dispatchEvent(new CustomEvent('admin-brain-cells:updated', { detail: { studentId: student.id, totalBrainCells: data.user.totalBrainCells, previousTotal: Number(student.totalBrainCells || 0) } }))
+      setMessage('Updated')
+    } catch (error) {
+      setMessage(error.message || 'Could not update')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return <form onSubmit={save} className="mt-2 flex flex-wrap items-end gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-cyan-800">Set brain cells<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-cyan-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-cyan-400" /></label><button type="submit" disabled={saving || value === ''} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-cyan-600 px-3 text-xs font-black text-white transition hover:bg-cyan-700 disabled:opacity-60">{saving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}{saving ? 'Saving...' : 'Update cells'}</button>{message && <span className="text-xs font-bold text-cyan-800">{message}</span>}</form>
 }
 
 const SetRestoreKeysControl = ({ student }) => {
@@ -193,16 +240,16 @@ const SetRestoreKeysControl = ({ student }) => {
     setSaving(true)
     setMessage('')
     try {
-      await apiRequest(`/api/admin/streaks/${student.id}/keys`, { method: 'POST', body: JSON.stringify({ restoreKeys: Number(value) }) })
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/keys`, { method: 'POST', body: JSON.stringify({ restoreKeys: Number(value) }) })
+      window.dispatchEvent(new CustomEvent('admin-streak:updated', { detail: { studentId: student.id, streak: data.streak } }))
       setMessage('Updated')
-      window.location.reload()
     } catch (error) {
       setMessage(error.message || 'Could not update')
     } finally {
       setSaving(false)
     }
   }
-  return <form onSubmit={save} className="mt-2 flex flex-wrap items-end gap-2 rounded-2xl border border-violet-200 bg-violet-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-violet-800">Set restore keys<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-violet-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-violet-400" /></label><button type="submit" disabled={saving || value === ''} className="h-9 rounded-xl bg-violet-600 px-3 text-xs font-black text-white transition hover:bg-violet-700 disabled:opacity-60">{saving ? 'Saving...' : 'Update keys'}</button>{message && <span className="text-xs font-bold text-violet-800">{message}</span>}</form>
+  return <form onSubmit={save} className="mt-2 flex flex-wrap items-end gap-2 rounded-2xl border border-violet-200 bg-violet-50 p-3"><label className="text-xs font-black uppercase tracking-[0.12em] text-violet-800">Set restore keys<input type="number" min="0" step="1" value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 block h-9 w-28 rounded-xl border border-violet-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-violet-400" /></label><button type="submit" disabled={saving || value === ''} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-violet-600 px-3 text-xs font-black text-white transition hover:bg-violet-700 disabled:opacity-60">{saving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}{saving ? 'Saving...' : 'Update keys'}</button>{message && <span className="text-xs font-bold text-violet-800">{message}</span>}</form>
 }
 
 const BreakTodayControl = ({ student }) => {
@@ -211,15 +258,15 @@ const BreakTodayControl = ({ student }) => {
     if (!window.confirm(`Delete today\'s daily practice for ${student.name || 'this student'} and let them practise again?`)) return
     setBreaking(true)
     try {
-      await apiRequest(`/api/admin/streaks/${student.id}/break-today`, { method: 'POST' })
-      window.location.reload()
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/break-today`, { method: 'POST' })
+      window.dispatchEvent(new CustomEvent('admin-streak:updated', { detail: { studentId: student.id, streak: data.streak } }))
     } catch (error) {
       window.alert(error.message || 'Could not reset today\'s practice.')
     } finally {
       setBreaking(false)
     }
   }
-  return <button type="button" onClick={breakToday} disabled={breaking} className="mt-2 inline-flex h-9 items-center justify-center rounded-xl bg-rose-600 px-3 text-xs font-black text-white transition hover:bg-rose-700 disabled:opacity-60">{breaking ? 'Resetting...' : 'Break today / redo practice'}</button>
+  return <button type="button" onClick={breakToday} disabled={breaking} className="mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3 text-xs font-black text-white transition hover:bg-rose-700 disabled:opacity-60">{breaking && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}{breaking ? 'Resetting...' : 'Break today / redo practice'}</button>
 }
 
 const BreakStreakControl = ({ student }) => {
@@ -228,15 +275,15 @@ const BreakStreakControl = ({ student }) => {
     if (!window.confirm(`Break ${student.name || 'this student'}\'s streak and enable restore?`)) return
     setBreaking(true)
     try {
-      await apiRequest(`/api/admin/streaks/${student.id}/break`, { method: 'POST' })
-      window.location.reload()
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/break`, { method: 'POST' })
+      window.dispatchEvent(new CustomEvent('admin-streak:updated', { detail: { studentId: student.id, streak: data.streak } }))
     } catch (error) {
       window.alert(error.message || 'Could not break streak.')
     } finally {
       setBreaking(false)
     }
   }
-  return <button type="button" onClick={breakStreak} disabled={breaking} className="mt-2 inline-flex h-9 items-center justify-center rounded-xl border border-rose-300 bg-white px-3 text-xs font-black text-rose-700 transition hover:bg-rose-50 disabled:opacity-60">{breaking ? 'Breaking...' : 'Break streak'}</button>
+  return <button type="button" onClick={breakStreak} disabled={breaking} className="mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 text-xs font-black text-rose-700 transition hover:bg-rose-50 disabled:opacity-60">{breaking && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}{breaking ? 'Breaking...' : 'Break streak'}</button>
 }
 
 const StreakTracker = ({ student }) => {
@@ -250,7 +297,7 @@ const StreakTracker = ({ student }) => {
   const totalMinutes = Math.floor(remaining / 60000)
   const countdown = `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m remaining`
   const done = Boolean(student.streakTodayDone)
-  return <><SetStreakControl student={student} /><SetRestoreKeysControl student={student} /><div className="flex flex-wrap gap-2"><BreakStreakControl student={student} /><BreakTodayControl student={student} /></div>{Number(student.streakTodayAttempted || 0) > 0 && <ViewStreakQuestions student={student} />}<StreakStatus student={student} /></>
+  return <><SetStreakControl student={student} /><SetBrainCellsControl student={student} /><SetRestoreKeysControl student={student} /><div className="flex flex-wrap gap-2"><BreakStreakControl student={student} /><BreakTodayControl student={student} /></div>{Number(student.streakTodayAttempted || 0) > 0 && <ViewStreakQuestions student={student} />}<StreakStatus student={student} /></>
   return <div className={`mt-3 flex flex-col gap-2 rounded-2xl border px-3 py-3 text-xs font-bold sm:flex-row sm:items-center sm:justify-between ${done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><span className="inline-flex items-center gap-2">{done ? <CheckCircle2 className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}{done ? `Today’s streak is done · ${student.streakTodayCorrect || 0} correct` : 'Today’s streak is not done yet'}</span><span>{remaining ? countdown : 'New streak day started'}</span></div>
 }
 
@@ -261,8 +308,8 @@ const StreakStatus = ({ student }) => {
   const startToday = async () => {
     setStarting(true)
     try {
-      await apiRequest(`/api/admin/streaks/${student.id}/restore`, { method: 'POST' })
-      window.location.reload()
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/restore`, { method: 'POST' })
+      window.dispatchEvent(new CustomEvent('admin-streak:updated', { detail: { studentId: student.id, streak: data.streak } }))
     } catch (error) {
       window.alert(error.message || 'Could not restore today\'s streak.')
     } finally {
@@ -315,8 +362,8 @@ const RestoreStreakAction = ({ student }) => {
   const restore = async () => {
     setRestoring(true)
     try {
-      await apiRequest(`/api/admin/streaks/${student.id}/restore`, { method: 'POST' })
-      window.location.reload()
+      const data = await apiRequest(`/api/admin/streaks/${student.id}/restore`, { method: 'POST' })
+      window.dispatchEvent(new CustomEvent('admin-streak:updated', { detail: { studentId: student.id, streak: data.streak } }))
     } catch (error) {
       window.alert(error.message || 'Could not restore today\'s streak.')
     } finally {

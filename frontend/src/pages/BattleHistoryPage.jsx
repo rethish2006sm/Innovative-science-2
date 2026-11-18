@@ -4,7 +4,18 @@ import { useNavigate } from 'react-router-dom'
 import BattleNavbar from '../components/BattleNavbar'
 import { apiRequest, assetUrl } from '../api'
 
-const formatDate = (value) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Unknown date'
+const formatDate = (value) => {
+  if (!value) return 'Unknown date'
+  const date = new Date(value)
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+  const sameDay = (left, right) => left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate()
+  const time = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(date)
+  if (sameDay(date, today)) return `Today, ${time}`
+  if (sameDay(date, yesterday)) return `Yesterday, ${time}`
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
 
 const BattleHistoryPage = () => {
   const navigate = useNavigate()

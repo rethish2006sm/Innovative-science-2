@@ -905,7 +905,12 @@ const studentStreakSchema = new mongoose.Schema(
     restoreKeys: { type: Number, default: 0, min: 0 },
     rewardClaims: [{
       localDate: { type: String, required: true },
-      type: { type: String, enum: ['brain-cell', 'restore-key'], required: true },
+      type: { type: String, enum: ['brain-cell', 'restore-key', '100-day-gift'], required: true },
+      giftId: { type: String, default: null },
+      giftName: { type: String, default: null },
+      letterHtml: { type: String, default: null },
+      letterText: { type: String, default: null },
+      termsAcceptedAt: { type: Date, default: null },
       claimedAt: { type: Date, default: Date.now },
     }],
   },
@@ -1306,6 +1311,18 @@ const dailyStreakSettingSchema = new mongoose.Schema(
       originalName: String,
       updatedAt: Date,
     },
+    gifts: [{
+      name: { type: String, required: true, trim: true, maxlength: 180 },
+      letterHtml: { type: String, trim: true, maxlength: 12000 },
+      letterText: { type: String, trim: true, maxlength: 5000 },
+      image: {
+        data: Buffer,
+        contentType: String,
+        originalName: String,
+        updatedAt: Date,
+      },
+      createdAt: { type: Date, default: Date.now },
+    }],
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -2148,6 +2165,14 @@ const publicDailyStreakImage = (image, fallbackName) => {
 
 const publicDailyStreakSetting = (setting) => ({
   milestoneImage: publicDailyStreakImage(setting?.milestoneImage, 'streak-milestone.webp'),
+  gifts: (setting?.gifts || []).map((gift) => ({
+    id: String(gift._id),
+    name: gift.name || '',
+    letterHtml: gift.letterHtml || '',
+    letterText: gift.letterText || '',
+    image: publicDailyStreakImage(gift.image, 'streak-gift.webp'),
+    createdAt: gift.createdAt,
+  })),
 })
 
 const publicMessage = (message) => {
@@ -2157,6 +2182,7 @@ const publicMessage = (message) => {
 
   return {
     id: String(message._id),
+    type: String(message.type || ''),
     createdBy: {
       id: String(message.createdBy?._id || message.createdBy || ''),
       name: String(message.createdBy?.name || 'Admin'),
@@ -3848,6 +3874,8 @@ const dailyChallengePayload = (challenge, questions, streak, streakSetting = nul
       streakEligibleCorrectCount,
       streakQualified: streakEligibleCorrectCount >= 10,
       streakMilestoneImage: publicDailyStreakSetting(streakSetting).milestoneImage,
+      streakGifts: publicDailyStreakSetting(streakSetting).gifts,
+      fiftyDayKeyClaimed: Boolean((streak?.rewardClaims || []).some((claim) => String(claim.localDate) === 'milestone-50' && claim.type === 'restore-key')),
     },
     streak: streak
       ? {
@@ -4213,6 +4241,24 @@ app.post('/api/daily-streak/rewards/claim', authRequired, async (req, res) => {
   }
 })
 
+app.post('/api/daily-streak/milestone-50/claim', authRequired, async (req, res) => {
+  try {
+    const streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
+    if (!streak || Number(streak.currentStreak || 0) < 50) {
+      return res.status(403).json({ message: 'Reach a 50-day streak to claim this key.' })
+    }
+    const alreadyClaimed = (streak.rewardClaims || []).some((claim) => String(claim.localDate) === 'milestone-50' && claim.type === 'restore-key')
+    if (!alreadyClaimed) {
+      streak.rewardClaims.push({ localDate: 'milestone-50', type: 'restore-key', claimedAt: new Date() })
+      streak.restoreKeys = Number(streak.restoreKeys || 0) + 1
+      await streak.save()
+    }
+    res.json({ message: alreadyClaimed ? 'The 50-day key has already been claimed.' : '50-day restore key claimed.', streak: streak.toObject() })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not claim the 50-day reward.' })
+  }
+})
+
 app.post('/api/daily-streak/restore', authRequired, async (req, res) => {
   try {
     const timezone = dailyTimezone(req)
@@ -4281,6 +4327,138 @@ app.delete('/api/admin/daily-streak/settings/image', authRequired, adminRequired
     res.json({ message: 'Streak milestone image removed.' })
   } catch (error) {
     res.status(500).json({ message: 'Could not remove streak milestone image.' })
+  }
+})
+
+app.post('/api/admin/daily-streak/settings/gifts', authRequired, adminRequired, upload.single('image'), async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim()
+    if (!name) return res.status(400).json({ message: 'Add a gift name.' })
+    const letterHtml = sanitizeMessageHtml(String(req.body?.letterHtml || '').trim())
+    const letterText = richTextToPlainText(letterHtml).slice(0, 5000)
+    if (!letterText) return res.status(400).json({ message: 'Add the letter for this gift.' })
+    if (!req.file?.buffer || !String(req.file.mimetype || '').startsWith('image/')) {
+      return res.status(400).json({ message: 'Please select a gift image.' })
+    }
+    const setting = await DailyStreakSetting.findOneAndUpdate(
+      {},
+      {
+        $push: {
+          gifts: {
+            name: name.slice(0, 180),
+            letterHtml: letterHtml.slice(0, 12000),
+            letterText,
+            image: {
+              data: req.file.buffer,
+              contentType: String(req.file.mimetype),
+              originalName: req.file.originalname || 'streak-gift.webp',
+              updatedAt: new Date(),
+            },
+          },
+        },
+        updatedBy: req.user._id,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    )
+    res.status(201).json({ setting: publicDailyStreakSetting(setting), message: '100-day gift saved.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not save the streak gift.' })
+  }
+})
+
+app.delete('/api/admin/daily-streak/settings/gifts/:giftId', authRequired, adminRequired, async (req, res) => {
+  try {
+    const setting = await DailyStreakSetting.findOneAndUpdate(
+      {},
+      { $pull: { gifts: { _id: req.params.giftId } } },
+      { new: true },
+    )
+    res.json({ setting: publicDailyStreakSetting(setting), message: '100-day gift removed.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not remove the streak gift.' })
+  }
+})
+
+app.put('/api/admin/daily-streak/settings/gifts/:giftId', authRequired, adminRequired, upload.single('image'), async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim()
+    const letterHtml = sanitizeMessageHtml(String(req.body?.letterHtml || '').trim())
+    const letterText = richTextToPlainText(letterHtml).slice(0, 5000)
+    const setting = await DailyStreakSetting.findOne({})
+    const gift = setting?.gifts?.id(req.params.giftId)
+    if (!gift) return res.status(404).json({ message: 'Gift not found.' })
+    if (!name || !letterText) return res.status(400).json({ message: 'Add a gift name and letter.' })
+    gift.name = name.slice(0, 180)
+    gift.letterHtml = letterHtml.slice(0, 12000)
+    gift.letterText = letterText
+    if (req.file?.buffer && String(req.file.mimetype || '').startsWith('image/')) {
+      gift.image = { data: req.file.buffer, contentType: String(req.file.mimetype), originalName: req.file.originalname || 'streak-gift.webp', updatedAt: new Date() }
+    }
+    setting.updatedBy = req.user._id
+    await setting.save()
+    res.json({ setting: publicDailyStreakSetting(setting), message: '100-day gift updated.' })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not update the streak gift.' })
+  }
+})
+
+app.post('/api/daily-streak/milestone-100/claim', authRequired, async (req, res) => {
+  try {
+    if (req.body?.termsAccepted !== true) {
+      return res.status(400).json({ message: 'Please agree to the terms and policy before claiming.' })
+    }
+    const giftId = String(req.body?.giftId || '')
+    const setting = await DailyStreakSetting.findOne({}).lean()
+    const gift = (setting?.gifts || []).find((item) => String(item._id) === giftId)
+    if (!gift) return res.status(404).json({ message: 'Choose an available gift.' })
+
+    const streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
+    if (!streak || Number(streak.currentStreak || 0) < 100) {
+      return res.status(403).json({ message: 'Reach a 100-day streak to claim this reward.' })
+    }
+    const existingClaim = (streak.rewardClaims || []).find((claim) => (
+      String(claim.localDate) === 'milestone-100' && claim.type === '100-day-gift'
+    ))
+    if (existingClaim) {
+      return res.json({ message: 'Your 100-day reward is already claimed.', claim: existingClaim, streak: streak.toObject() })
+    }
+
+    streak.rewardClaims.push({
+      localDate: 'milestone-100',
+      type: '100-day-gift',
+      giftId,
+      giftName: gift.name || '',
+      letterHtml: gift.letterHtml || '',
+      letterText: gift.letterText || '',
+      termsAcceptedAt: new Date(),
+    })
+    await streak.save()
+    const claim = streak.rewardClaims[streak.rewardClaims.length - 1]
+    const rewardPageLink = '/#/daily-streak'
+    const notification = await Notification.create({
+      recipient: req.user._id,
+      type: '100_DAY_REWARD_CLAIMED',
+      title: '100-day reward claimed',
+      message: `Your ${gift.name || 'gift'} has been claimed. Download the reward letter, take a printout, send a soft copy to Sir, and later submit the hard copy to Sir.`,
+      bodyHtml: sanitizeMessageHtml(`<p>Your <strong>${gift.name || 'gift'}</strong> has been claimed successfully.</p><p><strong>Next steps:</strong> Download the reward letter, take a printout, send a soft copy to Sir, and later submit the hard copy to Sir.</p>`),
+      link: rewardPageLink,
+      source: 'daily-streak-100-day-reward',
+    })
+    const popupAdmin = await User.findOne({ isAdmin: true }).select('_id').lean()
+    const rewardInstructions = `Download the reward letter, take a printout, send a soft copy to Sir, and later submit the hard copy to Sir.`
+    const popupMessage = await Message.create({
+      createdBy: popupAdmin?._id || req.user._id,
+      targetType: 'user',
+      targetUserIds: [req.user._id],
+      subject: '100-day reward claimed',
+      body: `Your ${gift.name || 'gift'} has been claimed successfully. ${rewardInstructions}`,
+      bodyHtml: sanitizeMessageHtml(`<p>Your <strong>${gift.name || 'gift'}</strong> has been claimed successfully.</p><p><strong>Next steps:</strong> ${rewardInstructions}</p><p><a href="${rewardPageLink}">Open and download your reward letter</a></p>`),
+      audienceCount: 1,
+      sentUserEmails: [req.user.email || ''],
+    })
+    res.json({ message: '100-day reward claimed.', claim, notification, popupMessage: publicMessage(popupMessage), streak: streak.toObject() })
+  } catch (error) {
+    res.status(500).json({ message: 'Could not claim the 100-day reward.' })
   }
 })
 
@@ -4369,6 +4547,7 @@ app.post('/api/admin/streaks/reset', authRequired, adminRequired, async (req, re
         streakBeforeBreak: 0,
         streakBrokenAt: null,
         manualBreakDate: null,
+        rewardClaims: [],
       },
     })
 
@@ -4485,18 +4664,50 @@ app.post('/api/admin/streaks/:userId/set', authRequired, adminRequired, async (r
     const today = localDateForTimezone(dailyTimezone(req))
     let streak = await StudentStreak.findOne({ user: user._id, subject: getActiveScience() })
     if (!streak) streak = new StudentStreak({ user: user._id, subject: getActiveScience() })
-    streak.currentStreak = requestedStreak
-    streak.longestStreak = Math.max(Number(streak.longestStreak || 0), requestedStreak)
-    streak.lastCreditedDate = requestedStreak > 0 ? today : null
-    streak.streakBeforeBreak = 0
-    streak.streakBrokenAt = null
-    streak.manualBreakDate = null
-    await streak.save()
+    const nextStreakFields = {
+      currentStreak: requestedStreak,
+      longestStreak: Math.max(Number(streak.longestStreak || 0), requestedStreak),
+      lastCreditedDate: requestedStreak > 0 ? today : null,
+      streakBeforeBreak: 0,
+      streakBrokenAt: null,
+      manualBreakDate: null,
+    }
+    if (streak.isNew) {
+      Object.assign(streak, nextStreakFields)
+      await streak.save()
+    } else {
+      const update = { $set: nextStreakFields }
+      const claimDates = []
+      if (requestedStreak < 50) claimDates.push('milestone-50')
+      if (requestedStreak < 100) claimDates.push('milestone-100')
+      if (claimDates.length) update.$pull = { rewardClaims: { localDate: { $in: claimDates } } }
+      await StudentStreak.updateOne({ _id: streak._id }, update)
+      streak = await StudentStreak.findById(streak._id)
+    }
 
     res.json({ message: 'Student streak updated.', streak: streak.toObject() })
   } catch (error) {
-    console.error('Admin set streak failed:', error.message)
-    res.status(500).json({ message: 'Could not update the student streak.' })
+    console.error('Admin set streak failed:', error)
+    res.status(500).json({ message: error?.name === 'ValidationError' ? 'The student streak data is invalid. Please try again.' : 'Could not update the student streak.' })
+  }
+})
+
+app.post('/api/admin/users/:userId/brain-cells', authRequired, adminRequired, async (req, res) => {
+  try {
+    const totalBrainCells = Number(req.body?.totalBrainCells)
+    if (!Number.isInteger(totalBrainCells) || totalBrainCells < 0) {
+      return res.status(400).json({ message: 'Brain cells must be a whole number greater than or equal to zero.' })
+    }
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.userId, isAdmin: { $ne: true } },
+      { $set: { totalBrainCells } },
+      { new: true, projection: { _id: 1, totalBrainCells: 1 } },
+    ).lean()
+    if (!user) return res.status(404).json({ message: 'Student not found.' })
+    res.json({ message: 'Brain cells updated.', user: { id: String(user._id), totalBrainCells: Number(user.totalBrainCells || 0) } })
+  } catch (error) {
+    console.error('Admin brain cells update failed:', error.message)
+    res.status(500).json({ message: 'Could not update the student brain cells.' })
   }
 })
 
@@ -4534,6 +4745,9 @@ app.post('/api/admin/streaks/:userId/break-today', authRequired, adminRequired, 
       streak.streakBeforeBreak = 0
       streak.streakBrokenAt = null
       streak.manualBreakDate = null
+      if (Number(streak.currentStreak || 0) < 100) {
+        streak.rewardClaims = (streak.rewardClaims || []).filter((claim) => String(claim.localDate) !== 'milestone-100')
+      }
       await streak.save()
     }
     res.json({
@@ -4560,6 +4774,7 @@ app.post('/api/admin/streaks/:userId/break', authRequired, adminRequired, async 
     streak.lastCreditedDate = previousLocalDate(today)
     streak.streakBrokenAt = new Date()
     streak.manualBreakDate = today
+    streak.rewardClaims = (streak.rewardClaims || []).filter((claim) => !['milestone-50', 'milestone-100'].includes(String(claim.localDate)))
     await streak.save()
     res.json({ message: 'Student streak broken. A restore key can recover it.', streak: streak.toObject() })
   } catch (error) {
@@ -8161,7 +8376,12 @@ app.get('/api/messages/me', authRequired, async (req, res) => {
 
 app.get('/api/notifications/me', authRequired, async (req, res) => {
   try {
-    const notifications = await Notification.find({ recipient: req.user._id }).sort({ createdAt: -1 }).limit(100).lean()
+    // Browser-push delivery records are not in-app notifications. Keep them
+    // out of the notification centre, including old records already stored.
+    const notifications = await Notification.find({
+      recipient: req.user._id,
+      type: { $nin: ['WEB_PUSH', 'ADMIN_WEB_PUSH'] },
+    }).sort({ createdAt: -1 }).limit(100).lean()
     res.json({ notifications })
   } catch (error) {
     res.status(500).json({ message: 'Could not load notifications.' })
@@ -8286,7 +8506,11 @@ app.patch('/api/notifications/:id/read', authRequired, async (req, res) => {
 app.patch('/api/notifications/read-all', authRequired, async (req, res) => {
   try {
     const result = await Notification.updateMany(
-      { recipient: req.user._id, readAt: null },
+      {
+        recipient: req.user._id,
+        readAt: null,
+        type: { $nin: ['WEB_PUSH', 'ADMIN_WEB_PUSH'] },
+      },
       { $set: { readAt: new Date() } },
     )
     res.json({ markedCount: result.modifiedCount || 0 })
