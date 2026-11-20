@@ -6,12 +6,20 @@ const rewardDetails = (day) => day?.type === 'restore-key'
   ? { label: 'Streak Restore Key', amount: '1 key', Icon: KeyRound }
   : { label: 'Brain Cells', amount: '10 cells', Icon: Brain }
 
+const getLocalDateKey = () => {
+  const today = new Date()
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+}
+
+const DAILY_REWARDS_DISMISSED_KEY = 'daily-rewards-dismissed-date'
+
 const DailyRewardsPopup = ({ enabled = false, showButton = true }) => {
   const [weeklyRewards, setWeeklyRewards] = useState(null)
   const [showRewards, setShowRewards] = useState(false)
   const [claimingDate, setClaimingDate] = useState('')
   const [claimedReward, setClaimedReward] = useState(null)
   const [closingSuccess, setClosingSuccess] = useState(false)
+  const [dontRemindToday, setDontRemindToday] = useState(false)
 
   useEffect(() => {
     if (!enabled) return undefined
@@ -20,7 +28,8 @@ const DailyRewardsPopup = ({ enabled = false, showButton = true }) => {
       .then((data) => {
         if (!cancelled) {
           setWeeklyRewards(data.rewards || null)
-          if (data.rewards?.days?.some((day) => day.isToday && !day.claimed)) setShowRewards(true)
+          const dismissedDate = window.localStorage.getItem(DAILY_REWARDS_DISMISSED_KEY)
+          if (data.rewards?.days?.some((day) => day.isToday && !day.claimed) && dismissedDate !== getLocalDateKey()) setShowRewards(true)
         }
       })
       .catch(() => {})
@@ -60,6 +69,12 @@ const DailyRewardsPopup = ({ enabled = false, showButton = true }) => {
     window.setTimeout(() => { setClaimedReward(null); setClosingSuccess(false) }, 220)
   }
 
+  const closeRewards = () => {
+    if (dontRemindToday) window.localStorage.setItem(DAILY_REWARDS_DISMISSED_KEY, getLocalDateKey())
+    setShowRewards(false)
+    setDontRemindToday(false)
+  }
+
   if (!enabled || !weeklyRewards) return null
 
   return (
@@ -67,7 +82,7 @@ const DailyRewardsPopup = ({ enabled = false, showButton = true }) => {
       <div className="daily-rewards-floating">
         {showRewards && (
           <div className="daily-rewards-panel absolute bottom-16 right-0 w-[min(28rem,calc(100vw-2rem))] rounded-[1.6rem] border border-orange-100 bg-white p-4 shadow-[0_1.5rem_4rem_rgba(15,23,42,.2)] sm:p-5">
-            <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[.2em] text-orange-600">Daily rewards</p><p className="mt-1 text-xs font-semibold text-slate-500">Claim your reward and keep your streak alive.</p></div><button type="button" onClick={() => setShowRewards(false)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-orange-50 hover:text-orange-600" aria-label="Close rewards"><X size={15} /></button></div>
+            <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[.2em] text-orange-600">Daily rewards</p><p className="mt-1 text-xs font-semibold text-slate-500">Claim your reward and keep your streak alive.</p></div><button type="button" onClick={closeRewards} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-orange-50 hover:text-orange-600" aria-label="Close rewards"><X size={15} /></button></div>
             <div className="mt-5 grid grid-cols-7 gap-1.5 sm:gap-2">
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => <p key={label} className="text-center text-[9px] font-black uppercase tracking-wide text-slate-400 sm:text-[10px]">{label}</p>)}
               {calendarCells.map((day, index) => {
@@ -83,6 +98,10 @@ const DailyRewardsPopup = ({ enabled = false, showButton = true }) => {
                 </button>
               })}
             </div>
+            <label className="mt-4 flex cursor-pointer items-center gap-2 border-t border-slate-100 pt-3 text-xs font-bold text-slate-500">
+              <input type="checkbox" checked={dontRemindToday} onChange={(event) => setDontRemindToday(event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-orange-500" />
+              <span>Do not remind me for today</span>
+            </label>
           </div>
         )}
         {showButton && <button type="button" onClick={() => setShowRewards((current) => !current)} aria-label="Open daily rewards" className={`grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-orange-500 to-rose-500 text-white shadow-xl shadow-orange-300 transition hover:scale-105 ${hasUnclaimedReward ? 'animate-pulse ring-4 ring-orange-300/70 ring-offset-2' : ''}`}><Gift size={24} /></button>}

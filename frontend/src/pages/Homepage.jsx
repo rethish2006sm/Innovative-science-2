@@ -211,17 +211,20 @@ const formatFeedbackSourceLabel = (item = {}) => {
 
 // --- Animation Variants ---
 const fadeUp = {
-  hidden: { opacity: 0, y: 30 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: 'easeOut' } }
+  hidden: { opacity: 0, y: 15 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } }
 }
 
 const staggerContainer = {
   hidden: { opacity: 0 },
   visible: {
     opacity: 1,
-    transition: { staggerChildren: 0.1 }
+    transition: { staggerChildren: 0.06 }
   }
 }
+
+const tactileSpring = { type: 'spring', stiffness: 560, damping: 34, mass: 0.55 }
+const revealEase = [0.22, 1, 0.36, 1]
 
 const AnimatedBattleModeLink = motion.create(Link)
 const AnimatedActionLink = motion.create(Link)
@@ -604,17 +607,17 @@ const Homepage = () => {
             <motion.div variants={fadeUp} className="mt-3 rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 to-amber-50/70 p-3 min-[380px]:p-3.5 sm:mt-5 sm:rounded-3xl sm:p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-orange-500 text-white shadow-sm sm:h-10 sm:w-10 sm:rounded-2xl">
-                    <Flame className="h-5 w-5" fill="currentColor" />
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-100 ring-1 ring-amber-200 shadow-sm sm:h-10 sm:w-10 sm:rounded-2xl">
+                    <span className="text-2xl leading-none" role="img" aria-label="Fire">🔥</span>
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">Daily streak</p>
                     <div
-                      className={`mt-1 inline-flex max-w-full items-center gap-1 whitespace-nowrap text-[11px] font-black tracking-tight sm:text-sm ${dailyStreakData?.streak?.currentStreak ? 'text-amber-500' : 'text-slate-400'}`}
+                      className={`mt-1 inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono tabular-nums text-[11px] font-black tracking-tight sm:text-sm ${dailyStreakData?.streak?.currentStreak ? 'text-amber-500' : 'text-slate-400'}`}
                       aria-label={`${dailyStreakData?.streak?.currentStreak || 0} day streak`}
                     >
-                      <Flame className="h-4 w-4" fill="currentColor" />
-                      <span>{dailyStreakData?.streak?.currentStreak || 0}</span>
+                      <span className="text-xl leading-none" role="img" aria-hidden="true">🔥</span>
+                      <span className="text-base font-black sm:text-lg">{dailyStreakData?.streak?.currentStreak || 0}</span>
                       <Countdown />
                     </div>
                   </div>
@@ -642,15 +645,16 @@ const Homepage = () => {
             <motion.div variants={fadeUp} className="mt-4 grid grid-cols-2 gap-2 min-[520px]:flex min-[520px]:flex-wrap min-[520px]:items-center min-[520px]:gap-3 sm:mt-6">
               <AnimatedBattleModeLink
                 to="/battle-mode"
-                whileHover={{ scale: 1.03, y: -2 }}
-                whileTap={{ scale: 0.98 }}
-                className="group relative inline-flex min-h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-amber-200/80 bg-gradient-to-r from-orange-500 via-rose-500 to-amber-500 px-2.5 py-2.5 text-xs font-black text-white shadow-[0_8px_24px_rgba(249,115,22,0.2)] transition-all hover:shadow-[0_12px_30px_rgba(249,115,22,0.28)] active:scale-[0.98] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm"
+                whileHover={reduceMotion ? undefined : { scale: 1.03, y: -2 }}
+                whileTap={reduceMotion ? undefined : { scale: 0.965 }}
+                transition={tactileSpring}
+                className="group relative inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-amber-200/80 bg-gradient-to-r from-orange-500 via-rose-500 to-amber-500 px-2.5 py-2.5 text-xs font-black text-white shadow-[0_8px_24px_rgba(249,115,22,0.2)] transition-[background-color,border-color,box-shadow] hover:shadow-[0_12px_30px_rgba(249,115,22,0.28)] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform"
               >
                 <motion.span
                   aria-hidden="true"
                   animate={reduceMotion ? undefined : { y: [0, -3, 0], rotate: [-6, 8, -6], scale: [1, 1.08, 1] }}
                   transition={reduceMotion ? { duration: 0 } : { duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                  className="relative z-10"
+                  className="relative z-10 transform-gpu will-change-transform"
                 >
                   <Flame className="h-4 w-4 text-yellow-100 drop-shadow-[0_0_10px_rgba(255,255,255,0.35)]" />
                 </motion.span>
@@ -658,17 +662,18 @@ const Homepage = () => {
                 <Swords className="relative z-10 h-4 w-4 text-white/90 transition-transform group-hover:translate-x-1" />
                 <motion.span
                   aria-hidden="true"
-                  animate={reduceMotion ? undefined : { x: ['-30%', '130%'] }}
+                  animate={reduceMotion ? undefined : { x: ['-100%', '200%'] }}
                   transition={reduceMotion ? { duration: 0 } : { duration: 2.4, repeat: Infinity, ease: 'linear' }}
-                  className="absolute inset-y-0 left-0 w-1/2 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.35),transparent)] opacity-70"
+                  className="pointer-events-none absolute inset-y-0 left-0 w-1/2 transform-gpu bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.35),transparent)] opacity-70 will-change-transform"
                 />
                 <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.3),_transparent_40%)] opacity-70" />
               </AnimatedBattleModeLink>
               <AnimatedActionLink
                 to="/questions"
-                whileHover={{ scale: 1.035, y: -2 }}
-                whileTap={{ scale: 0.98 }}
-                className="question-bank-link group relative inline-flex min-h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-cyan-300/80 px-2.5 py-2.5 text-xs font-black text-cyan-950 shadow-[0_8px_24px_rgba(6,182,212,0.14)] transition-shadow min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm"
+                whileHover={reduceMotion ? undefined : { scale: 1.035, y: -2 }}
+                whileTap={reduceMotion ? undefined : { scale: 0.965 }}
+                transition={tactileSpring}
+                className="question-bank-link group relative inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-cyan-300/80 px-2.5 py-2.5 text-xs font-black text-cyan-950 shadow-[0_8px_24px_rgba(6,182,212,0.14)] transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform"
               >
                 <span aria-hidden="true" className="question-bank-orbit"><span /></span>
                 <span className="question-bank-icon relative z-10 grid h-5 w-5 place-items-center rounded-full bg-white/75 text-cyan-600 shadow-sm">
@@ -677,35 +682,35 @@ const Homepage = () => {
                 <span className="relative z-10">Question Bank</span>
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
-              <AnimatedActionLink to="/pyqs" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-sky group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              <AnimatedActionLink to="/pyqs" whileHover={reduceMotion ? undefined : { y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.965 }} transition={tactileSpring} className="homepage-action-link action-sky group inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform">
                 <BookOpen className="h-4 w-4" />
                 PYQs
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
-              <AnimatedActionLink to="/chapters" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-neutral group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              <AnimatedActionLink to="/chapters" whileHover={reduceMotion ? undefined : { y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.965 }} transition={tactileSpring} className="homepage-action-link action-neutral group inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform">
                 Browse chapters
               </AnimatedActionLink>
-              <AnimatedActionLink to="/test-builder" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-dark group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl px-2.5 py-2.5 text-xs font-bold text-white transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              <AnimatedActionLink to="/test-builder" whileHover={reduceMotion ? undefined : { y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.965 }} transition={tactileSpring} className="homepage-action-link action-dark group inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 rounded-xl px-2.5 py-2.5 text-xs font-bold text-white transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform">
                 Create test
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
-              <AnimatedActionLink to={studentClassId ? `/class/${studentClassId}` : '/feedback'} whileHover={{ scale: 1.03, y: -2 }} whileTap={{ scale: 0.98 }} className={`homepage-action-link group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm ${studentClassId ? 'action-class-highlight text-white' : 'action-amber'}`}>
+              <AnimatedActionLink to={studentClassId ? `/class/${studentClassId}` : '/feedback'} whileHover={reduceMotion ? undefined : { scale: 1.03, y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.965 }} transition={tactileSpring} className={`homepage-action-link group inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform ${studentClassId ? 'action-class-highlight text-white' : 'action-amber'}`}>
                 {studentClassId ? <BookOpen className="h-4 w-4" /> : <MessageCircleMore className="h-4 w-4" />}
                 {studentClassId ? 'My class' : 'Feedback'}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
-              <AnimatedActionLink to="/profile/performance" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-violet group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              <AnimatedActionLink to="/profile/performance" whileHover={reduceMotion ? undefined : { y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.965 }} transition={tactileSpring} className="homepage-action-link action-violet group inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform">
                 Performance
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </AnimatedActionLink>
-              <AnimatedActionLink to="/leaderboard" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="homepage-action-link action-emerald group inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-all min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm">
+              <AnimatedActionLink to="/leaderboard" whileHover={reduceMotion ? undefined : { y: -2 }} whileTap={reduceMotion ? undefined : { scale: 0.965 }} transition={tactileSpring} className="homepage-action-link action-emerald group inline-flex min-h-10 w-full transform-gpu items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2.5 text-xs font-bold transition-[background-color,border-color,box-shadow] min-[520px]:w-auto min-[520px]:rounded-full min-[520px]:px-5 sm:py-3 sm:text-sm will-change-transform">
                 Leaderboard
               </AnimatedActionLink>
             </motion.div>
 
             <motion.div variants={staggerContainer} className="mt-4 grid grid-cols-3 gap-2 sm:mt-7 sm:gap-3">
               {stats.map((stat, i) => (
-                <motion.div key={stat.label} variants={fadeUp} whileHover={reduceMotion ? undefined : { y: -5 }} className="min-w-0 rounded-xl border border-white/70 bg-white/65 p-2.5 shadow-sm backdrop-blur-md transition-colors hover:bg-white/85 min-[380px]:p-3 sm:rounded-2xl sm:p-4">
+                <motion.div key={stat.label} variants={fadeUp} whileHover={reduceMotion ? undefined : { y: -5, transition: tactileSpring }} className="min-w-0 transform-gpu rounded-xl border border-white/70 bg-white/90 p-2.5 shadow-sm transition-[background-color,border-color,box-shadow] hover:bg-white/95 min-[380px]:p-3 sm:rounded-2xl sm:bg-white/65 sm:p-4 sm:backdrop-blur-md">
                   <stat.icon className="h-4 w-4 text-cyan-600 sm:h-5 sm:w-5" />
                   <p className="mt-2 text-[9px] font-bold uppercase tracking-wide text-slate-500 min-[380px]:text-[10px] sm:mt-3 sm:text-xs sm:tracking-widest">{stat.label}</p>
                   <p className="mt-1 text-lg font-black text-slate-900 min-[380px]:text-xl sm:text-2xl">{stat.value}</p>
@@ -716,7 +721,7 @@ const Homepage = () => {
           </motion.div>
 
           {/* Right Column / Leaderboard */}
-          <div className="flex min-w-0 flex-col gap-3 sm:gap-4 lg:gap-6">
+          <motion.div initial={reduceMotion ? false : 'hidden'} whileInView={reduceMotion ? undefined : 'visible'} viewport={{ once: true, amount: 0.08 }} variants={fadeUp} className="flex min-w-0 flex-col gap-3 sm:gap-4 lg:gap-6">
             <div className="min-w-0 rounded-2xl border border-white/70 bg-white/75 p-3 shadow-[0_8px_32px_-14px_rgba(0,0,0,0.12)] backdrop-blur-md min-[380px]:p-4 sm:rounded-[2rem] sm:backdrop-blur-xl sm:p-6">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -733,7 +738,7 @@ const Homepage = () => {
               <div className="mt-3 flex flex-wrap gap-1.5 rounded-xl bg-slate-100 p-1 sm:mt-5 sm:rounded-full">
                 <button
                   onClick={() => setLeaderboardScope('all')}
-                  className={`flex-1 rounded-full px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-all ${leaderboardScope === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  className={`flex-1 rounded-full px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-[background-color,color,box-shadow] ${leaderboardScope === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 >
                   Global
                 </button>
@@ -746,7 +751,7 @@ const Homepage = () => {
                   }}
                   disabled={!classOptions.length || !canViewClassLeaderboard}
                   title={!canViewClassLeaderboard ? 'Join a class to view the class leaderboard' : ''}
-                  className={`flex-1 rounded-full px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-all ${leaderboardScope === 'class' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'} disabled:cursor-not-allowed disabled:opacity-50`}
+                  className={`flex-1 rounded-full px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-[background-color,color,box-shadow] ${leaderboardScope === 'class' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'} disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   By Class
                 </button>
@@ -755,15 +760,16 @@ const Homepage = () => {
               <AnimatePresence mode="wait">
                 {leaderboardScope === 'class' && (
                   <motion.div 
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
+                    initial={{ y: -6, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: -6, opacity: 0 }}
+                    transition={{ duration: 0.24, ease: revealEase }}
                     className="mt-3 overflow-hidden sm:mt-4"
                   >
                     <select
                       value={selectedClassId}
                       onChange={(e) => setSelectedClassId(e.target.value)}
-                      className="w-full appearance-none rounded-2xl border-none bg-slate-100/80 px-4 py-3 text-sm font-semibold text-slate-700 outline-none ring-2 ring-transparent transition-all focus:bg-white focus:ring-emerald-400 sm:px-5 sm:py-3.5"
+                      className="w-full appearance-none rounded-2xl border-none bg-slate-100/80 px-4 py-3 text-sm font-semibold text-slate-700 outline-none ring-2 ring-transparent transition-[background-color,box-shadow] focus:bg-white focus:ring-emerald-400 sm:px-5 sm:py-3.5"
                     >
                       {classOptions.map((item) => (
                         <option key={item._id} value={item._id}>
@@ -808,7 +814,7 @@ const Homepage = () => {
                     {leaderboard.map((student, index) => (
                       <article 
                         key={student.id} 
-                        className="group flex items-center gap-3 rounded-2xl border border-white/50 bg-white/40 p-3 shadow-sm transition-all hover:bg-white/80 hover:shadow-md sm:gap-4 sm:p-3"
+                        className="group flex items-center gap-3 rounded-2xl border border-white/50 bg-white/40 p-3 shadow-sm transition-[background-color,border-color,box-shadow] hover:bg-white/80 hover:shadow-md sm:gap-4 sm:p-3"
                       >
                         <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white text-sm font-black shadow-inner sm:h-12 sm:w-12 sm:text-base ${index === 0 ? 'bg-amber-400' : index === 1 ? 'bg-slate-400' : index === 2 ? 'bg-amber-700' : 'bg-slate-900'}`}>
                           {index + 1}
@@ -832,15 +838,15 @@ const Homepage = () => {
               </div>
             </div>
 
-          </div>
+          </motion.div>
         </div>
 
         <motion.div
           id="home-feedback"
           initial={reduceMotion ? false : { opacity: 0, y: 16 }}
           whileInView={reduceMotion ? undefined : { opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: '-60px' }}
-          transition={{ duration: 0.4 }}
+          viewport={{ once: true, amount: 0.12 }}
+          transition={{ duration: 0.34, ease: revealEase }}
           className="mt-5 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:mt-7 sm:p-6 lg:p-8"
         >
           <div className="flex items-center justify-between gap-3">
@@ -874,7 +880,7 @@ const Homepage = () => {
               {featuredFeedback.length ? (
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {featuredFeedback.map((item) => (
-                    <article key={item.id} className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-amber-200 hover:shadow-sm sm:p-5">
+                    <article key={item.id} className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 transition-[background-color,border-color,box-shadow] hover:border-amber-200 hover:shadow-sm sm:p-5">
                       <div className="flex items-start gap-3">
                         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-cyan-50 text-sm font-black text-cyan-700">{(item.name || 'S').trim().charAt(0).toUpperCase()}</div>
                         <div className="min-w-0 flex-1">
@@ -902,12 +908,21 @@ const Homepage = () => {
           </div>
         </motion.div>
 
+        <AnimatePresence>
         {isFeedbackOpen && (
-          <div
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: revealEase }}
             className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/45 p-3 sm:p-5"
             onClick={() => setIsFeedbackOpen(false)}
           >
-            <div
+            <motion.div
+              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.985 }}
+              transition={{ duration: 0.22, ease: revealEase }}
               className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-white/30 bg-white p-5 shadow-2xl sm:p-7"
               onClick={(event) => event.stopPropagation()}
             >
@@ -931,27 +946,37 @@ const Homepage = () => {
                   ))}
                   <span className="ml-2 text-xs font-semibold text-slate-500">{feedbackRating}/5</span>
                 </div>
-                <input value={feedbackForm.name} onChange={(event) => setFeedbackForm((current) => ({ ...current, name: event.target.value }))} placeholder="Your name" aria-label="Your name" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
-                <input type="email" value={feedbackForm.email} onChange={(event) => setFeedbackForm((current) => ({ ...current, email: event.target.value }))} placeholder="Email (optional)" aria-label="Email (optional)" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
-                <textarea rows={4} value={feedbackForm.message} onChange={(event) => setFeedbackForm((current) => ({ ...current, message: event.target.value }))} placeholder="What did you like? What can we improve?" aria-label="Your feedback" className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                <input value={feedbackForm.name} onChange={(event) => setFeedbackForm((current) => ({ ...current, name: event.target.value }))} placeholder="Your name" aria-label="Your name" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition-[background-color,border-color,box-shadow] placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                <input type="email" value={feedbackForm.email} onChange={(event) => setFeedbackForm((current) => ({ ...current, email: event.target.value }))} placeholder="Email (optional)" aria-label="Email (optional)" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition-[background-color,border-color,box-shadow] placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                <textarea rows={4} value={feedbackForm.message} onChange={(event) => setFeedbackForm((current) => ({ ...current, message: event.target.value }))} placeholder="What did you like? What can we improve?" aria-label="Your feedback" className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition-[background-color,border-color,box-shadow] placeholder:text-slate-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
                 {feedbackError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{feedbackError}</p>}
                 {feedbackSuccess && <p role="status" className="flex items-start gap-2 rounded-xl bg-emerald-50 px-3 py-2.5 text-xs font-medium leading-5 text-emerald-700"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />{feedbackSuccess}</p>}
                 <button type="submit" disabled={feedbackSubmitting} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">
                   {feedbackSubmitting ? 'Sending feedback...' : 'Send feedback'}<Send className="h-4 w-4" />
                 </button>
               </form>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         )}
+        </AnimatePresence>
 
       </div>
 
+      <AnimatePresence>
       {isAiTeacherOpen && (
-        <div
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2, ease: revealEase }}
           className="fixed inset-0 z-[120] flex items-end justify-end bg-slate-950/40 p-3 sm:items-center sm:p-5"
           onClick={() => setIsAiTeacherOpen(false)}
         >
-          <div
+          <motion.div
+            initial={{ opacity: 0, y: 14, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.985 }}
+            transition={{ duration: 0.24, ease: revealEase }}
             className="flex h-[82vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-white/20 bg-white shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
@@ -991,7 +1016,7 @@ const Homepage = () => {
                   value={aiTeacherInput}
                   onChange={(event) => setAiTeacherInput(event.target.value)}
                   placeholder="I have a science doubt. Can you explain it in simple words?"
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:bg-white"
+                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition-[background-color,border-color,box-shadow] focus:border-slate-500 focus:bg-white"
                 />
               </label>
               <button
@@ -1002,9 +1027,10 @@ const Homepage = () => {
                 {isAiTeacherSending ? 'Thinking...' : 'Send to teacher'}
               </button>
             </form>
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       )}
+      </AnimatePresence>
       {weeklyRewards && (
         <div className="fixed bottom-5 right-5 z-[150]">
           {showWeeklyRewards && (
