@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -89,6 +90,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
   const [historyDetail, setHistoryDetail] = useState(null);
   const [historyDetailLoading, setHistoryDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const [analyticsPreview, setAnalyticsPreview] = useState(null);
 
   const load = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true);
@@ -152,6 +154,15 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (dailyPracticePage) return undefined;
+    let active = true;
+    apiRequest("/api/progress/analytics?range=30&source=all", { cache: "no-store" })
+      .then((result) => { if (active) setAnalyticsPreview(result); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [dailyPracticePage]);
 
   const challenge = data?.challenge;
   const streak = data?.streak || {
@@ -297,6 +308,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
         qualified: streakQualified,
       });
       await load(false);
+      window.dispatchEvent(new Event("daily-streak:updated"));
     } catch (finishError) {
       setError(finishError.message || "Unable to complete your challenge.");
     } finally {
@@ -314,6 +326,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
         body: "{}",
       });
       await load(false);
+      window.dispatchEvent(new Event("daily-streak:updated"));
     } catch (restoreError) {
       setError(restoreError.message || "Could not restore your streak.");
     } finally {
@@ -943,16 +956,14 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
               </span>
             </button>
             <div className="daily-practice-choice daily-practice-choice-explore text-left">
-              <LockKeyhole size={25} className="text-slate-400" />
-              <h3 className="mt-3 text-lg font-black text-slate-700">
-                Explore
-              </h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Discover interesting science concepts.
-              </p>
-              <span className="mt-3 inline-flex items-center gap-1 rounded-full bg-slate-200 px-3 py-1 text-xs font-black text-slate-500">
-                <LockKeyhole size={12} /> Locked
-              </span>
+              <BarChart3 size={25} className="text-cyan-600" />
+              <h3 className="mt-3 text-lg font-black text-slate-950">Performance Analysis</h3>
+              <p className="mt-1 text-sm text-slate-600">See your strengths, weak topics, and improvement.</p>
+              <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black">
+                <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-cyan-700">Accuracy: {analyticsPreview?.summary?.accuracy == null ? "—" : `${analyticsPreview.summary.accuracy}%`}</span>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">{analyticsPreview?.summary?.attempted || 0} answered</span>
+              </div>
+              <Link to="/performance/analytics" className="mt-3 inline-flex items-center gap-1 rounded-full bg-cyan-600 px-3 py-1.5 text-xs font-black text-white shadow-sm">View Detailed Analysis <ArrowRight size={13} /></Link>
             </div>
           </div>
         </section>

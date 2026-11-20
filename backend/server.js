@@ -7177,6 +7177,202 @@ app.delete('/api/topics/:id', authRequired, adminRequired, async (req, res) => {
   }
 })
 
+const analyticsQuestionTypeLabel = (type = '') => String(type || '').replaceAll('-', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+
+const analyticsLocalDate = (value, timezone) => {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value))
+  } catch {
+    return new Date(value).toISOString().slice(0, 10)
+  }
+}
+
+const analyticsDateDifference = (left, right) => {
+  const [leftYear, leftMonth, leftDay] = String(left).split('-').map(Number)
+  const [rightYear, rightMonth, rightDay] = String(right).split('-').map(Number)
+  return Math.round((Date.UTC(leftYear, leftMonth - 1, leftDay) - Date.UTC(rightYear, rightMonth - 1, rightDay)) / 86400000)
+}
+
+const buildStudentAnalytics = async ({ userId, timezone, range = '30', source = 'all' }) => {
+  const today = localDateForTimezone(timezone)
+  const rangeDays = range === 'all' ? null : Math.max(1, Math.min(365, Number(range) || 30))
+  const earliestDate = rangeDays ? new Date(Date.now() - (rangeDays * 3 * 86400000)) : new Date(0)
+  const [practiceAttempts, dailyChallenges, streak] = await Promise.all([
+    PracticeAttempt.find({ user: userId, createdAt: { $gte: earliestDate } })
+      .select('attemptType createdAt questionBreakdown')
+      .sort({ createdAt: 1 })
+      .limit(2000)
+      .lean(),
+    DailyChallenge.find({ user: userId, subject: getActiveScience(), createdAt: { $gte: earliestDate } })
+      .select('localDate createdAt questionIds answers status')
+      .sort({ localDate: 1 })
+      .limit(400)
+      .lean(),
+    StudentStreak.findOne({ user: userId, subject: getActiveScience() }).select('currentStreak longestStreak').lean(),
+  ])
+
+  const dailyQuestionIds = [...new Set(dailyChallenges.flatMap((challenge) => (challenge.questionIds || []).map(String)))]
+  const dailyQuestions = dailyQuestionIds.length
+    ? await ObjectiveQuestion.find({ _id: { $in: dailyQuestionIds } })
+      .populate({ path: 'objectiveType', select: 'type topic', populate: { path: 'topic', select: 'name number chapter', populate: { path: 'chapter', select: 'number name' } } })
+      .select('_id objectiveType')
+      .lean()
+    : []
+  const dailyQuestionById = new Map(dailyQuestions.map((question) => [String(question._id), question]))
+  const records = []
+
+  dailyChallenges.forEach((challenge) => {
+    ;(challenge.answers || []).forEach((answer) => {
+      const metadata = dailyQuestionById.get(String(answer.questionId))
+      const objectiveType = metadata?.objectiveType
+      const topic = objectiveType?.topic
+      const chapter = topic?.chapter
+      records.push({
+        key: `daily:${challenge._id}:${answer.questionId}`,
+        source: 'daily-streak',
+        attemptedAt: answer.answeredAt || challenge.createdAt,
+        localDate: challenge.localDate || analyticsLocalDate(answer.answeredAt || challenge.createdAt, timezone),
+        questionId: String(answer.questionId || ''),
+        chapterId: chapter?._id ? String(chapter._id) : '',
+        chapterNumber: chapter?.number || 0,
+        chapterName: chapter?.name || '',
+        topicId: topic?._id ? String(topic._id) : '',
+        topicName: topic?.name || '',
+        objectiveTypeId: objectiveType?._id ? String(objectiveType._id) : '',
+        questionType: objectiveType?.type || '',
+        status: answer.isCorrect ? 'correct' : 'wrong',
+        selectedAnswer: answer.selectedAnswer,
+        correctAnswer: null,
+        timeTakenMs: null,
+      })
+    })
+  })
+
+  practiceAttempts.forEach((attempt) => {
+    const attemptSource = attempt.attemptType === 'test' ? 'test' : 'chapter-practice'
+    if (source !== 'all' && source !== attemptSource) return
+    ;(attempt.questionBreakdown || []).forEach((item, index) => {
+      records.push({
+        key: `${attemptSource}:${attempt._id}:${item.questionId || index}`,
+        source: attemptSource,
+        attemptedAt: attempt.createdAt,
+        localDate: analyticsLocalDate(attempt.createdAt, timezone),
+        questionId: item.questionId ? String(item.questionId) : '',
+        chapterId: item.chapterId ? String(item.chapterId) : '',
+        chapterNumber: Number(item.chapterNumber || 0),
+        chapterName: item.chapterName || '',
+        topicId: item.topicId ? String(item.topicId) : '',
+        topicName: item.topicName || '',
+        objectiveTypeId: item.objectiveTypeId ? String(item.objectiveTypeId) : '',
+        questionType: item.questionType || (attempt.sourceName || '').split(' / ').pop() || '',
+        status: item.status || 'skipped',
+        selectedAnswer: item.selectedAnswer,
+        correctAnswer: item.correctAnswer,
+        timeTakenMs: Number.isFinite(Number(item.timeTakenMs)) && Number(item.timeTakenMs) > 0 ? Number(item.timeTakenMs) : null,
+      })
+    })
+  })
+
+  const selectedRecords = records
+    .filter((record) => source === 'all' || record.source === source)
+    .sort((left, right) => new Date(left.attemptedAt || 0) - new Date(right.attemptedAt || 0))
+  const currentStart = rangeDays ? analyticsDateDifference(today, today) - rangeDays + 1 : null
+  const inCurrentWindow = (record, startOffset = 0, days = rangeDays) => {
+    if (!days) return true
+    const offset = analyticsDateDifference(record.localDate, today)
+    return offset <= -startOffset && offset > -(startOffset + days)
+  }
+  const current = selectedRecords.filter((record) => inCurrentWindow(record, 0, rangeDays))
+  const previous = rangeDays ? selectedRecords.filter((record) => inCurrentWindow(record, rangeDays, rangeDays)) : []
+  const answered = (items) => items.filter((item) => item.status === 'correct' || item.status === 'wrong')
+  const stats = (items) => {
+    const answeredItems = answered(items)
+    const correct = answeredItems.filter((item) => item.status === 'correct').length
+    const wrong = answeredItems.filter((item) => item.status === 'wrong').length
+    const skipped = items.filter((item) => item.status === 'skipped').length
+    return { total: items.length, attempted: answeredItems.length, correct, wrong, skipped, accuracy: answeredItems.length ? Math.round((correct / answeredItems.length) * 100) : null }
+  }
+  const currentStats = stats(current)
+  const previousStats = stats(previous)
+  const groupBy = (items, keyGetter) => {
+    const map = new Map()
+    items.forEach((item) => {
+      const key = keyGetter(item)
+      if (!key) return
+      const group = map.get(key) || { key, label: key, total: 0, attempted: 0, correct: 0, wrong: 0, skipped: 0 }
+      group.total += 1
+      if (item.status === 'correct' || item.status === 'wrong') group.attempted += 1
+      if (item.status === 'correct') group.correct += 1
+      if (item.status === 'wrong') group.wrong += 1
+      if (item.status === 'skipped') group.skipped += 1
+      map.set(key, group)
+    })
+    return [...map.values()].map((group) => ({ ...group, accuracy: group.attempted ? Math.round((group.correct / group.attempted) * 100) : null }))
+  }
+  const chapterBreakdown = groupBy(current, (item) => item.chapterId || item.chapterName).map((group) => {
+    const item = current.find((entry) => (entry.chapterId || entry.chapterName) === group.key)
+    return { ...group, chapterId: item?.chapterId || '', chapterNumber: item?.chapterNumber || 0, chapterName: item?.chapterName || group.label, label: item?.chapterName || group.label, actionUrl: item?.chapterNumber ? `/chapters/${item.chapterNumber}/topics` : '' }
+  }).sort((left, right) => (left.accuracy ?? 101) - (right.accuracy ?? 101))
+  const topicBreakdown = groupBy(current, (item) => item.topicId || item.topicName).map((group) => {
+    const item = current.find((entry) => (entry.topicId || entry.topicName) === group.key)
+    return { ...group, topicId: item?.topicId || '', topicName: item?.topicName || group.label, chapterName: item?.chapterName || '', label: item?.topicName || group.label }
+  }).sort((left, right) => (left.accuracy ?? 101) - (right.accuracy ?? 101))
+  const questionTypeBreakdown = groupBy(current, (item) => item.questionType).map((group) => ({ ...group, label: analyticsQuestionTypeLabel(group.key) })).sort((left, right) => (left.accuracy ?? 101) - (right.accuracy ?? 101))
+  const dayMap = new Map()
+  current.forEach((item) => {
+    const entry = dayMap.get(item.localDate) || { date: item.localDate, total: 0, attempted: 0, correct: 0, wrong: 0, skipped: 0, sources: {} }
+    entry.total += 1
+    if (item.status === 'correct' || item.status === 'wrong') entry.attempted += 1
+    if (item.status === 'correct') entry.correct += 1
+    if (item.status === 'wrong') entry.wrong += 1
+    if (item.status === 'skipped') entry.skipped += 1
+    entry.sources[item.source] = (entry.sources[item.source] || 0) + 1
+    dayMap.set(item.localDate, entry)
+  })
+  const accuracyTrend = [...dayMap.values()].sort((left, right) => left.date.localeCompare(right.date)).map((entry) => ({ ...entry, accuracy: entry.attempted ? Math.round((entry.correct / entry.attempted) * 100) : 0 }))
+  const activeDays = new Set(current.filter((item) => item.status !== 'skipped').map((item) => item.localDate)).size
+  const validTimes = current.filter((item) => Number.isFinite(item.timeTakenMs) && item.timeTakenMs > 0 && item.timeTakenMs <= 3600000).map((item) => item.timeTakenMs)
+  const averageTime = validTimes.length ? Math.round(validTimes.reduce((sum, value) => sum + value, 0) / validTimes.length) : null
+  const periodChange = currentStats.accuracy !== null && previousStats.accuracy !== null ? currentStats.accuracy - previousStats.accuracy : null
+  const reliableChapters = chapterBreakdown.filter((item) => item.attempted >= 5)
+  const reliableTopics = topicBreakdown.filter((item) => item.attempted >= 5)
+  const recommendations = []
+  reliableChapters.filter((item) => item.accuracy < 50).slice(0, 3).forEach((item) => recommendations.push({ title: `Revise ${item.label}`, description: `Your accuracy is ${item.accuracy}% across ${item.attempted} answered questions. Review the chapter, then practise again.`, category: 'chapter', priority: 'high', reason: 'Accuracy below 50% with enough attempts.', actionLabel: 'Practice chapter', actionUrl: item.actionUrl }))
+  reliableTopics.filter((item) => item.accuracy < 70).slice(0, 3).forEach((item) => recommendations.push({ title: `Practise ${item.label}`, description: `${item.accuracy}% accuracy across ${item.attempted} answered questions shows this topic needs another focused attempt.`, category: 'topic', priority: 'medium', reason: 'Topic accuracy is below 70%.', actionLabel: 'Review topic', actionUrl: '' }))
+  if (currentStats.total && currentStats.skipped / currentStats.total >= 0.2) recommendations.push({ title: 'Attempt more questions', description: `${currentStats.skipped} questions were skipped in this period. Try answering more after reviewing difficult concepts.`, category: 'habit', priority: 'medium', reason: 'Skipped-question share is at least 20%.', actionLabel: 'Continue practice', actionUrl: '/daily-streak/dailypractice' })
+  if (!recommendations.length && periodChange !== null && periodChange > 0) recommendations.push({ title: 'Keep the momentum', description: `Your accuracy is up ${periodChange} percentage points compared with the previous period. Maintain a regular practice routine.`, category: 'progress', priority: 'low', reason: 'Current accuracy is higher than the previous comparable period.', actionLabel: 'Practise today', actionUrl: '/daily-streak/dailypractice' })
+  if (!currentStats.total) recommendations.push({ title: 'Start building your baseline', description: 'Complete some Daily Streak or Chapter Practice questions before drawing performance conclusions.', category: 'data', priority: 'medium', reason: 'No attempts in the selected period.', actionLabel: 'Start practice', actionUrl: '/daily-streak/dailypractice' })
+
+  return {
+    range: rangeDays || 'all', source,
+    summary: { ...currentStats, accuracyChange: periodChange, activeDays, currentStreak: Number(streak?.currentStreak || 0), longestStreak: Number(streak?.longestStreak || 0) },
+    dailyComparison: { today: stats(selectedRecords.filter((item) => item.localDate === today)), yesterday: stats(selectedRecords.filter((item) => item.localDate === previousLocalDate(today))) },
+    periodComparison: { current: currentStats, previous: previousStats, accuracyChange: periodChange },
+    speedAnalysis: { available: validTimes.length > 0, averageTimeMs: averageTime, sampleSize: validTimes.length, message: validTimes.length ? '' : 'Timing data will be available from your future attempts.' },
+    strengths: reliableChapters.filter((item) => item.accuracy >= 70).sort((left, right) => right.accuracy - left.accuracy).slice(0, 5),
+    weakAreas: reliableTopics.slice(0, 5),
+    chapterBreakdown, topicBreakdown, questionTypeBreakdown, accuracyTrend,
+    activityTrend: accuracyTrend.map((item) => ({ date: item.date, attempted: item.attempted })),
+    consistency: { activeDays, averageQuestionsPerActiveDay: activeDays ? Math.round(currentStats.total / activeDays) : 0, currentStreak: Number(streak?.currentStreak || 0), longestStreak: Number(streak?.longestStreak || 0) },
+    recommendations,
+    recentAttempts: selectedRecords.slice(-20).reverse().map((item) => ({ source: item.source, date: item.localDate, status: item.status, chapterName: item.chapterName, topicName: item.topicName, questionType: analyticsQuestionTypeLabel(item.questionType) })),
+    dataAvailability: { hasDailyStreak: selectedRecords.some((item) => item.source === 'daily-streak'), hasChapterPractice: selectedRecords.some((item) => item.source === 'chapter-practice'), hasTests: selectedRecords.some((item) => item.source === 'test'), hasTiming: validTimes.length > 0, minimumReliableSample: 5 },
+  }
+}
+
+app.get('/api/progress/analytics', authRequired, async (req, res) => {
+  try {
+    const timezone = dailyTimezone(req)
+    const range = ['7', '30', 'all'].includes(String(req.query.range || '30')) ? String(req.query.range || '30') : '30'
+    const source = ['all', 'daily-streak', 'chapter-practice', 'test'].includes(String(req.query.source || 'all')) ? String(req.query.source || 'all') : 'all'
+    res.set('Cache-Control', 'no-store')
+    res.json(await buildStudentAnalytics({ userId: req.user._id, timezone, range, source }))
+  } catch (error) {
+    console.error('Student analytics load failed:', error.message)
+    res.status(500).json({ message: 'Could not load student analytics.' })
+  }
+})
+
 app.get('/api/progress/me', authRequired, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).populate('classId', 'name')

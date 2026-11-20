@@ -40,6 +40,7 @@ const Oddmanout = lazy(() => import('./pages/Oddmanout'))
 const Objectivepage = lazy(() => import('./pages/Objectivepage'))
 const Profilepage = lazy(() => import('./pages/Profilepage'))
 const ProfilePerformancePage = lazy(() => import('./pages/ProfilePerformancePage'))
+const StudentPerformanceAnalyticsPage = lazy(() => import('./pages/StudentPerformanceAnalyticsPage'))
 const Signinpage = lazy(() => import('./pages/Signinpage'))
 const Signuppage = lazy(() => import('./pages/Signuppage'))
 const CompleteProfilePage = lazy(() => import('./pages/CompleteProfilePage'))
@@ -878,6 +879,7 @@ const AppLayout = () => {
           <Route path="/chapters/:chapterNumber/topics/:topicId/objectives/numericals" element={<Numericals />} />
           <Route path="/profile" element={<ProtectedRoute><Profilepage /></ProtectedRoute>} />
           <Route path="/profile/performance" element={<ProtectedRoute><ProfilePerformancePage /></ProtectedRoute>} />
+          <Route path="/performance/analytics" element={<ProtectedRoute><StudentPerformanceAnalyticsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
           <Route path="/complete-profile" element={<ProtectedRoute><CompleteProfilePage /></ProtectedRoute>} />

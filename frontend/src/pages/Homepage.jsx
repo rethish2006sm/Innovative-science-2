@@ -37,7 +37,7 @@ const Countdown = memo(function Countdown() {
     return () => window.clearInterval(intervalId)
   }, [])
 
-  return <span className="ml-1 whitespace-nowrap text-[10px] font-bold text-slate-500 sm:text-xs">· {value}</span>
+  return <span className="ml-1 whitespace-nowrap text-[9px] font-bold text-slate-500 min-[380px]:text-[10px] sm:text-xs">· {value}</span>
 })
 
 const polarToCartesian = (center, radius, angle) => {
@@ -605,24 +605,23 @@ const Homepage = () => {
             className="flex min-w-0 flex-col rounded-2xl border border-white/70 bg-white/75 p-3 shadow-[0_8px_32px_-14px_rgba(0,0,0,0.12)] backdrop-blur-lg min-[380px]:p-4 sm:rounded-[2rem] sm:backdrop-blur-2xl sm:p-7 lg:p-9"
           >
             <motion.div variants={fadeUp} className="mt-3 rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 to-amber-50/70 p-3 min-[380px]:p-3.5 sm:mt-5 sm:rounded-3xl sm:p-5">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 min-[380px]:gap-3">
+                <div className="flex min-w-0 flex-[1_1_10rem] items-center gap-2 min-[380px]:gap-3">
                   <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-100 ring-1 ring-amber-200 shadow-sm sm:h-10 sm:w-10 sm:rounded-2xl">
                     <span className="text-2xl leading-none" role="img" aria-label="Fire">🔥</span>
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">Daily streak</p>
                     <div
-                      className={`mt-1 inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono tabular-nums text-[11px] font-black tracking-tight sm:text-sm ${dailyStreakData?.streak?.currentStreak ? 'text-amber-500' : 'text-slate-400'}`}
+                      className={`mt-1 inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono tabular-nums text-[10px] font-black tracking-tight min-[380px]:text-[11px] sm:text-sm ${dailyStreakData?.streak?.currentStreak ? 'text-amber-500' : 'text-slate-400'}`}
                       aria-label={`${dailyStreakData?.streak?.currentStreak || 0} day streak`}
                     >
-                      <span className="text-xl leading-none" role="img" aria-hidden="true">🔥</span>
-                      <span className="text-base font-black sm:text-lg">{dailyStreakData?.streak?.currentStreak || 0}</span>
+                      <span className="text-sm font-black min-[380px]:text-base sm:text-lg">{dailyStreakData?.streak?.currentStreak || 0}</span>
                       <Countdown />
                     </div>
                   </div>
                 </div>
-                <Link to="/daily-streak" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white px-3 py-2 text-xs font-bold leading-none text-orange-700 shadow-sm transition hover:bg-orange-100">
+                <Link to="/daily-streak" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white px-2 py-1.5 text-[10px] font-bold leading-none text-orange-700 shadow-sm transition hover:bg-orange-100 min-[380px]:px-3 min-[380px]:py-2 min-[380px]:text-xs">
                   Practice today
                   <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
