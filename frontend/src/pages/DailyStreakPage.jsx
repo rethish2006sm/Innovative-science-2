@@ -26,6 +26,32 @@ import signature from "../assets/rethish_sign-removebg-preview.png";
 import { getStoredAuth } from "../authStorage";
 import LoadingState from "../components/LoadingState";
 
+const dailyChallengeCacheKey = () => {
+  const auth = getStoredAuth();
+  const userKey = auth?.user?._id || auth?.user?.id || auth?.user?.email || "guest";
+  return `daily-challenge-cache:${userKey}`;
+};
+
+const readDailyChallengeCache = () => {
+  try {
+    const cached = JSON.parse(window.sessionStorage.getItem(dailyChallengeCacheKey()) || "null");
+    return cached?.data || null;
+  } catch {
+    return null;
+  }
+};
+
+const writeDailyChallengeCache = (value) => {
+  try {
+    window.sessionStorage.setItem(
+      dailyChallengeCacheKey(),
+      JSON.stringify({ savedAt: Date.now(), data: value }),
+    );
+  } catch {
+    // Cached data is an optimization; quota or privacy failures are safe to ignore.
+  }
+};
+
 const dailyHistoryDateLabel = (localDate) => {
   const date = new Date(`${localDate}T00:00:00`);
   const today = new Date();
@@ -46,7 +72,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
   const navigate = useNavigate();
   const showDailyStreakBottomNav =
     pathname === "/daily-streak" && !dailyPracticePage;
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(readDailyChallengeCache);
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -102,6 +128,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
       });
 
       setData(challengeData);
+      writeDailyChallengeCache(challengeData);
 
       const questions = challengeData.challenge?.questions || [];
       if (
@@ -152,7 +179,9 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
   useEffect(() => {
     // Initial data loading intentionally hydrates local UI state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
+    load(!data);
+  // The initial cached value determines whether the first request needs a full-page loader.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
   useEffect(() => {

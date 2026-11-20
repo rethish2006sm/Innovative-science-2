@@ -568,7 +568,15 @@ const Navbar = () => {
   const mobileScienceMenuRef = useRef(null);
 
   const [auth, setAuth] = useState(() => getStoredAuth());
-  const [currentStreak, setCurrentStreak] = useState(0);
+  const streakCacheKey = auth?.user?._id || auth?.user?.id || auth?.user?.email || 'guest';
+  const [currentStreak, setCurrentStreak] = useState(() => {
+    try {
+      const cached = Number(window.localStorage.getItem(`navbar-streak:${streakCacheKey}`));
+      return Number.isFinite(cached) ? Math.max(0, cached) : 0;
+    } catch {
+      return 0;
+    }
+  });
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -698,16 +706,17 @@ const Navbar = () => {
         cache: 'no-store',
       });
 
-      setCurrentStreak(
-        Math.max(
-          0,
-          Number(result?.streak?.currentStreak || 0)
-        )
-      );
+      const nextStreak = Math.max(0, Number(result?.streak?.currentStreak || 0));
+      setCurrentStreak(nextStreak);
+      try {
+        window.localStorage.setItem(`navbar-streak:${streakCacheKey}`, String(nextStreak));
+      } catch {
+        // Ignore storage failures and keep the live value.
+      }
     } catch {
       // Keep the existing streak when the request fails.
     }
-  }, [auth?.token, auth?.user?.isAdmin]);
+  }, [auth?.token, auth?.user?.isAdmin, streakCacheKey]);
 
   useEffect(() => {
     loadNavbarStreak();
@@ -903,7 +912,7 @@ const Navbar = () => {
           duration: shouldReduceMotion ? 0 : 0.45,
           ease: [0.22, 1, 0.36, 1],
         }}
-        className={`navbar-shell isolate fixed left-0 top-0 z-[100] w-full overflow-visible border-b backdrop-blur-3xl transition-colors duration-500 ${
+        className={`navbar-shell isolate fixed left-0 top-0 z-[100] w-full overflow-visible border-b backdrop-blur-3xl transition-colors duration-150 ${
           isGold
             ? 'border-amber-200/30 bg-[#100d08]/95 shadow-[0_8px_45px_rgba(217,160,60,.18),inset_0_-1px_0_rgba(255,220,150,.12)]'
             : isSilver
@@ -988,7 +997,7 @@ const Navbar = () => {
                 {/* WEBSITE NAME - ALWAYS ONE LINE */}
 
                 <h1
-                  className={`navbar-brand-name flex min-w-0 items-center gap-1 whitespace-nowrap font-black transition-colors duration-500 ${brandTextClass}`}
+                  className={`navbar-brand-name flex min-w-0 items-center gap-1 whitespace-nowrap font-black transition-colors duration-150 ${brandTextClass}`}
                 >
                   <span className="shrink-0 whitespace-nowrap">
                     Innovative Science{' '}
