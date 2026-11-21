@@ -44,8 +44,9 @@ const NOTICE_THEMES = {
   },
 }
 
-const SiteNoticeBanner = ({ message, color = 'amber', onClose }) => {
+const SiteNoticeBanner = ({ message, messageHtml = '', color = 'amber', onClose }) => {
   const displayMessage = String(message || '').trim()
+  const displayHtml = String(messageHtml || displayMessage).trim()
   const theme = NOTICE_THEMES[String(color || 'amber').toLowerCase()] || NOTICE_THEMES.amber
   const containerRef = useRef(null)
   const measureRef = useRef(null)
@@ -99,24 +100,24 @@ const SiteNoticeBanner = ({ message, color = 'amber', onClose }) => {
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 w-max whitespace-nowrap text-sm font-semibold leading-6 tracking-wide opacity-0"
           >
-            {displayMessage}
+            <span dangerouslySetInnerHTML={{ __html: displayHtml }} />
           </span>
           {shouldScroll ? (
             <div
-              className={`notice-marquee-track flex min-w-max items-center whitespace-nowrap text-sm font-semibold leading-6 tracking-wide ${theme.text}`}
+              className={`notice-marquee-track flex min-w-max items-center whitespace-nowrap text-sm font-semibold leading-6 tracking-wide [&_a]:font-bold [&_a]:text-blue-600 [&_a]:underline ${theme.text}`}
               aria-live="polite"
             >
-              <span className="px-4">{displayMessage}</span>
+                <span className="px-4" dangerouslySetInnerHTML={{ __html: displayHtml }} />
               <span className="px-4" aria-hidden="true">
-                {displayMessage}
+                  <span dangerouslySetInnerHTML={{ __html: displayHtml }} />
               </span>
             </div>
           ) : (
             <div
-              className={`w-full text-center text-sm font-semibold leading-6 tracking-wide ${theme.text}`}
+              className={`w-full text-center text-sm font-semibold leading-6 tracking-wide [&_a]:font-bold [&_a]:text-blue-600 [&_a]:underline ${theme.text}`}
               aria-live="polite"
             >
-              {displayMessage}
+            <span dangerouslySetInnerHTML={{ __html: displayHtml }} />
             </div>
           )}
         </div>

@@ -840,3 +840,100 @@ body { padding-bottom: 0; }
   .navbar-streak-badge::after,
   .navbar-streak-badge::before { animation: none; }
 }
+
+
+/* ========================================
+   INNOVATIVE SCIENCE 2 - ABOUT PAGE
+======================================== */
+
+.about-page {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.about-grid {
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.10) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.10) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}
+
+.about-gradient-text {
+  background: linear-gradient(
+    105deg,
+    #f97316 0%,
+    #ea580c 45%,
+    #fb923c 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.about-dark-gradient {
+  background: linear-gradient(
+    100deg,
+    #fb923c,
+    #fbbf24,
+    #fdba74
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.about-primary-btn {
+  background: linear-gradient(110deg, #f97316, #ea580c);
+  box-shadow: 0 10px 25px -12px rgba(234, 88, 12, 0.7);
+  transition:
+    transform 0.3s ease,
+    box-shadow 0.3s ease,
+    background 0.3s ease;
+}
+
+.about-primary-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 15px 35px -12px rgba(234, 88, 12, 0.65);
+}
+
+.about-page a:focus-visible {
+  outline: 3px solid rgba(249, 115, 22, 0.55);
+  outline-offset: 4px;
+}
+
+/* Smooth scrolling */
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Mobile optimisation */
+
+@media (max-width: 640px) {
+  .about-grid {
+    background-size: 32px 32px;
+  }
+
+  .about-primary-btn,
+  .about-page a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .about-page section {
+    scroll-margin-top: 80px;
+  }
+}
+
+/* Accessibility */
+
+@media (prefers-reduced-motion: reduce) {
+  .about-page *,
+  .about-page *::before,
+  .about-page *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

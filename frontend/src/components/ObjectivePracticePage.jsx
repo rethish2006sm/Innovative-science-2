@@ -216,6 +216,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [boardSavingQuestionId, setBoardSavingQuestionId] = useState('')
   const [error, setError] = useState('')
   const practiceHistoryEntry = useRef(false)
+  const questionStartedAtRef = useRef({})
   const questionCardRef = useRef(null)
   const [pendingResult, setPendingResult] = useState(null)
   const [feedbackPromptStage, setFeedbackPromptStage] = useState('')
@@ -274,6 +275,13 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   ])
   const isPracticeCompleted = questions.length > 0
     && questions.every((question) => practicedQuestionIds.has(String(question._id)))
+
+  useEffect(() => {
+    const questionId = currentQuestion?._id
+    if (questionId && !questionStartedAtRef.current[questionId]) {
+      questionStartedAtRef.current[questionId] = Date.now()
+    }
+  }, [currentQuestion?._id])
   const dashboardFilters = [
     { id: 'all', label: 'All', count: questions.length },
     { id: 'attempted', label: 'Attempted', count: answeredCount },
@@ -1166,6 +1174,9 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           answers: Object.entries(answers).map(([questionId, selectedOption]) => ({
             questionId,
             selectedOption,
+            timeTakenMs: questionStartedAtRef.current[questionId]
+              ? Math.max(1, Date.now() - questionStartedAtRef.current[questionId])
+              : undefined,
           })),
         }),
       })
@@ -1222,6 +1233,9 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
           answers: [{
             questionId: currentQuestion._id,
             selectedOption,
+            timeTakenMs: questionStartedAtRef.current[currentQuestion._id]
+              ? Math.max(1, Date.now() - questionStartedAtRef.current[currentQuestion._id])
+              : undefined,
           }],
         }),
       })

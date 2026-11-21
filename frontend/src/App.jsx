@@ -816,6 +816,7 @@ const AppLayout = () => {
         {showSiteNotice && (
           <SiteNoticeBanner
             message={siteNotice.message}
+            messageHtml={siteNotice.messageHtml}
             color={siteNotice.color}
             onClose={() => setDismissedNoticeKey(siteNoticeKey)}
           />

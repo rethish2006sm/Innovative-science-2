@@ -518,6 +518,14 @@ objectiveTypeSchema.index({ science: 1, topic: 1, type: 1 }, { unique: true })
 
 const objectiveQuestionSchema = new mongoose.Schema(
   {
+    // Stable identity for copied records. Older records use the normalized
+    // question fingerprint fallback in logicalQuestionKey().
+    canonicalQuestionId: {
+      type: String,
+      trim: true,
+      maxlength: 160,
+      default: '',
+    },
     objectiveType: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ObjectiveType',
@@ -590,6 +598,7 @@ const objectiveQuestionSchema = new mongoose.Schema(
 // Indexing the foreign key avoids scanning all questions for each topic.
 objectiveQuestionSchema.index({ objectiveType: 1 })
 objectiveQuestionSchema.index({ objectiveType: 1, isBoardQuestion: 1 })
+objectiveQuestionSchema.index({ canonicalQuestionId: 1 })
 
 const theoryTypeSchema = new mongoose.Schema(
   {
@@ -700,6 +709,52 @@ const Science2ObjectiveQuestion = mongoose.model('ObjectiveQuestion', objectiveQ
 const Science2TheoryType = mongoose.model('TheoryType', theoryTypeSchema)
 const Science2TheoryQuestion = mongoose.model('TheoryQuestion', theoryQuestionSchema)
 const Science2PracticeScore = mongoose.model('PracticeScore', practiceScoreSchema)
+
+const brainCellRewardSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'ObjectiveQuestion', required: true },
+    canonicalQuestionId: { type: String, required: true, trim: true },
+    rewardKey: { type: String, required: true, trim: true },
+    rewardType: { type: String, enum: ['question'], default: 'question' },
+    source: { type: String, required: true, trim: true, maxlength: 80 },
+    cellsAwarded: { type: Number, default: 1, min: 1, max: 1 },
+  },
+  { timestamps: true },
+)
+addScienceScope(brainCellRewardSchema)
+brainCellRewardSchema.index({ science: 1, user: 1, rewardKey: 1 }, { unique: true })
+brainCellRewardSchema.index({ science: 1, user: 1, createdAt: -1 })
+const BrainCellReward = mongoose.model('BrainCellReward', brainCellRewardSchema)
+
+const brainCellAdjustmentSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    previousBalance: { type: Number, required: true, min: 0 },
+    newBalance: { type: Number, required: true, min: 0 },
+    delta: { type: Number, required: true },
+    admin: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    reason: { type: String, trim: true, maxlength: 500, default: 'Admin balance adjustment' },
+  },
+  { timestamps: true },
+)
+addScienceScope(brainCellAdjustmentSchema)
+brainCellAdjustmentSchema.index({ science: 1, user: 1, createdAt: -1 })
+brainCellAdjustmentSchema.index({ science: 1, admin: 1, createdAt: -1 })
+const BrainCellAdjustment = mongoose.model('BrainCellAdjustment', brainCellAdjustmentSchema)
+
+const testSessionSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    questionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ObjectiveQuestion', required: true }],
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: true },
+)
+addScienceScope(testSessionSchema)
+testSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
+testSessionSchema.index({ science: 1, user: 1, createdAt: -1 })
+const TestSession = mongoose.model('TestSession', testSessionSchema)
 
 // Immutable content history used by the fact-checked notification generator.
 // Keep this separate from the content collections so deletes remain auditable.
@@ -837,6 +892,10 @@ const practiceAttemptSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: 0,
+    },
+    questionRewardsApplied: {
+      type: Boolean,
+      default: false,
     },
     conceptSummary: {
       summary: {
@@ -1348,6 +1407,12 @@ const siteNoticeSchema = new mongoose.Schema(
       required: true,
       trim: true,
       maxlength: 500,
+    },
+    messageHtml: {
+      type: String,
+      trim: true,
+      maxlength: 5000,
+      default: '',
     },
     color: {
       type: String,
@@ -2145,6 +2210,7 @@ const publicSiteNotice = (notice) => {
   return {
     id: String(notice._id),
     message: String(notice.message || ''),
+    messageHtml: String(notice.messageHtml || notice.message || ''),
     color: String(notice.color || 'amber'),
     updatedAt: notice.updatedAt,
   }
@@ -2566,6 +2632,75 @@ const buildChapterBreakdownEntry = ({ chapter, score, totalQuestions, objectiveL
 
 const normalizeQuestionId = (value = '') => String(value || '').trim()
 
+const normalizeQuestionText = (value = '') => String(value || '')
+  .normalize('NFKC')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase()
+
+const logicalQuestionKey = (question) => {
+  const canonical = normalizeQuestionId(question?.canonicalQuestionId)
+  if (canonical) return `canonical:${canonical}`
+
+  const text = normalizeQuestionText(question?.question)
+  if (!text) return `id:${String(question?._id || '')}`
+  return `text:${require('crypto').createHash('sha256').update(text).digest('hex')}`
+}
+
+// The ledger insert is the concurrency gate. A duplicate-key result means a
+// different page, retry, or simultaneous request already awarded this logical
+// question to this student.
+const awardBrainCellForQuestion = async (userId, questionId, source = 'unknown') => {
+  const question = await ObjectiveQuestion.findById(questionId).select('_id question canonicalQuestionId').lean()
+  if (!question) return 0
+
+  const canonicalQuestionId = logicalQuestionKey(question)
+  const rewardKey = `question:${canonicalQuestionId}`
+  const reward = {
+    user: userId,
+    questionId: question._id,
+    canonicalQuestionId,
+    rewardKey,
+    rewardType: 'question',
+    source: String(source).slice(0, 80),
+    cellsAwarded: 1,
+  }
+
+  const awardWithTransaction = async () => {
+    const session = await mongoose.startSession()
+    try {
+      let awarded = 0
+      await session.withTransaction(async () => {
+        await BrainCellReward.create([reward], { session })
+        await User.updateOne({ _id: userId, isAdmin: false }, { $inc: { totalBrainCells: 1 } }, { session })
+        awarded = 1
+      })
+      return awarded
+    } finally {
+      await session.endSession()
+    }
+  }
+
+  try {
+    return await awardWithTransaction()
+  } catch (error) {
+    if (error?.code === 11000 || error?.writeErrors?.some((item) => item.code === 11000)) return 0
+    // Local MongoDB installations may not support transactions. The unique
+    // ledger index still makes the insert atomic, so retain a safe fallback.
+    if (error?.message?.includes('Transaction numbers are only allowed') || error?.message?.includes('replica set')) {
+      try {
+        await BrainCellReward.create(reward)
+        await User.updateOne({ _id: userId, isAdmin: false }, { $inc: { totalBrainCells: 1 } })
+        return 1
+      } catch (fallbackError) {
+        if (fallbackError?.code === 11000) return 0
+        throw fallbackError
+      }
+    }
+    throw error
+  }
+}
+
 const summarizeAttemptHistory = (attempts = [], { includeChapterProgress = true } = {}) => {
   const chapterTotals = includeChapterProgress ? new Map() : null
   const rewardedQuestionIds = new Set()
@@ -2914,7 +3049,11 @@ const updateLeaderboardTotals = async (userId, attemptData = {}) => {
     }
 
     const rewardedQuestionIds = new Set((user.leaderboardQuestionIds || []).map((item) => String(item)))
-    const { leaderboardCells, nextRewardedQuestionIds } = calculateLeaderboardCellsFromAttempt(attemptData, rewardedQuestionIds)
+  const questionRewardsApplied = attemptData.questionRewardsApplied === true
+  const calculated = questionRewardsApplied
+    ? { leaderboardCells: safeNumber(attemptData.brainCellsEarned), nextRewardedQuestionIds: rewardedQuestionIds }
+    : calculateLeaderboardCellsFromAttempt(attemptData, rewardedQuestionIds)
+  const { leaderboardCells, nextRewardedQuestionIds } = calculated
     const score = safeNumber(attemptData.score ?? attemptData.totalScore ?? 0)
     const totalQuestions = safeNumber(attemptData.totalQuestions)
 
@@ -2925,7 +3064,7 @@ const updateLeaderboardTotals = async (userId, attemptData = {}) => {
           totalScore: leaderboardCells,
           totalMarks: safeNumber(totalQuestions),
           totalCorrect: safeNumber(score),
-          totalBrainCells: leaderboardCells,
+          totalBrainCells: questionRewardsApplied ? 0 : leaderboardCells,
           totalAttempts: 1,
         },
         $set: {
@@ -2948,6 +3087,15 @@ const syncLeaderboardTotalsFromAttempts = async () => {
     .lean()
   const battleRewards = await BattleReward.find({ userId: { $in: [...userIdSet] } })
     .sort({ createdAt: 1 })
+    .lean()
+  const streaks = await StudentStreak.find({ user: { $in: [...userIdSet] } })
+    .select('user rewardClaims')
+    .lean()
+  const questionRewards = await BrainCellReward.find({ user: { $in: [...userIdSet] } })
+    .select('user cellsAwarded')
+    .lean()
+  const brainCellAdjustments = await BrainCellAdjustment.find({ user: { $in: [...userIdSet] } })
+    .select('user delta')
     .lean()
   const battleRewardRoomIds = new Set(battleRewards.map((reward) => String(reward.roomId || '')))
   const battleRooms = BattleRoomModel
@@ -2989,7 +3137,7 @@ const syncLeaderboardTotalsFromAttempts = async () => {
     currentTotals.totalScore += leaderboardCells
     currentTotals.totalMarks += safeNumber(attempt.totalQuestions)
     currentTotals.totalCorrect += safeNumber(attempt.totalScore)
-    currentTotals.totalBrainCells += leaderboardCells
+    if (!attempt.questionRewardsApplied) currentTotals.totalBrainCells += leaderboardCells
     currentTotals.totalAttempts += 1
     currentTotals.leaderboardQuestionIds = [...nextRewardedQuestionIds]
   })
@@ -3023,6 +3171,26 @@ const syncLeaderboardTotalsFromAttempts = async () => {
       currentTotals.totalBrainCells += safeNumber(reward.brainCells)
       currentTotals.totalAttempts += 1
     })
+  })
+
+  // Daily login cells are a separate reward category, but must remain part of
+  // the rebuilt balance instead of disappearing after synchronization.
+  streaks.forEach((streak) => {
+    const currentTotals = totals.get(String(streak.user || ''))
+    if (!currentTotals) return
+    currentTotals.totalBrainCells += (streak.rewardClaims || [])
+      .filter((claim) => claim.type === 'brain-cell')
+      .length * 10
+  })
+
+  questionRewards.forEach((reward) => {
+    const currentTotals = totals.get(String(reward.user || ''))
+    if (currentTotals) currentTotals.totalBrainCells += safeNumber(reward.cellsAwarded)
+  })
+
+  brainCellAdjustments.forEach((adjustment) => {
+    const currentTotals = totals.get(String(adjustment.user || ''))
+    if (currentTotals) currentTotals.totalBrainCells += safeNumber(adjustment.delta)
   })
 
   await User.updateMany(
@@ -4230,20 +4398,45 @@ app.post('/api/daily-streak/rewards/claim', authRequired, async (req, res) => {
     const timezone = dailyTimezone(req)
     const today = localDateForTimezone(timezone)
     const reward = dailyRewardSchedule(today).find((item) => item.localDate === today)
-    let streak = await StudentStreak.findOne({ user: req.user._id, subject: getActiveScience() })
-    if (!streak) streak = new StudentStreak({ user: req.user._id, subject: getActiveScience() })
-    if (streak.rewardClaims.some((claim) => String(claim.localDate) === today)) {
+    const existingClaim = await StudentStreak.findOne({
+      user: req.user._id,
+      subject: getActiveScience(),
+      'rewardClaims.localDate': today,
+    }).lean()
+    if (existingClaim) {
       return res.json({ message: 'Today\'s reward is already claimed.', rewards: await dailyRewardState(req.user._id, today, timezone) })
     }
 
-    streak.rewardClaims.push({ localDate: today, type: reward.type })
+    let streak
+    try {
+      streak = await StudentStreak.findOneAndUpdate(
+        {
+          user: req.user._id,
+          subject: getActiveScience(),
+          'rewardClaims.localDate': { $ne: today },
+        },
+        {
+          $setOnInsert: { user: req.user._id, subject: getActiveScience() },
+          $push: { rewardClaims: { localDate: today, type: reward.type } },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      )
+    } catch (error) {
+      if (error?.code === 11000) {
+        return res.json({ message: 'Today\'s reward is already claimed.', rewards: await dailyRewardState(req.user._id, today, timezone) })
+      }
+      throw error
+    }
+    if (!streak) {
+      return res.json({ message: 'Today\'s reward is already claimed.', rewards: await dailyRewardState(req.user._id, today, timezone) })
+    }
     if (reward.type === 'restore-key') {
       streak.restoreKeys = Number(streak.restoreKeys || 0) + 1
     } else {
       req.user.totalBrainCells = Number(req.user.totalBrainCells || 0) + 10
       await req.user.save()
     }
-    await streak.save()
+    if (reward.type === 'restore-key') await streak.save()
     res.json({ message: reward.type === 'restore-key' ? 'Streak restore key claimed.' : '10 brain cells claimed.', rewards: await dailyRewardState(req.user._id, today, timezone) })
   } catch (error) {
     res.status(500).json({ message: 'Could not claim today\'s reward.' })
@@ -4707,13 +4900,54 @@ app.post('/api/admin/users/:userId/brain-cells', authRequired, adminRequired, as
     if (!Number.isInteger(totalBrainCells) || totalBrainCells < 0) {
       return res.status(400).json({ message: 'Brain cells must be a whole number greater than or equal to zero.' })
     }
-    const user = await User.findOneAndUpdate(
-      { _id: req.params.userId, isAdmin: { $ne: true } },
-      { $set: { totalBrainCells } },
-      { new: true, projection: { _id: 1, totalBrainCells: 1 } },
-    ).lean()
-    if (!user) return res.status(404).json({ message: 'Student not found.' })
-    res.json({ message: 'Brain cells updated.', user: { id: String(user._id), totalBrainCells: Number(user.totalBrainCells || 0) } })
+    const reason = String(req.body?.reason || 'Admin balance adjustment').trim().slice(0, 500) || 'Admin balance adjustment'
+    const applyAdjustment = async (session = null) => {
+      const query = User.findOne({ _id: req.params.userId, isAdmin: { $ne: true } }).select('_id totalBrainCells')
+      if (session) query.session(session)
+      const currentUser = await query
+      if (!currentUser) return null
+
+      const previousBalance = Number(currentUser.totalBrainCells || 0)
+      const adjustment = {
+        user: currentUser._id,
+        previousBalance,
+        newBalance: totalBrainCells,
+        delta: totalBrainCells - previousBalance,
+        admin: req.user._id,
+        reason,
+      }
+
+      if (session) {
+        await BrainCellAdjustment.create([adjustment], { session })
+        await User.updateOne({ _id: currentUser._id }, { $set: { totalBrainCells } }, { session })
+      } else {
+        await User.updateOne({ _id: currentUser._id }, { $set: { totalBrainCells } })
+        await BrainCellAdjustment.create(adjustment)
+      }
+
+      return { id: String(currentUser._id), totalBrainCells }
+    }
+
+    let updatedUser
+    const session = await mongoose.startSession()
+    try {
+      await session.withTransaction(async () => {
+        updatedUser = await applyAdjustment(session)
+        if (!updatedUser) throw Object.assign(new Error('Student not found.'), { code: 'STUDENT_NOT_FOUND' })
+      })
+    } catch (error) {
+      if (error?.code === 'STUDENT_NOT_FOUND') return res.status(404).json({ message: 'Student not found.' })
+      if (error?.message?.includes('Transaction numbers are only allowed') || error?.message?.includes('replica set')) {
+        updatedUser = await applyAdjustment()
+      } else {
+        throw error
+      }
+    } finally {
+      await session.endSession()
+    }
+
+    if (!updatedUser) return res.status(404).json({ message: 'Student not found.' })
+    res.json({ message: 'Brain cells updated.', user: updatedUser })
   } catch (error) {
     console.error('Admin brain cells update failed:', error.message)
     res.status(500).json({ message: 'Could not update the student brain cells.' })
@@ -7079,7 +7313,15 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
       topicName: objectiveType.topic?.name,
       objectiveTypeId: objectiveType._id,
     })), answers, objectiveType.type)
-    const questionBreakdown = scored.questionBreakdown
+    const timingByQuestionId = new Map(
+      answers
+        .filter((answer) => answer?.questionId && Number.isFinite(Number(answer.timeTakenMs)) && Number(answer.timeTakenMs) > 0)
+        .map((answer) => [String(answer.questionId), Math.min(Number(answer.timeTakenMs), 3600000)]),
+    )
+    const questionBreakdown = scored.questionBreakdown.map((item) => ({
+      ...item,
+      timeTakenMs: timingByQuestionId.get(String(item.questionId)) || null,
+    }))
     const score = scored.score
     const wrongCount = scored.wrongCount
     const skippedCount = scored.skippedCount
@@ -7110,28 +7352,25 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
       ? Math.min(existingScore?.lowScore ?? score, score)
       : score
     const questionReward = getPracticeQuestionBrainCells(questions.length)
-    const rewardedQuestionIds = new Set((existingScore?.rewardedQuestionIds || []).map((item) => String(item)))
-    const newlyRewardedQuestionIds = []
     const rewardedBrainCellsByChapterId = new Map()
 
-    questionBreakdown.forEach((item) => {
+    for (const item of questionBreakdown) {
       const questionId = String(item.questionId || '')
       const chapterId = String(item.chapterId || '')
 
-      if (item.status !== 'correct' || !questionId || rewardedQuestionIds.has(questionId)) {
-        return
+      if (item.status !== 'correct' || !questionId) {
+        continue
       }
 
-      rewardedQuestionIds.add(questionId)
-      newlyRewardedQuestionIds.push(questionId)
+      const awarded = await awardBrainCellForQuestion(req.user._id, questionId, 'practice')
 
-      if (chapterId) {
+      if (awarded && chapterId) {
         rewardedBrainCellsByChapterId.set(
           chapterId,
           (rewardedBrainCellsByChapterId.get(chapterId) || 0) + questionReward,
         )
       }
-    })
+    }
 
     const chapterBreakdown = buildChapterSummariesFromBreakdown(questionBreakdown).map((entry) => ({
       ...entry,
@@ -7149,7 +7388,12 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
         attemptedQuestions,
         attemptedQuestionIds: [...attemptedQuestionIds],
         questionResults: [...questionResults.entries()].map(([questionId, isCorrect]) => ({ questionId, isCorrect })),
-        rewardedQuestionIds: [...rewardedQuestionIds],
+        rewardedQuestionIds: [
+          ...new Set([
+            ...(existingScore?.rewardedQuestionIds || []).map((item) => String(item)),
+            ...questionBreakdown.filter((item) => item.status === 'correct' && item.questionId).map((item) => String(item.questionId)),
+          ]),
+        ],
         isDone: attemptedQuestions >= questions.length,
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
@@ -7189,6 +7433,7 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
       wrongCount,
       skippedCount,
       brainCellsEarned,
+      questionRewardsApplied: true,
       chapterBreakdown,
       conceptSummary: {
         summary: suggestion.summary,
@@ -7201,6 +7446,7 @@ app.post('/api/objective-types/:id/submit', authRequired, async (req, res) => {
       score,
       totalQuestions: questions.length,
       brainCellsEarned,
+      questionRewardsApplied: true,
       questionBreakdown,
       chapterBreakdown,
     })
@@ -7287,7 +7533,7 @@ const buildStudentAnalytics = async ({ userId, timezone, range = '30', source = 
       .limit(2000)
       .lean(),
     DailyChallenge.find({ user: userId, subject: getActiveScience(), createdAt: { $gte: earliestDate } })
-      .select('localDate createdAt questionIds answers status')
+      .select('localDate createdAt questionIds answers status attemptedCount correctCount score completedAt')
       .sort({ localDate: 1 })
       .limit(400)
       .lean(),
@@ -7416,7 +7662,22 @@ const buildStudentAnalytics = async ({ userId, timezone, range = '30', source = 
   const activeDays = new Set(current.filter((item) => item.status !== 'skipped').map((item) => item.localDate)).size
   const validTimes = current.filter((item) => Number.isFinite(item.timeTakenMs) && item.timeTakenMs > 0 && item.timeTakenMs <= 3600000).map((item) => item.timeTakenMs)
   const averageTime = validTimes.length ? Math.round(validTimes.reduce((sum, value) => sum + value, 0) / validTimes.length) : null
+  const sortedTimes = [...validTimes].sort((left, right) => left - right)
+  const medianTime = sortedTimes.length ? sortedTimes[Math.floor(sortedTimes.length / 2)] : null
+  const timedCorrect = current.filter((item) => item.status === 'correct' && Number.isFinite(item.timeTakenMs) && item.timeTakenMs > 0 && item.timeTakenMs <= 3600000).map((item) => item.timeTakenMs)
+  const timedWrong = current.filter((item) => item.status === 'wrong' && Number.isFinite(item.timeTakenMs) && item.timeTakenMs > 0 && item.timeTakenMs <= 3600000).map((item) => item.timeTakenMs)
   const periodChange = currentStats.accuracy !== null && previousStats.accuracy !== null ? currentStats.accuracy - previousStats.accuracy : null
+  const dailyChallengeStats = dailyChallenges.reduce((summary, challenge) => {
+    summary.total += 1
+    if (challenge.status === 'completed') summary.completed += 1
+    summary.attempted += Number(challenge.attemptedCount || 0)
+    summary.correct += Number(challenge.correctCount || 0)
+    summary.bestScore = Math.max(summary.bestScore, Number(challenge.score || 0))
+    return summary
+  }, { total: 0, completed: 0, attempted: 0, correct: 0, bestScore: 0 })
+  dailyChallengeStats.accuracy = dailyChallengeStats.attempted
+    ? Math.round((dailyChallengeStats.correct / dailyChallengeStats.attempted) * 100)
+    : null
   const reliableChapters = chapterBreakdown.filter((item) => item.attempted >= 5)
   const reliableTopics = topicBreakdown.filter((item) => item.attempted >= 5)
   const recommendations = []
@@ -7431,12 +7692,13 @@ const buildStudentAnalytics = async ({ userId, timezone, range = '30', source = 
     summary: { ...currentStats, accuracyChange: periodChange, activeDays, currentStreak: Number(streak?.currentStreak || 0), longestStreak: Number(streak?.longestStreak || 0) },
     dailyComparison: { today: stats(selectedRecords.filter((item) => item.localDate === today)), yesterday: stats(selectedRecords.filter((item) => item.localDate === previousLocalDate(today))) },
     periodComparison: { current: currentStats, previous: previousStats, accuracyChange: periodChange },
-    speedAnalysis: { available: validTimes.length > 0, averageTimeMs: averageTime, sampleSize: validTimes.length, message: validTimes.length ? '' : 'Timing data will be available from your future attempts.' },
+    speedAnalysis: { available: validTimes.length > 0, totalTimeMs: validTimes.length ? validTimes.reduce((sum, value) => sum + value, 0) : null, averageTimeMs: averageTime, medianTimeMs: medianTime, correctAverageTimeMs: timedCorrect.length ? Math.round(timedCorrect.reduce((sum, value) => sum + value, 0) / timedCorrect.length) : null, incorrectAverageTimeMs: timedWrong.length ? Math.round(timedWrong.reduce((sum, value) => sum + value, 0) / timedWrong.length) : null, sampleSize: validTimes.length, message: validTimes.length ? '' : 'Timing data will be available from your future attempts.' },
     strengths: reliableChapters.filter((item) => item.accuracy >= 70).sort((left, right) => right.accuracy - left.accuracy).slice(0, 5),
     weakAreas: reliableTopics.slice(0, 5),
     chapterBreakdown, topicBreakdown, questionTypeBreakdown, accuracyTrend,
-    activityTrend: accuracyTrend.map((item) => ({ date: item.date, attempted: item.attempted })),
+    activityTrend: accuracyTrend.map((item) => ({ date: item.date, attempted: item.attempted, correct: item.correct, wrong: item.wrong, accuracy: item.accuracy })),
     consistency: { activeDays, averageQuestionsPerActiveDay: activeDays ? Math.round(currentStats.total / activeDays) : 0, currentStreak: Number(streak?.currentStreak || 0), longestStreak: Number(streak?.longestStreak || 0) },
+    dailyChallengeStats,
     recommendations,
     recentAttempts: selectedRecords.slice(-20).reverse().map((item) => ({ source: item.source, date: item.localDate, status: item.status, chapterName: item.chapterName, topicName: item.topicName, questionType: analyticsQuestionTypeLabel(item.questionType) })),
     dataAvailability: { hasDailyStreak: selectedRecords.some((item) => item.source === 'daily-streak'), hasChapterPractice: selectedRecords.some((item) => item.source === 'chapter-practice'), hasTests: selectedRecords.some((item) => item.source === 'test'), hasTiming: validTimes.length > 0, minimumReliableSample: 5 },
@@ -7446,10 +7708,12 @@ const buildStudentAnalytics = async ({ userId, timezone, range = '30', source = 
 app.get('/api/progress/analytics', authRequired, async (req, res) => {
   try {
     const timezone = dailyTimezone(req)
-    const range = ['7', '30', 'all'].includes(String(req.query.range || '30')) ? String(req.query.range || '30') : '30'
+    const requestedStudentId = String(req.query.studentId || '').trim()
+    const userId = requestedStudentId && req.user.isAdmin ? requestedStudentId : String(req.user._id)
+    const range = ['7', '30', '90', 'all'].includes(String(req.query.range || '30')) ? String(req.query.range || '30') : '30'
     const source = ['all', 'daily-streak', 'chapter-practice', 'test'].includes(String(req.query.source || 'all')) ? String(req.query.source || 'all') : 'all'
     res.set('Cache-Control', 'no-store')
-    res.json(await buildStudentAnalytics({ userId: req.user._id, timezone, range, source }))
+    res.json(await buildStudentAnalytics({ userId, timezone, range, source }))
   } catch (error) {
     console.error('Student analytics load failed:', error.message)
     res.status(500).json({ message: 'Could not load student analytics.' })
@@ -9126,7 +9390,8 @@ app.get('/api/admin/announcement', authRequired, adminRequired, async (req, res)
 
 app.post('/api/admin/announcement', authRequired, adminRequired, async (req, res) => {
   try {
-    const message = String(req.body.message || '').trim()
+    const messageHtml = sanitizeMessageHtml(req.body.messageHtml || req.body.message || '')
+    const message = richTextToPlainText(messageHtml).trim()
     const color = ['amber', 'teal', 'rose', 'sky', 'emerald', 'violet', 'orange', 'lime'].includes(String(req.body.color || '').trim())
       ? String(req.body.color || '').trim()
       : 'amber'
@@ -9139,6 +9404,7 @@ app.post('/api/admin/announcement', authRequired, adminRequired, async (req, res
       {},
       {
         message,
+        messageHtml,
         color,
         updatedBy: req.user._id,
       },
@@ -9769,7 +10035,14 @@ app.post('/api/tests/generate', authRequired, async (req, res) => {
 
     const randomized = balancedSelection.map((item) => ({ ...item, marks: 1 }))
 
+    const testSession = await TestSession.create({
+      user: req.user._id,
+      questionIds: randomized.map((item) => item.questionId),
+      expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+    })
+
     res.json({
+      sessionId: String(testSession._id),
       chapters,
       questionCount: randomized.length,
       selectedTypes,
@@ -9782,6 +10055,12 @@ app.post('/api/tests/generate', authRequired, async (req, res) => {
 
 app.post('/api/tests/check-answer', authRequired, async (req, res) => {
   try {
+    const session = mongoose.isValidObjectId(req.body?.sessionId)
+      ? await TestSession.findOne({ _id: req.body.sessionId, user: req.user._id })
+      : null
+    if (!session || session.expiresAt < new Date() || !(session.questionIds || []).some((id) => String(id) === String(req.body?.questionId))) {
+      return res.status(403).json({ message: 'This question is not part of an active test session.' })
+    }
     const questionId = String(req.body?.questionId || '')
     if (!questionId) {
       return res.status(400).json({ message: 'Question is required.' })
@@ -9799,8 +10078,6 @@ app.post('/api/tests/check-answer', authRequired, async (req, res) => {
     res.json({
       isCorrect: Boolean(scored.isCorrect),
       isSkipped: Boolean(scored.isSkipped),
-      correctOption: question.correctOption,
-      correctOptions: question.correctOptions,
     })
   } catch (error) {
     res.status(500).json({ message: 'Could not check answer.' })
@@ -9814,6 +10091,15 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
 
     if (!questionIds.length) {
       return res.status(400).json({ message: 'Please answer at least one question.' })
+    }
+
+    const session = mongoose.isValidObjectId(req.body?.sessionId)
+      ? await TestSession.findOne({ _id: req.body.sessionId, user: req.user._id })
+      : null
+    const sessionQuestionIds = new Set((session?.questionIds || []).map((id) => String(id)))
+    const submittedQuestionIds = new Set(questionIds.map((id) => String(id)))
+    if (!session || session.expiresAt < new Date() || submittedQuestionIds.size !== questionIds.length || submittedQuestionIds.size !== sessionQuestionIds.size || [...submittedQuestionIds].some((id) => !sessionQuestionIds.has(id))) {
+      return res.status(403).json({ message: 'Invalid or incomplete test session.' })
     }
 
     const questions = await ObjectiveQuestion.find({ _id: { $in: questionIds } })
@@ -9847,7 +10133,16 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
     const score = questionBreakdown.filter((item) => item.status === 'correct').length
     const wrongCount = questionBreakdown.filter((item) => item.status === 'wrong').length
     const skippedCount = questionBreakdown.filter((item) => item.status === 'skipped').length
-    const brainCellsEarned = score
+    const awardedBrainCellsByChapterId = new Map()
+    for (const item of questionBreakdown) {
+      if (item.status !== 'correct' || !item.questionId) continue
+      const awarded = await awardBrainCellForQuestion(req.user._id, item.questionId, 'test-builder')
+      if (awarded) {
+        const chapterId = String(item.chapterId || '')
+        if (chapterId) awardedBrainCellsByChapterId.set(chapterId, (awardedBrainCellsByChapterId.get(chapterId) || 0) + awarded)
+      }
+    }
+    const brainCellsEarned = [...awardedBrainCellsByChapterId.values()].reduce((sum, value) => sum + value, 0)
     const chapterBreakdown = allocateBrainCellsByWeight(
       buildChapterSummariesFromBreakdown(questionBreakdown),
       brainCellsEarned,
@@ -9948,6 +10243,7 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
       wrongCount,
       skippedCount,
       brainCellsEarned,
+      questionRewardsApplied: true,
       chapterBreakdown,
       conceptSummary,
       questionBreakdown,
@@ -9956,6 +10252,7 @@ app.post('/api/tests/submit', authRequired, async (req, res) => {
       score,
       totalQuestions: questionBreakdown.length,
       brainCellsEarned,
+      questionRewardsApplied: true,
       questionBreakdown,
       chapterBreakdown,
     })
@@ -10663,6 +10960,9 @@ const ensureAcademicScienceFlags = async () => {
     'contentchanges',
     'practiceattempts',
     'pyqs',
+    'braincellrewards',
+    'braincelladjustments',
+    'testsessions',
   ]
 
   await Promise.all(academicCollections.map((collectionName) => (
@@ -10683,6 +10983,9 @@ const ensureAcademicScienceFlags = async () => {
     Science2ContentChange,
     Science2PracticeAttempt,
     Science2Pyq,
+    BrainCellReward,
+    BrainCellAdjustment,
+    TestSession,
   ].map((model) => model.syncIndexes()))
 }
 

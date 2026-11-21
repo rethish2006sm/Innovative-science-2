@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, BookOpen, Brain, CalendarDays, Check, CheckCircle2, Flame, Gift, KeyRound, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X } from 'lucide-react'
+import { ArrowRight, BookOpen, Brain, CalendarDays, Check, CheckCircle2, Crown, Flame, Gift, KeyRound, Medal, MessageCircleMore, Pencil, Plus, Send, Star, Swords, Target, Trophy, X, Zap } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { apiRequest } from '../api'
 import { authEvents, getStoredAuth } from '../authStorage'
@@ -228,6 +228,45 @@ const revealEase = [0.22, 1, 0.36, 1]
 
 const AnimatedBattleModeLink = motion.create(Link)
 const AnimatedActionLink = motion.create(Link)
+
+const HomeLeaderboardRow = ({ student, rank, maxCells, index }) => {
+  const reduceMotion = useReducedMotion()
+  const first = rank === 1
+  const second = rank === 2
+  const third = rank === 3
+  const percentage = maxCells > 0 ? Math.min(100, (Number(student.totalBrainCells || 0) / maxCells) * 100) : 0
+  const rowTheme = first
+    ? 'border-amber-200 bg-gradient-to-r from-amber-50 via-orange-50/80 to-white shadow-[0_9px_30px_rgba(249,115,22,0.12)]'
+    : second
+      ? 'border-slate-200 bg-gradient-to-r from-slate-50 to-white'
+      : third
+        ? 'border-orange-200 bg-gradient-to-r from-orange-50 to-white'
+        : 'border-white/60 bg-white/40 hover:border-orange-200 hover:bg-white/80'
+  const rankTheme = first
+    ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-lg shadow-orange-300/40'
+    : second
+      ? 'bg-gradient-to-br from-slate-300 to-slate-400 text-white'
+      : third
+        ? 'bg-gradient-to-br from-orange-300 to-orange-500 text-white'
+        : 'bg-slate-100 text-slate-500 group-hover:bg-orange-100 group-hover:text-orange-600'
+
+  return <motion.article
+    initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.98 }}
+    animate={{ opacity: 1, y: 0, scale: 1 }}
+    transition={{ duration: 0.4, delay: reduceMotion ? 0 : Math.min(index * 0.07, 0.35), ease: revealEase }}
+    whileHover={reduceMotion ? undefined : { x: 4 }}
+    className={`group relative isolate overflow-hidden rounded-2xl border transition-colors duration-300 ${rowTheme}`}
+  >
+    {first && <motion.div animate={reduceMotion ? {} : { x: ['-120%', '220%'] }} transition={{ duration: 4, repeat: Infinity, repeatDelay: 2, ease: 'linear' }} className="pointer-events-none absolute inset-y-0 z-[-1] w-1/3 skew-x-[-20deg] bg-gradient-to-r from-transparent via-orange-200/50 to-transparent" />}
+    <div className={`absolute bottom-0 left-0 top-0 w-[3px] ${first ? 'bg-gradient-to-b from-amber-300 via-orange-500 to-orange-300' : second ? 'bg-slate-300' : third ? 'bg-orange-300' : 'bg-transparent group-hover:bg-orange-300'}`} />
+    <div className="flex items-center gap-2.5 p-2.5 sm:gap-3 sm:p-3">
+      <div className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-xl text-sm font-black transition-transform duration-300 group-hover:scale-105 sm:h-11 sm:w-11 ${rankTheme}`}>{first ? <Crown size={19} /> : second || third ? <Medal size={18} /> : String(rank).padStart(2, '0')}{first && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-300" />}</div>
+      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><h3 className={`truncate text-xs font-black sm:text-sm ${first ? 'text-orange-950' : 'text-slate-900'}`}>{student.name}</h3>{first && <span className="rounded-full bg-orange-500 px-1.5 py-0.5 text-[7px] font-black uppercase tracking-wider text-white">Champion</span>}</div></div>
+      <div className="shrink-0 text-right"><div className="flex items-center justify-end gap-1"><Zap size={11} className={first ? 'text-orange-500' : 'text-amber-500'} /><span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Cells</span></div><p className={`mt-0.5 text-base font-black tabular-nums sm:text-lg ${first ? 'text-orange-600' : 'text-slate-900'}`}>{Number(student.totalBrainCells || 0).toLocaleString('en-IN')}</p></div>
+    </div>
+    <div className="relative mx-3 mb-2 h-[3px] overflow-hidden rounded-full bg-slate-100"><motion.div initial={{ width: 0 }} animate={{ width: `${percentage}%` }} transition={{ duration: reduceMotion ? 0 : 0.9, delay: reduceMotion ? 0 : Math.min(index * 0.06, 0.3), ease: 'easeOut' }} className={`h-full rounded-full ${first ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-orange-400' : second ? 'bg-slate-400' : third ? 'bg-gradient-to-r from-orange-300 to-orange-500' : 'bg-gradient-to-r from-slate-200 to-orange-300'}`} /></div>
+  </motion.article>
+}
 
 const Homepage = () => {
   const navigate = useNavigate()
@@ -811,22 +850,13 @@ const Homepage = () => {
                 ) : leaderboard.length ? (
                   <div className="grid gap-2.5 sm:gap-3">
                     {leaderboard.map((student, index) => (
-                      <article 
-                        key={student.id} 
-                        className="group flex items-center gap-3 rounded-2xl border border-white/50 bg-white/40 p-3 shadow-sm transition-[background-color,border-color,box-shadow] hover:bg-white/80 hover:shadow-md sm:gap-4 sm:p-3"
-                      >
-                        <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white text-sm font-black shadow-inner sm:h-12 sm:w-12 sm:text-base ${index === 0 ? 'bg-amber-400' : index === 1 ? 'bg-slate-400' : index === 2 ? 'bg-amber-700' : 'bg-slate-900'}`}>
-                          {index + 1}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h3 className="truncate text-sm font-black text-slate-900 group-hover:text-cyan-700 transition-colors">{student.name}</h3>
-                          <p className="truncate text-xs font-medium text-slate-500">{student.className || 'Independent'}</p>
-                        </div>
-                        <div className="shrink-0 text-right px-1 sm:px-2">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Brain Cells</p>
-                          <p className="font-mono text-lg font-black text-slate-900 sm:text-xl">{student.totalBrainCells}</p>
-                        </div>
-                      </article>
+                      <HomeLeaderboardRow
+                        key={student.id}
+                        student={student}
+                        rank={index + 1}
+                        index={index}
+                        maxCells={Math.max(...leaderboard.map((item) => Number(item.totalBrainCells || 0)), 1)}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -835,6 +865,10 @@ const Homepage = () => {
                   </div>
                 )}
               </div>
+              <Link to="/leaderboard" className="group mt-4 inline-flex items-center gap-1.5 text-xs font-black text-orange-700 transition hover:text-orange-900 sm:mt-5 sm:text-sm">
+                View all ranks
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </Link>
             </div>
 
           </motion.div>

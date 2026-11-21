@@ -171,6 +171,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
   const [siteNotice, setSiteNotice] = useState(null)
   const [siteNoticeMessage, setSiteNoticeMessage] = useState('')
   const [siteNoticeColor, setSiteNoticeColor] = useState('amber')
+  const siteNoticeEditorRef = useRef(null)
   const [messageTargetType, setMessageTargetType] = useState('all')
   const [messageSubject, setMessageSubject] = useState('')
   const [messageBody, setMessageBody] = useState('')
@@ -651,6 +652,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
       setSiteNotice(nextNotice)
       setSiteNoticeMessage(nextNotice?.message || '')
       setSiteNoticeColor(nextNotice?.color || 'amber')
+      if (siteNoticeEditorRef.current) siteNoticeEditorRef.current.innerHTML = nextNotice?.messageHtml || nextNotice?.message || ''
     } catch (err) {
       setError(err.message)
     } finally {
@@ -664,15 +666,17 @@ const Adminpage = ({ initialTab = 'students' }) => {
     setError('')
 
     try {
+      const messageHtml = String(siteNoticeEditorRef.current?.innerHTML || siteNoticeMessage || '').trim()
       const data = await apiRequest('/api/admin/announcement', {
         method: 'POST',
-        body: JSON.stringify({ message: siteNoticeMessage, color: siteNoticeColor }),
+        body: JSON.stringify({ message: siteNoticeMessage, messageHtml, color: siteNoticeColor }),
       })
 
       const nextNotice = data.announcement || null
       setSiteNotice(nextNotice)
       setSiteNoticeMessage(nextNotice?.message || '')
       setSiteNoticeColor(nextNotice?.color || 'amber')
+      if (siteNoticeEditorRef.current) siteNoticeEditorRef.current.innerHTML = nextNotice?.messageHtml || nextNotice?.message || ''
     } catch (err) {
       setError(err.message)
     } finally {
@@ -696,6 +700,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
       setSiteNotice(null)
       setSiteNoticeMessage('')
       setSiteNoticeColor('amber')
+      if (siteNoticeEditorRef.current) siteNoticeEditorRef.current.innerHTML = ''
     } catch (err) {
       setError(err.message)
     } finally {
@@ -3530,13 +3535,14 @@ const Adminpage = ({ initialTab = 'students' }) => {
                       <form onSubmit={saveSiteNotice} className="mt-5 grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
                         <label className="grid gap-2 text-sm font-bold text-slate-600">
                           Message
-                          <textarea
-                            value={siteNoticeMessage}
-                            onChange={(event) => setSiteNoticeMessage(event.target.value)}
-                            rows={4}
-                            placeholder="Type the notice message that should scroll right to left..."
-                            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-amber-400"
-                          />
+                          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white focus-within:border-amber-400">
+                            <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+                              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { siteNoticeEditorRef.current?.focus(); document.execCommand('bold') }} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-black text-amber-700 hover:bg-amber-50" title="Bold selected text"><Bold className="h-3.5 w-3.5" /> Bold</button>
+                              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const url = window.prompt('Enter a full link, for example https://example.com'); if (!url?.trim()) return; siteNoticeEditorRef.current?.focus(); document.execCommand('createLink', false, /^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`) }} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-black text-amber-700 hover:bg-amber-50" title="Insert link on selected text"><Link2 className="h-3.5 w-3.5" /> Insert link</button>
+                              <span className="text-[11px] font-semibold text-slate-400">Select text first, then format it.</span>
+                            </div>
+                            <div ref={siteNoticeEditorRef} contentEditable role="textbox" aria-multiline="true" data-placeholder="Type the notice message that should scroll right to left..." onInput={(event) => setSiteNoticeMessage(event.currentTarget.innerText)} className="min-h-[120px] px-4 py-3 text-slate-900 outline-none [&_a]:text-blue-600 [&_a]:underline [&_b]:font-black [&_strong]:font-black empty:before:pointer-events-none empty:before:text-slate-400 empty:before:content-[attr(data-placeholder)]" suppressContentEditableWarning />
+                          </div>
                         </label>
 
                         <label className="grid gap-2 text-sm font-bold text-slate-600">
@@ -3582,7 +3588,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
                           </div>
                         ) : siteNotice?.message ? (
                           <div className="mt-3 space-y-2">
-                            <p className="text-sm leading-7 text-slate-700">{siteNotice.message}</p>
+                            <div className="text-sm leading-7 text-slate-700 [&_a]:text-blue-600 [&_a]:underline [&_b]:font-black [&_strong]:font-black" dangerouslySetInnerHTML={{ __html: siteNotice.messageHtml || siteNotice.message }} />
                             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
                               Theme: {siteNotice.color || 'amber'}
                             </p>

@@ -270,6 +270,7 @@ const Testbuilderpage = () => {
       const data = await apiRequest('/api/tests/check-answer', {
         method: 'POST',
         body: JSON.stringify({
+          sessionId: generatedTest.sessionId,
           questionId: question.id,
           selectedOption,
         }),
@@ -388,6 +389,7 @@ const Testbuilderpage = () => {
       const data = await apiRequest('/api/tests/submit', {
         method: 'POST',
         body: JSON.stringify({
+          sessionId: generatedTest.sessionId,
           answers: generatedTest.questions.map((question) => ({
             questionId: question.id,
             selectedOption: answersToSubmit[question.id],

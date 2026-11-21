@@ -41,7 +41,6 @@ import { isValidName, NAME_VALIDATION_MESSAGE, NAME_PATTERN } from '../utils/nam
 import { getStoredAuth, updateStoredUser } from '../authStorage'
 import { useAuth } from '../context/AuthContext'
 import { getWebPushSubscription, registerWebPush, unregisterWebPush } from '../lib/webPush'
-import AcademicPerformanceDashboard from '../components/AcademicPerformanceDashboard'
 
 /* =========================================================
    CONSTANTS
@@ -1334,6 +1333,10 @@ const Profilepage = () => {
           <ProfileTabs
             activeTab={activeTab}
             onChange={(tab) => {
+              if (tab === 'Performance') {
+                navigate('/profile/performance')
+                return
+              }
               const scrollPosition = window.scrollY
               setActiveTab(tab)
 
@@ -1770,12 +1773,6 @@ const Profilepage = () => {
                 )}
               </ProfileSection>
             </div>
-          )}
-
-          {activeTab === 'Performance' && (
-            <section className="border-t border-slate-200">
-              <AcademicPerformanceDashboard />
-            </section>
           )}
 
         </div>

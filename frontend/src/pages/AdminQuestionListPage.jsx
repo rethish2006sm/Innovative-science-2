@@ -9,21 +9,19 @@ import {
   Search,
   Shield,
   X,
-  Layers3,
   RotateCcw,
   CircleHelp,
-  BarChart3,
   Download,
   ZoomIn,
   ZoomOut,
   Edit3,
   Trash2,
-  Award,
   LoaderCircle,
+  Plus,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { createPortal } from 'react-dom'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { apiRequest, assetUrl } from '../api'
 import { getStoredAuth } from '../authStorage'
 import logo from '../assets/logo.svg'
@@ -78,8 +76,15 @@ const compareChapterNumbers = (first, second) => {
 const getQuestionTitle = (question) =>
   question?.question?.trim() || 'Image-based question'
 
+const getQuestionAttemptStatus = (question) => {
+  const isDoneOnlyQuestion = ['diagram-based-question', 'complete-the-tables'].includes(question?.objectiveType)
+  return isDoneOnlyQuestion && question?.attemptStatus === 'wrong'
+    ? null
+    : question?.attemptStatus
+}
+
 const typeBadgeClasses =
-  'inline-flex max-w-full items-center rounded-full bg-cyan-50 px-2.5 py-1 text-[10px] font-bold text-cyan-800 ring-1 ring-inset ring-cyan-100'
+  'inline-flex max-w-full items-center rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-orange-800 ring-1 ring-inset ring-orange-100'
 
 const buttonBase =
   'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition-all duration-200 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40'
@@ -97,6 +102,7 @@ const AdminQuestionListPage = () => {
   const [chapterId, setChapterId] = useState('')
   const [objectiveType, setObjectiveType] = useState('')
   const [boardQuestion, setBoardQuestion] = useState('')
+  const [answerFilter, setAnswerFilter] = useState('all')
   const [totalQuestions, setTotalQuestions] = useState(0)
   const [page, setPage] = useState(1)
   const pageSize = 30
@@ -105,9 +111,10 @@ const AdminQuestionListPage = () => {
   const [selectedQuestion, setSelectedQuestion] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
   const [showDownloadTool, setShowDownloadTool] = useState(false)
   const [actionQuestionId, setActionQuestionId] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [isDeleting, setIsDeleting] = useState(false)
   const searchInputRef = useRef(null)
   const questionListRef = useRef(null)
 
@@ -151,17 +158,28 @@ const AdminQuestionListPage = () => {
   }, [loadQuestions])
 
   useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus()
-  }, [searchOpen])
-
-  useEffect(() => {
     const refreshQuestionStatuses = () => loadQuestions()
     window.addEventListener('innovative-science-progress-updated', refreshQuestionStatuses)
     return () => window.removeEventListener('innovative-science-progress-updated', refreshQuestionStatuses)
   }, [loadQuestions])
 
+  const answerFilters = [
+    { value: 'all', label: 'All' },
+    { value: 'correct', label: 'Answered correctly' },
+    { value: 'unanswered', label: 'Not answered' },
+    { value: 'wrong', label: 'Needs another attempt' },
+  ]
+
+  const visibleQuestions = useMemo(() => questions.filter((question) => {
+    const status = getQuestionAttemptStatus(question)
+    if (answerFilter === 'all') return true
+    if (answerFilter === 'correct') return status === 'correct'
+    if (answerFilter === 'wrong') return status === 'wrong'
+    return !status
+  }), [answerFilter, questions])
+
   const currentIndex = selectedQuestion
-    ? questions.findIndex(
+    ? visibleQuestions.findIndex(
         (item) => item._id === selectedQuestion._id
       )
     : -1
@@ -171,7 +189,7 @@ const AdminQuestionListPage = () => {
     setChapterId('')
     setObjectiveType('')
     setBoardQuestion('')
-    setSearchOpen(false)
+    setAnswerFilter('all')
   }
 
   const openQuestion = (question) => {
@@ -214,9 +232,9 @@ const AdminQuestionListPage = () => {
 
   const deleteQuestion = async (question) => {
     if (!isAdmin || actionQuestionId) return
-    if (!window.confirm('Delete this question permanently?')) return
 
     setActionQuestionId(question._id)
+    setIsDeleting(true)
     setError('')
 
     try {
@@ -228,7 +246,14 @@ const AdminQuestionListPage = () => {
       setError(err.message || 'Could not delete question.')
     } finally {
       setActionQuestionId('')
+      setIsDeleting(false)
+      setDeleteTarget(null)
     }
+  }
+
+  const requestDeleteQuestion = (question) => {
+    if (!isAdmin || actionQuestionId) return
+    setDeleteTarget(question)
   }
 
   const editQuestion = (question) => {
@@ -245,8 +270,8 @@ const AdminQuestionListPage = () => {
 
     const nextIndex = currentIndex + direction
 
-    if (nextIndex >= 0 && nextIndex < questions.length) {
-      setSelectedQuestion(questions[nextIndex])
+    if (nextIndex >= 0 && nextIndex < visibleQuestions.length) {
+      setSelectedQuestion(visibleQuestions[nextIndex])
     }
   }
 
@@ -258,7 +283,7 @@ const AdminQuestionListPage = () => {
   }
 
   const hasFilters = Boolean(
-    search.trim() || chapterId || objectiveType || boardQuestion
+    search.trim() || chapterId || objectiveType || boardQuestion || answerFilter !== 'all'
   )
 
   const orderedChapters = useMemo(
@@ -283,78 +308,30 @@ const AdminQuestionListPage = () => {
   )
 
   return (
-    <main className="min-h-screen bg-[#f5f8fc] text-slate-900">
-      <div className="mx-auto w-full max-w-7xl px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-8">
+    <motion.main
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
+      className="min-h-screen bg-[#f8f9fb] text-[#172033]"
+    >
+      <div className="mx-auto w-full max-w-[1440px] px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-9">
 
         {/* Search and filters */}
-        <section className="relative z-20 mb-5 overflow-visible rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm sm:p-5">
-          <div className="flex min-h-12 justify-end gap-2">
-            <Link
-              to="/profile/performance"
-              className={`${buttonBase} min-h-12 bg-violet-50 text-violet-700 hover:bg-violet-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-100`}
-            >
-              <BarChart3 size={18} />
-              Performance
-            </Link>
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setShowDownloadTool(true)}
-                className={`${buttonBase} min-h-12 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-100`}
-              >
-                <Download size={18} />
-                Download questions
-              </button>
-            )}
+        <section className="relative z-20 mb-5 overflow-visible rounded-3xl border border-slate-200 bg-white p-3 shadow-[0_14px_36px_rgba(15,23,42,0.06)] sm:p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <label className="flex min-h-12 min-w-0 flex-1 items-center rounded-2xl border border-slate-200 bg-slate-50 px-4 text-slate-800 transition focus-within:border-cyan-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-cyan-100/70">
+              <Search size={19} className="shrink-0 text-slate-400" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search questions, chapters, or topics..."
+                aria-label="Search questions"
+                className="h-12 min-w-0 flex-1 bg-transparent px-3 text-base text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-0 sm:text-sm"
+              />
+            </label>
 
-            <AnimatePresence initial={false} mode="wait">
-              {searchOpen ? (
-                <motion.label
-                  key="search-input"
-                  initial={{ opacity: 0, width: 48 }}
-                  animate={{ opacity: 1, width: 'min(100%, 28rem)' }}
-                  exit={{ opacity: 0, width: 48 }}
-                  transition={{ duration: 0.22, ease: 'easeOut' }}
-                  className="relative flex min-w-0 items-center overflow-hidden rounded-full bg-slate-100 px-4 text-slate-800 focus-within:bg-slate-50 focus-within:ring-2 focus-within:ring-cyan-100"
-                >
-                  <Search size={18} className="shrink-0 text-slate-400" />
-                  <input
-                    ref={searchInputRef}
-                    type="search"
-                    value={search}
-                    onChange={(event) => {
-                      setSearch(event.target.value)
-                    }}
-                    placeholder="Search questions..."
-                    aria-label="Search questions"
-                    className="h-12 min-w-0 flex-1 bg-transparent px-3 text-base text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-0 sm:text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearch('')
-                    }}
-                    aria-label="Close search"
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
-                  >
-                    <X size={17} />
-                  </button>
-                </motion.label>
-              ) : (
-                <motion.button
-                  key="search-button"
-                  type="button"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  onClick={() => setSearchOpen(true)}
-                  aria-label="Open search"
-                  className="grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-cyan-50 hover:text-cyan-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-cyan-100"
-                >
-                  <Search size={20} />
-                </motion.button>
-              )}
-            </AnimatePresence>
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl bg-slate-50/60 p-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_auto] sm:gap-3 sm:bg-transparent sm:p-0">
@@ -433,30 +410,54 @@ const AdminQuestionListPage = () => {
               </span>
 
               {chapterId && (
-                <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-800">
+                <button type="button" onClick={() => setChapterId('')} className="rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800 transition hover:bg-orange-100">
                   Chapter selected
-                </span>
+                  <X size={12} className="ml-1 inline" />
+                </button>
               )}
 
               {objectiveType && (
-                <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-800">
+                <button type="button" onClick={() => setObjectiveType('')} className="rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800 transition hover:bg-orange-100">
                   {formatType(objectiveType)}
-                </span>
+                  <X size={12} className="ml-1 inline" />
+                </button>
               )}
 
               {boardQuestion && (
-                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                <button type="button" onClick={() => setBoardQuestion('')} className="rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800 transition hover:bg-orange-100">
                   {boardQuestion === 'yes' ? 'Board questions' : 'Non-board questions'}
-                </span>
+                  <X size={12} className="ml-1 inline" />
+                </button>
               )}
 
               {search.trim() && (
-                <span className="max-w-full truncate rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                <button type="button" onClick={() => setSearch('')} className="max-w-full truncate rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800 transition hover:bg-orange-100">
                   Search: {search.trim()}
-                </span>
+                  <X size={12} className="ml-1 inline" />
+                </button>
+              )}
+
+              {answerFilter !== 'all' && (
+                <button type="button" onClick={() => setAnswerFilter('all')} className="rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800 transition hover:bg-orange-100">
+                  {answerFilters.find((item) => item.value === answerFilter)?.label}
+                  <X size={12} className="ml-1 inline" />
+                </button>
               )}
             </div>
           )}
+
+          <div className="mt-4 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-slate-50 p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Answer status filter">
+            {answerFilters.map((filter) => (
+              <button
+                key={filter.value}
+                type="button"
+                onClick={() => setAnswerFilter(filter.value)}
+                className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition sm:px-4 ${answerFilter === filter.value ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-orange-700'}`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
         </section>
 
         {/* Error */}
@@ -503,11 +504,11 @@ const AdminQuestionListPage = () => {
             </div>
           ) : questions.length > 0 ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {questions.map((question, itemIndex) => (
+              {visibleQuestions.map((question, itemIndex) => (
                 <QuestionCard
                   key={question._id}
                   question={question}
-                  index={(page - 1) * pageSize + itemIndex + 1}
+                  index={questions.findIndex((item) => item._id === question._id) + 1}
                   onOpen={() => openQuestion(question)}
                 />
               ))}
@@ -518,10 +519,10 @@ const AdminQuestionListPage = () => {
                 <Search size={24} />
               </div>
               <h3 className="mt-4 text-base font-extrabold text-slate-800">
-                No questions found
+                {hasFilters ? 'No matching questions found' : 'No questions added yet'}
               </h3>
               <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-slate-500">
-                Try another search, chapter or question type.
+                {hasFilters ? 'Try adjusting your search or filters.' : 'Start building your science question bank by adding your first question.'}
               </p>
               {hasFilters && (
                 <button
@@ -531,6 +532,12 @@ const AdminQuestionListPage = () => {
                 >
                   <RotateCcw size={15} />
                   Clear filters
+                </button>
+              )}
+              {!hasFilters && isAdmin && (
+                <button type="button" onClick={() => navigate('/chapters')} className={`${buttonBase} mt-4 bg-orange-500 text-white shadow-sm hover:bg-orange-600`}>
+                  <Plus size={16} />
+                  Add your first question
                 </button>
               )}
             </div>
@@ -580,6 +587,15 @@ const AdminQuestionListPage = () => {
         <QuestionDownloadModal onClose={() => setShowDownloadTool(false)} />
       )}
 
+      {isAdmin && deleteTarget && (
+        <DeleteQuestionModal
+          question={deleteTarget}
+          loading={isDeleting}
+          onClose={() => !isDeleting && setDeleteTarget(null)}
+          onConfirm={() => deleteQuestion(deleteTarget)}
+        />
+      )}
+
       {/* Question viewer */}
       <AnimatePresence>
         {selectedQuestion && (
@@ -588,37 +604,34 @@ const AdminQuestionListPage = () => {
             question={selectedQuestion}
             isAdmin={isAdmin}
             index={currentIndex}
-            count={questions.length}
+            count={visibleQuestions.length}
             onClose={() => setSelectedQuestion(null)}
             onPrevious={() => navigateQuestion(-1)}
             onNext={() => navigateQuestion(1)}
             actionQuestionId={actionQuestionId}
             onEdit={() => editQuestion(selectedQuestion)}
-            onDelete={() => deleteQuestion(selectedQuestion)}
+            onDelete={() => requestDeleteQuestion(selectedQuestion)}
             onToggleBoard={() => updateBoardStatus(selectedQuestion)}
             onAttemptStatusChange={updateQuestionAttemptStatus}
           />
         )}
       </AnimatePresence>
-    </main>
+    </motion.main>
   )
 }
 
 const QuestionCard = ({ question, index, onOpen }) => (
   (() => {
-    const isDoneOnlyQuestion = ['diagram-based-question', 'complete-the-tables'].includes(question.objectiveType)
-    const attemptStatus = isDoneOnlyQuestion && question.attemptStatus === 'wrong'
-      ? null
-      : question.attemptStatus
+    const attemptStatus = getQuestionAttemptStatus(question)
 
     return (
   <button
     type="button"
     onClick={onOpen}
-    className={`group flex min-h-[150px] w-full flex-col rounded-2xl border p-4 text-left shadow-sm transition-colors duration-200 hover:shadow-md focus-visible:outline-none focus-visible:ring-4 sm:min-h-[165px] sm:p-5 ${attemptStatus === 'correct' ? 'border-emerald-600 bg-emerald-100 hover:border-emerald-700 focus-visible:ring-emerald-200' : attemptStatus === 'wrong' ? 'border-rose-600 bg-rose-100 hover:border-rose-700 focus-visible:ring-rose-200' : 'border-slate-200/90 bg-white hover:border-cyan-300 focus-visible:ring-cyan-100'}`}
+    className={`group relative flex min-h-[150px] w-full flex-col overflow-hidden rounded-2xl border p-4 text-left shadow-[0_8px_24px_rgba(23,32,51,0.04)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(23,32,51,0.09)] focus-visible:outline-none focus-visible:ring-4 sm:min-h-[165px] sm:p-5 ${attemptStatus === 'correct' ? 'border-emerald-300 bg-emerald-50/80 focus-visible:ring-emerald-200' : attemptStatus === 'wrong' ? 'border-rose-300 bg-rose-50/80 focus-visible:ring-rose-200' : 'border-[#e8edf3] bg-white hover:border-orange-300 focus-visible:ring-orange-100'}`}
   >
     <div className="flex w-full items-start gap-3">
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-100 text-xs font-extrabold tabular-nums text-slate-600 transition-colors group-hover:bg-cyan-50 group-hover:text-cyan-800">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-orange-50 text-xs font-extrabold tabular-nums text-orange-700 transition-colors group-hover:bg-orange-100">
         {index}
       </span>
 
@@ -631,6 +644,11 @@ const QuestionCard = ({ question, index, onOpen }) => (
           {question.isBoardQuestion && (
             <span className="inline-flex max-w-full items-center rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-800 ring-1 ring-inset ring-amber-100">
               Board question
+            </span>
+          )}
+          {attemptStatus && (
+            <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-[10px] font-bold ring-1 ring-inset ${attemptStatus === 'correct' ? 'bg-emerald-100 text-emerald-800 ring-emerald-200' : 'bg-rose-100 text-rose-800 ring-rose-200'}`}>
+              {attemptStatus === 'correct' ? 'Answered correctly' : 'Needs another attempt'}
             </span>
           )}
         </div>
@@ -750,7 +768,7 @@ const FilterSelect = ({ value, onChange, options, ariaLabel, tone = 'cyan' }) =>
             transition={{ duration: 0.14, ease: 'easeOut' }}
             className="absolute left-0 right-0 top-[calc(100%+0.4rem)] z-[110] max-h-60 overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_14px_35px_rgba(15,23,42,0.14)]"
           >
-            {options.map((option) => (
+            {options.map((option, optionIndex) => (
               <button
                 key={option.value || 'all'}
                 type="button"
@@ -760,7 +778,7 @@ const FilterSelect = ({ value, onChange, options, ariaLabel, tone = 'cyan' }) =>
                   onChange(option.value)
                   setOpen(false)
                 }}
-                className={`flex min-h-10 w-full items-center rounded-xl px-3 text-left text-xs font-semibold transition-colors sm:text-sm ${value === option.value ? toneClasses.selected : `text-slate-700 ${toneClasses.hover}`}`}
+                className={`flex min-h-11 w-full items-center px-3 py-2 text-left text-xs font-semibold leading-5 transition-colors sm:text-sm ${optionIndex < options.length - 1 ? 'border-b border-slate-200' : ''} ${value === option.value ? 'rounded-xl ' + toneClasses.selected : `text-slate-700 ${toneClasses.hover}`}`}
               >
                 {option.label}
               </button>
@@ -1281,6 +1299,39 @@ const QuestionDownloadModal = ({ onClose }) => {
   )
 }
 
+const DeleteQuestionModal = ({ question, loading, onClose, onConfirm }) => createPortal(
+  <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <motion.section
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-question-title"
+      initial={{ opacity: 0, scale: 0.96, y: 12 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.96, y: 12 }}
+      className="w-full max-w-md rounded-[1.15rem] border border-slate-200 bg-white p-6 shadow-[0_24px_80px_rgba(23,32,51,0.22)]"
+    >
+      <div className="flex items-start gap-4">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-rose-50 text-rose-600">
+          <Trash2 size={20} />
+        </span>
+        <div className="min-w-0">
+          <h2 id="delete-question-title" className="text-lg font-black text-[#171717]">Delete question?</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">Are you sure you want to permanently delete this question?</p>
+          <p className="mt-3 line-clamp-2 text-xs font-semibold text-slate-700">{getQuestionTitle(question)}</p>
+        </div>
+      </div>
+      <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <button type="button" onClick={onClose} disabled={loading} className={`${buttonBase} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`}>Cancel</button>
+        <button type="button" onClick={onConfirm} disabled={loading} className={`${buttonBase} bg-rose-600 text-white hover:bg-rose-700`}>
+          {loading && <LoaderCircle size={16} className="animate-spin" />}
+          {loading ? 'Deleting...' : 'Delete question'}
+        </button>
+      </div>
+    </motion.section>
+  </div>,
+  document.body,
+)
+
 const QuestionModal = ({
   question,
   isAdmin,
@@ -1328,9 +1379,6 @@ const QuestionModal = ({
   }, [question._id])
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         if (imageViewer) {
@@ -1366,7 +1414,6 @@ const QuestionModal = ({
     window.addEventListener('keydown', handleKeyDown)
 
     return () => {
-      document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [onClose, onPrevious, onNext, index, count, imageViewer])
@@ -1484,7 +1531,7 @@ const QuestionModal = ({
 
   return (
     <motion.div
-      className="fixed inset-0 z-[1000] flex items-end justify-center bg-slate-950/60 backdrop-blur-sm sm:items-center sm:p-4"
+      className="fixed inset-0 z-[1000] flex items-end justify-center overflow-y-auto overscroll-contain bg-slate-950/60 p-0 backdrop-blur-sm touch-pan-y sm:items-center sm:p-4"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -1501,7 +1548,7 @@ const QuestionModal = ({
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 20, scale: 0.99 }}
         transition={{ duration: 0.2 }}
-        className="flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[90dvh] sm:rounded-3xl"
+        className="my-0 flex min-h-0 max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-[0_24px_80px_rgba(23,32,51,0.24)] sm:my-auto sm:max-h-[92dvh] sm:rounded-3xl"
       >
         {/* Modal header */}
         <div className="shrink-0 border-b border-slate-100 bg-white px-4 pb-3 pt-3 sm:px-6 sm:pt-5">
@@ -1559,7 +1606,7 @@ const QuestionModal = ({
 
               <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
                 <motion.div
-                  className="h-full rounded-full bg-cyan-600"
+                  className="h-full rounded-full bg-orange-500"
                   initial={false}
                   animate={{ width: `${progress}%` }}
                   transition={{ duration: 0.25 }}
@@ -1570,7 +1617,7 @@ const QuestionModal = ({
         </div>
 
         {/* Scrollable question content */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 sm:py-6">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 py-5 [touch-action:pan-y] sm:px-6 sm:py-6">
           <h2
             id="question-modal-title"
             className="break-words text-lg font-extrabold leading-8 text-slate-950 sm:text-xl sm:leading-9"
