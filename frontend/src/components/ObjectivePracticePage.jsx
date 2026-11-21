@@ -216,6 +216,7 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
   const [boardSavingQuestionId, setBoardSavingQuestionId] = useState('')
   const [error, setError] = useState('')
   const practiceHistoryEntry = useRef(false)
+  const questionCardRef = useRef(null)
   const [pendingResult, setPendingResult] = useState(null)
   const [feedbackPromptStage, setFeedbackPromptStage] = useState('')
   const auth = getStoredAuth()
@@ -1123,14 +1124,17 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
     setCurrentQuestionIndex(index)
   }
 
-  // Keep the question view scrollable after an answer causes a re-render. On
-  // mobile browsers, changing a large question card while a nested dashboard
-  // is open can otherwise leave the page anchored to a stale scroll container.
+  // Bring every newly opened question into view. This is especially important
+  // for tall diagram/table questions on mobile, but also keeps desktop users
+  // anchored to the question instead of the old answer position.
   useEffect(() => {
     if (mode !== 'practice' || isDashboardOpen) return undefined
 
     const frame = window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      questionCardRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
     })
 
     return () => window.cancelAnimationFrame(frame)
@@ -1906,7 +1910,8 @@ const ObjectivePracticePage = ({ objectiveType, title, subtitle, defaultOptions 
 
                   {currentQuestion && (
                     <article
-                      className={`question-protected rounded-2xl border p-4 shadow-sm sm:p-5 ${currentQuestion.isBoardQuestion ? 'border-amber-300 bg-amber-50/70' : 'border-stone-200 bg-white'}`}
+                      ref={questionCardRef}
+                      className={`question-protected scroll-mt-24 rounded-2xl border p-4 shadow-sm sm:scroll-mt-28 sm:p-5 ${currentQuestion.isBoardQuestion ? 'border-amber-300 bg-amber-50/70' : 'border-stone-200 bg-white'}`}
                       onContextMenu={(event) => event.preventDefault()}
                       onCopy={(event) => event.preventDefault()}
                       onCut={(event) => event.preventDefault()}

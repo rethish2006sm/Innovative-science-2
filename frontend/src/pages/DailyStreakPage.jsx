@@ -72,7 +72,7 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
   const navigate = useNavigate();
   const showDailyStreakBottomNav =
     pathname === "/daily-streak" && !dailyPracticePage;
-  const [data, setData] = useState(readDailyChallengeCache);
+  const [data, setData] = useState(() => readDailyChallengeCache());
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -82,7 +82,9 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
     useState(null);
   const [previewPracticeImage, setPreviewPracticeImage] = useState(null);
   const [downloadingPracticeImage, setDownloadingPracticeImage] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // A previous visit gives us enough data to paint the page immediately while
+  // the server refreshes the challenge in the background.
+  const [loading, setLoading] = useState(() => !readDailyChallengeCache());
   const [submitting, setSubmitting] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -246,12 +248,12 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
     setSelected(null);
     setFeedback(null);
     setError("");
-    window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
       document.getElementById("daily-question-panel")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
-    }, 80);
+    });
   };
 
   const submit = async (selectionOverride = null) => {
@@ -1356,7 +1358,19 @@ const DailyStreakPage = ({ dailyPracticePage = false }) => {
                   )}
 
                   {/* Answer options */}
-                  <div className="mt-3 space-y-2 sm:mt-4">
+                  <div
+                    className="relative mt-3 space-y-2 sm:mt-4"
+                    aria-busy={submitting}
+                  >
+                    {submitting && (
+                      <div className="mb-3 flex items-center gap-3 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-cyan-900 shadow-sm" role="status" aria-live="polite">
+                        <RefreshCw size={19} className="shrink-0 animate-spin text-cyan-600" />
+                        <div>
+                          <p className="text-sm font-black">Checking your answer...</p>
+                          <p className="text-xs font-semibold text-cyan-700">Saving your progress</p>
+                        </div>
+                      </div>
+                    )}
                     {[
                       "diagram-based-question",
                       "complete-the-tables",

@@ -3257,6 +3257,7 @@ const extractJsonFromText = (text = '') => {
 const requiresFourOptions = (type) => ['correlation', 'odd-man-out'].includes(type)
 const isMatchType = (type) => type === 'match-the-following'
 const isDoneOnlyType = (type) => type === 'complete-the-tables'
+const isDoneProgressType = (type) => ['complete-the-tables', 'diagram-based-question'].includes(type)
 const normalizeObjectiveType = (type) => {
   const normalized = String(type || '').trim().toLowerCase()
   return ['numerical', 'numerical-questions', 'numericals'].includes(normalized) ? 'numericals' : normalized
@@ -4071,9 +4072,17 @@ const getDailyChallenge = async (userId, localDate, timezone) => {
     dailyExcludedObjectiveTypes.has(question.objectiveType?.type)
   ))
 
-  // A student may practise after first opening the daily-streak page. Refresh
-  // an untouched challenge so the newly unlocked chapter is usable today.
-  if (challenge && challenge.status !== 'completed') {
+  // A student may practise after first opening the daily-streak page. Repair
+  // only incomplete/legacy challenges here. A normal stored challenge is
+  // already the source of truth; rebuilding the complete question pool and
+  // scanning every practice attempt on every page visit made this endpoint
+  // unnecessarily slow.
+  const needsChallengeRepair = Boolean(
+    challenge &&
+    challenge.status !== 'completed' &&
+    (hasDailyExcludedQuestion || (challenge.questionIds || []).length < 20)
+  )
+  if (needsChallengeRepair) {
     const eligibleChapterIds = await getEligibleDailyChapterIds(userId)
     const storedChapterIds = (challenge.eligibleChapterIds || []).map((id) => String(id)).sort()
     const currentChapterIds = [...eligibleChapterIds].sort()
@@ -5737,24 +5746,44 @@ app.get('/api/chapters', optionalAuth, async (req, res) => {
     const chapterIds = chapters.map((chapter) => chapter._id)
     const topics = await Topic.find({ chapter: { $in: chapterIds } }).select('_id chapter').lean()
     const topicIds = topics.map((topic) => topic._id)
-    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic').lean()
+    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic type').lean()
     const objectiveTypeIds = objectiveTypes.map((objectiveType) => objectiveType._id)
-    const [questionCounts, scores] = await Promise.all([
+    const [questionCounts, scores, attempts] = await Promise.all([
       ObjectiveQuestion.aggregate([
         { $match: { objectiveType: { $in: objectiveTypeIds } } },
         { $group: { _id: '$objectiveType', count: { $sum: 1 }, questionIds: { $push: '$_id' } } },
       ]),
       req.user && objectiveTypeIds.length > 0
         ? PracticeScore.find({ user: req.user._id, objectiveType: { $in: objectiveTypeIds } })
-          .select('objectiveType bestScore questionResults').lean()
+          .select('objectiveType bestScore totalQuestions isDone attemptedQuestionIds questionResults').lean()
+        : Promise.resolve([]),
+      req.user && objectiveTypeIds.length > 0
+        ? PracticeAttempt.find({
+          user: req.user._id,
+          objectiveTypeIds: { $in: objectiveTypeIds },
+          attemptType: 'practice',
+        }).select('objectiveTypeIds questionBreakdown').lean()
         : Promise.resolve([]),
     ])
     const questionCountMap = new Map(questionCounts.map((item) => [String(item._id), Number(item.count || 0)]))
     const questionIdMap = new Map(questionCounts.map((item) => [String(item._id), (item.questionIds || []).map(String)]))
     const scoreMap = new Map()
+    const historyMap = new Map()
 
     scores.forEach((score) => {
       scoreMap.set(String(score.objectiveType), score)
+    })
+
+    attempts.forEach((attempt) => {
+      ;(attempt.objectiveTypeIds || []).forEach((objectiveTypeId) => {
+        const key = String(objectiveTypeId)
+        const results = historyMap.get(key) || new Map()
+        ;(attempt.questionBreakdown || []).forEach((item) => {
+          if (!item.questionId || item.status === 'skipped') return
+          results.set(String(item.questionId), item.status === 'correct')
+        })
+        historyMap.set(key, results)
+      })
     })
 
     const topicChapterMap = new Map(topics.map((topic) => [String(topic._id), String(topic.chapter)]))
@@ -5768,10 +5797,23 @@ app.get('/api/chapters', optionalAuth, async (req, res) => {
       const questionTotal = questionCountMap.get(String(objectiveType._id)) || 0
       const score = scoreMap.get(String(objectiveType._id))
       const currentQuestionIds = new Set(questionIdMap.get(String(objectiveType._id)) || [])
-      const currentResults = (score?.questionResults || []).filter((result) => currentQuestionIds.has(String(result.questionId)))
-      const correctQuestions = currentResults.length > 0
-        ? currentResults.filter((result) => result.isCorrect).length
-        : Math.min(Number(score?.bestScore || 0), questionTotal)
+      let currentResults = (score?.questionResults || []).filter((result) => currentQuestionIds.has(String(result.questionId)))
+      if (!currentResults.length) {
+        currentResults = [...(historyMap.get(String(objectiveType._id)) || new Map())]
+          .map(([questionId, isCorrect]) => ({ questionId, isCorrect }))
+          .filter((result) => currentQuestionIds.has(String(result.questionId)))
+      }
+      const completedQuestionIds = new Set((score?.attemptedQuestionIds || []).map(String))
+      const isDoneObjective = Boolean(score?.isDone) && Number(score?.totalQuestions || 0) >= questionTotal
+      const correctQuestions = isDoneProgressType(objectiveType.type)
+        ? isDoneObjective
+          ? questionTotal
+          : [...currentQuestionIds].filter((questionId) => completedQuestionIds.has(String(questionId))).length
+        : isDoneObjective
+          ? questionTotal
+          : currentResults.length > 0
+            ? currentResults.filter((result) => result.isCorrect).length
+            : Math.min(Number(score?.bestScore || 0), questionTotal)
 
       progress.totalQuestions += questionTotal
       progress.correctQuestions += Math.min(correctQuestions, questionTotal)
@@ -5898,7 +5940,7 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
 
     const topics = await Topic.find({ chapter: chapter._id }).sort({ number: 1 }).lean()
     const topicIds = topics.map((topic) => topic._id)
-    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic').lean()
+    const objectiveTypes = await ObjectiveType.find({ topic: { $in: topicIds } }).select('_id topic type').lean()
     const objectiveTypeIds = objectiveTypes.map((objectiveType) => objectiveType._id)
     const questionGroups = await ObjectiveQuestion.aggregate([
       { $match: { objectiveType: { $in: objectiveTypeIds } } },
@@ -5913,15 +5955,38 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
     const boardQuestionIdMap = new Map(questionGroups.map((item) => [String(item._id), (item.boardQuestionIds || []).filter(Boolean).map(String)]))
     const boardCountMap = new Map(questionGroups.map((item) => [String(item._id), Number(item.boardQuestionCount || 0)]))
     const scoreMap = new Map()
+    const historyMap = new Map()
 
     if (req.user && objectiveTypeIds.length > 0) {
-      const scores = await PracticeScore.find({
-        user: req.user._id,
-        objectiveType: { $in: objectiveTypeIds },
-      }).select('objectiveType bestScore questionResults').lean()
+      const [scores, attempts] = await Promise.all([
+        PracticeScore.find({
+          user: req.user._id,
+          objectiveType: { $in: objectiveTypeIds },
+        }).select('objectiveType bestScore totalQuestions isDone attemptedQuestionIds questionResults').lean(),
+        PracticeAttempt.find({
+          user: req.user._id,
+          objectiveTypeIds: { $in: objectiveTypeIds },
+          attemptType: 'practice',
+        }).select('objectiveTypeIds questionBreakdown').lean(),
+      ])
 
       scores.forEach((score) => {
         scoreMap.set(String(score.objectiveType), score)
+      })
+
+      // Older practice scores may not contain questionResults. Rebuild the
+      // per-question result from the saved attempt history so topic progress
+      // matches the Objective page and counts only correct answers.
+      attempts.forEach((attempt) => {
+        ;(attempt.objectiveTypeIds || []).forEach((objectiveTypeId) => {
+          const key = String(objectiveTypeId)
+          const results = historyMap.get(key) || new Map()
+          ;(attempt.questionBreakdown || []).forEach((item) => {
+            if (!item.questionId || item.status === 'skipped') return
+            results.set(String(item.questionId), item.status === 'correct')
+          })
+          historyMap.set(key, results)
+        })
       })
     }
 
@@ -5933,10 +5998,23 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
       const questionIds = questionIdMap.get(String(objectiveType._id)) || []
       const questionIdSet = new Set(questionIds)
       const score = scoreMap.get(String(objectiveType._id))
-      const currentResults = (score?.questionResults || []).filter((result) => questionIdSet.has(String(result.questionId)))
-      const correctQuestions = currentResults.length > 0
-        ? currentResults.filter((result) => result.isCorrect).length
-        : Math.min(Number(score?.bestScore || 0), questionIds.length)
+      let currentResults = (score?.questionResults || []).filter((result) => questionIdSet.has(String(result.questionId)))
+      if (!currentResults.length) {
+        currentResults = [...(historyMap.get(String(objectiveType._id)) || new Map())]
+          .map(([questionId, isCorrect]) => ({ questionId, isCorrect }))
+          .filter((result) => questionIdSet.has(String(result.questionId)))
+      }
+      const completedQuestionIds = new Set((score?.attemptedQuestionIds || []).map(String))
+      const isDoneObjective = Boolean(score?.isDone) && Number(score?.totalQuestions || 0) >= questionIds.length
+      const correctQuestions = isDoneProgressType(objectiveType.type)
+        ? isDoneObjective
+          ? questionIds.length
+          : questionIds.filter((questionId) => completedQuestionIds.has(String(questionId))).length
+        : isDoneObjective
+          ? questionIds.length
+        : currentResults.length > 0
+          ? currentResults.filter((result) => result.isCorrect).length
+          : Math.min(Number(score?.bestScore || 0), questionIds.length)
 
       topicProgress.totalQuestions += questionIds.length
       topicProgress.correctQuestions += Math.min(correctQuestions, questionIds.length)
@@ -5944,9 +6022,11 @@ app.get('/api/chapters/:chapterNumber/topics', optionalAuth, async (req, res) =>
       const boardQuestionIds = boardQuestionIdMap.get(String(objectiveType._id)) || []
       const boardQuestionIdSet = new Set(boardQuestionIds)
       const boardResults = currentResults.filter((result) => boardQuestionIdSet.has(String(result.questionId)))
-      topicProgress.boardCorrectQuestions += boardResults.length > 0
-        ? boardResults.filter((result) => result.isCorrect).length
-        : 0
+      topicProgress.boardCorrectQuestions += isDoneProgressType(objectiveType.type)
+        ? boardQuestionIds.filter((questionId) => completedQuestionIds.has(String(questionId))).length
+        : boardResults.length > 0
+          ? boardResults.filter((result) => result.isCorrect).length
+          : 0
     })
 
     res.set('Cache-Control', 'no-store')
@@ -6180,9 +6260,12 @@ app.get('/api/topics/:id/objective-types', optionalAuth, async (req, res) => {
         const boardQuestionIds = boardQuestionIdsMap.get(String(objectiveType._id)) || []
         const boardQuestionIdSet = new Set(boardQuestionIds)
         const boardResults = (bestScore?.questionResults || []).filter((result) => boardQuestionIdSet.has(String(result.questionId)))
-        const boardCorrectQuestions = boardResults.length > 0
-          ? boardResults.filter((result) => result.isCorrect).length
-          : 0
+        const completedQuestionIds = new Set((bestScore?.attemptedQuestionIds || []).map(String))
+        const boardCorrectQuestions = isDoneProgressType(objectiveType.type)
+          ? boardQuestionIds.filter((questionId) => completedQuestionIds.has(String(questionId))).length
+          : boardResults.length > 0
+            ? boardResults.filter((result) => result.isCorrect).length
+            : 0
 
         return {
           ...objectiveType,

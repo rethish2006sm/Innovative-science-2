@@ -164,15 +164,26 @@ const Objectivepage = () => {
               {objectiveTypes.filter((objectiveType) => !boardOnly || Number(objectiveType.boardQuestionCount || 0) > 0).map((objectiveType) => {
                 const option = objectiveOptions.find((item) => item.type === objectiveType.type)
                 const totalQuestions = Number(boardOnly ? objectiveType.boardQuestionCount || 0 : objectiveType.questionCount || objectiveType.bestScore?.totalQuestions || 0)
-                const attemptedQuestions = Math.min(
-                  Number(boardOnly ? objectiveType.boardCorrectQuestions || 0 : objectiveType.bestScore?.attemptedQuestions ?? (objectiveType.bestScore?.isDone && objectiveType.bestScore?.totalQuestions >= totalQuestions ? totalQuestions : 0)),
-                  totalQuestions,
-                )
+                const isDoneProgressType = ['complete-the-tables', 'diagram-based-question'].includes(objectiveType.type)
+                const completedQuestionIds = new Set((objectiveType.bestScore?.attemptedQuestionIds || []).map(String))
+                // Progress means questions answered correctly. Wrong answers
+                // remain part of the attempt history, but must not fill this
+                // progress bar.
+                const correctQuestions = boardOnly
+                  ? Number(objectiveType.boardCorrectQuestions || 0)
+                  : isDoneProgressType
+                    ? objectiveType.bestScore?.isDone && objectiveType.bestScore?.totalQuestions >= totalQuestions
+                      ? totalQuestions
+                      : completedQuestionIds.size
+                  : objectiveType.bestScore?.isDone && objectiveType.bestScore?.totalQuestions >= totalQuestions
+                    ? totalQuestions
+                    : (objectiveType.bestScore?.questionResults || []).filter((result) => result.isCorrect).length
+                const progressQuestions = Math.min(correctQuestions, totalQuestions)
                 const savedQuestionTotal = Number(boardOnly ? objectiveType.boardQuestionCount || 0 : objectiveType.bestScore?.totalQuestions || 0)
-                const progressPercentage = totalQuestions ? Math.round((attemptedQuestions / totalQuestions) * 100) : 0
+                const progressPercentage = totalQuestions ? Math.round((progressQuestions / totalQuestions) * 100) : 0
                 const isDone = totalQuestions > 0
                   && savedQuestionTotal >= totalQuestions
-                  && attemptedQuestions >= totalQuestions
+                  && progressQuestions >= totalQuestions
 
                 return (
                   <article key={objectiveType._id} className="group relative rounded-[1.25rem] border border-slate-200/80 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-200 hover:shadow-[0_14px_32px_rgba(8,145,178,0.1)] sm:p-4">
@@ -200,7 +211,7 @@ const Objectivepage = () => {
                         <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 p-3 shadow-sm">
                           <div className="flex items-center justify-between gap-3 text-[10px] font-black uppercase tracking-wide text-cyan-700 sm:text-[11px]">
                             <span>Progress</span>
-                            <span>{attemptedQuestions}/{totalQuestions} attempted</span>
+                            <span>{progressQuestions}/{totalQuestions} correct</span>
                           </div>
                           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">
                             <div className={`h-full rounded-full transition-all duration-700 ${isDone ? 'bg-emerald-500' : 'bg-cyan-500'}`} style={{ width: `${progressPercentage}%` }} />
