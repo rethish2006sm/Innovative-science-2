@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Award,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
