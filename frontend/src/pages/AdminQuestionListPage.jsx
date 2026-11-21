@@ -1,7 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Award,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -1768,7 +1767,7 @@ const QuestionModal = ({
                   Delete
                 </button>
                 <button type="button" onClick={onToggleBoard} disabled={Boolean(actionQuestionId)} className={`${buttonBase} flex-1 border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 sm:flex-none`}>
-                  <Award size={16} />
+                  <Shield size={16} />
                   {actionQuestionId ? 'Saving...' : question.isBoardQuestion ? 'Remove board status' : 'Make board question'}
                 </button>
               </div>
