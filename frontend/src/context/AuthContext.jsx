@@ -1,0 +1,221 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createUserWithEmailAndPassword,
+  EmailAuthProvider,
+  onAuthStateChanged,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
+  sendPasswordResetEmail,
+  signInWithCustomToken,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateEmail as firebaseUpdateEmail,
+  updateProfile,
+} from 'firebase/auth'
+import { firebaseAuth, googleProvider } from '../firebase'
+import { apiRequest } from '../api'
+import { clearAuth, getStoredAuth, saveAuth } from '../authStorage'
+
+const AuthContext = createContext(null)
+
+const firebaseErrorMessage = (error) => {
+  const messages = {
+    'auth/email-already-in-use': 'An account with this email already exists.',
+    'auth/invalid-credential': 'Email or password is incorrect.',
+    'auth/user-not-found': 'No account was found with this email address.',
+    'auth/wrong-password': 'Email or password is incorrect.',
+    'auth/user-disabled': 'This account has been disabled.',
+    'auth/operation-not-allowed': 'This sign-in method is not enabled in Firebase Console.',
+    'auth/unauthorized-domain': 'This website domain must be added to Firebase Authentication authorized domains.',
+    'auth/invalid-email': 'Please enter a valid email address.',
+    'auth/weak-password': 'Password must be at least 6 characters.',
+    'auth/popup-closed-by-user': 'Google sign-in was cancelled.',
+    'auth/popup-blocked': 'Please allow popups to sign in with Google.',
+    'auth/network-request-failed': 'Network error. Please try again.',
+    'auth/requires-recent-login': 'Please verify your account again before changing the email address.',
+  }
+  return messages[error?.code] || error?.message || 'Authentication failed. Please try again.'
+}
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [authLoading, setAuthLoading] = useState(false)
+  const [error, setError] = useState('')
+  const syncRequestsRef = useRef(new Map())
+
+  const syncBackendSession = useCallback(async (firebaseUser, profile = {}, forceTokenRefresh = false) => {
+    if (!firebaseUser) {
+      if (getStoredAuth()?.provider !== 'legacy') clearAuth()
+      return null
+    }
+    const requestKey = `${firebaseUser.uid}:${forceTokenRefresh ? 'refresh' : 'normal'}:${JSON.stringify(profile)}`
+    const pendingRequest = syncRequestsRef.current.get(requestKey)
+    if (pendingRequest) return pendingRequest
+
+    const request = (async () => {
+      const idToken = await firebaseUser.getIdToken(forceTokenRefresh)
+      const data = await apiRequest('/api/auth/firebase', {
+        method: 'POST',
+        body: JSON.stringify({
+          idToken,
+          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+          // MongoDB is the source of truth for an existing profile. Do not
+          // submit Firebase's possibly stale display name during auth refresh.
+          name: profile.name || (profile.name === '' ? '' : undefined),
+          email: firebaseUser.email || '',
+          phoneNumber: profile.phoneNumber || (profile.phoneNumber === '' ? '' : undefined),
+          gameId: profile.gameId,
+          dateOfBirth: profile.dateOfBirth,
+          gender: profile.gender,
+          bloodGroup: profile.bloodGroup,
+          state: profile.state,
+          city: profile.city,
+          area: profile.area,
+          schoolName: profile.schoolName,
+          finalExamPercentage: profile.finalExamPercentage,
+        }),
+      })
+      saveAuth({ token: data.token, user: { ...data.user, firebaseUid: firebaseUser.uid } })
+      return data.user
+    })()
+
+    syncRequestsRef.current.set(requestKey, request)
+    try {
+      return await request
+    } finally {
+      if (syncRequestsRef.current.get(requestKey) === request) {
+        syncRequestsRef.current.delete(requestKey)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (firebaseUser) => {
+      setUser(firebaseUser)
+      setError('')
+      try {
+        await syncBackendSession(firebaseUser)
+      } catch (authError) {
+        clearAuth()
+        setError(firebaseErrorMessage(authError))
+      } finally {
+        setLoading(false)
+      }
+    })
+    return unsubscribe
+  }, [syncBackendSession])
+
+  const runAuthAction = async (action) => {
+    setError('')
+    setAuthLoading(true)
+    try {
+      const result = await action()
+      if (result?.legacySession) {
+        saveAuth({
+          token: result.legacySession.token,
+          user: result.legacySession.user,
+          provider: 'legacy',
+        })
+        return null
+      }
+      await syncBackendSession(result.user, result.profile)
+      return result.user
+    } catch (authError) {
+      setError(firebaseErrorMessage(authError))
+      throw authError
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const signUp = (email, password, profile = {}) => runAuthAction(async () => {
+    const result = await createUserWithEmailAndPassword(firebaseAuth, email, password)
+    if (profile.name) await updateProfile(result.user, { displayName: profile.name })
+    return { user: result.user, profile }
+  })
+
+  const signIn = (email, password) => runAuthAction(async () => {
+    try {
+      return await signInWithEmailAndPassword(firebaseAuth, email, password)
+    } catch (authError) {
+      if (authError?.code !== 'auth/invalid-credential') throw authError
+
+      try {
+        const migration = await apiRequest('/api/auth/firebase/migrate-legacy', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        })
+        return await signInWithCustomToken(firebaseAuth, migration.customToken)
+      } catch {
+        try {
+          const legacySession = await apiRequest('/api/auth/signin', {
+            method: 'POST',
+            body: JSON.stringify({ email, password }),
+          })
+          return { legacySession }
+        } catch {
+          throw authError
+        }
+      }
+    }
+  })
+  const signInWithGoogle = () => runAuthAction(() => signInWithPopup(firebaseAuth, googleProvider))
+  const resetPassword = async (email) => {
+    const normalizedEmail = String(email || '').trim()
+    if (!normalizedEmail) {
+      throw new Error('Enter your email address first.')
+    }
+
+    setError('')
+    try {
+      await sendPasswordResetEmail(firebaseAuth, normalizedEmail)
+    } catch (authError) {
+      const message = firebaseErrorMessage(authError)
+      setError(message)
+      throw new Error(message)
+    }
+  }
+  const completeProfile = (profile) => syncBackendSession(firebaseAuth.currentUser, profile)
+  const changeEmail = useCallback(async (newEmail, currentPassword = '') => {
+    const firebaseUser = firebaseAuth.currentUser
+    const normalizedEmail = String(newEmail || '').trim().toLowerCase()
+
+    if (!firebaseUser) {
+      throw new Error('Your authentication session has expired. Please sign in again.')
+    }
+
+    try {
+      const isGoogleUser = firebaseUser.providerData.some((provider) => provider.providerId === 'google.com')
+
+      if (isGoogleUser) {
+        await reauthenticateWithPopup(firebaseUser, googleProvider)
+      } else {
+        if (!currentPassword) {
+          throw new Error('Current password is required.')
+        }
+        const credential = EmailAuthProvider.credential(firebaseUser.email, currentPassword)
+        await reauthenticateWithCredential(firebaseUser, credential)
+      }
+
+      await firebaseUpdateEmail(firebaseUser, normalizedEmail)
+      return syncBackendSession(firebaseUser, {}, true)
+    } catch (authError) {
+      throw new Error(firebaseErrorMessage(authError))
+    }
+  }, [syncBackendSession])
+  const logout = async () => {
+    await signOut(firebaseAuth)
+    clearAuth()
+  }
+
+  const value = useMemo(() => ({ user, loading, authLoading, error, signUp, signIn, signInWithGoogle, resetPassword, completeProfile, changeEmail, logout }), [user, loading, authLoading, error, changeEmail])
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+}
+
+export const useAuth = () => {
+  const context = useContext(AuthContext)
+  if (!context) throw new Error('useAuth must be used inside AuthProvider')
+  return context
+}

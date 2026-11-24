@@ -1,0 +1,143 @@
+import { clearAuth, getStoredAuth } from './authStorage'
+import { getActiveScience } from './science'
+import { firebaseAuth } from './firebase'
+import { signOut } from 'firebase/auth'
+
+const normalizeBaseUrl = (value) => String(value || '').replace(/\/$/, '')
+
+const resolveApiBaseUrl = () => {
+  const configured = normalizeBaseUrl(import.meta.env.VITE_API_URL)
+
+  if (configured) {
+    return configured
+  }
+
+  if (import.meta.env.PROD && typeof window !== 'undefined') {
+    return 'https://innovative-science-2-backend.onrender.com'
+  }
+
+  return 'http://localhost:5000'
+}
+
+export const API_BASE_URL = resolveApiBaseUrl()
+
+// Keep stable public responses instantly available when users move between
+// pages. This also deduplicates simultaneous requests caused by React effects.
+const responseCache = new Map()
+const pendingRequests = new Map()
+const CACHE_TTL = 15_000
+const cacheablePaths = ['/api/chapters', '/api/classes', '/api/feedback/featured', '/api/announcement']
+
+export const assetUrl = (path) => {
+  const rawPath = String(path || '').trim()
+
+  if (!rawPath) {
+    return ''
+  }
+
+  if (rawPath.startsWith('data:') || rawPath.startsWith('blob:')) {
+    return rawPath
+  }
+
+  // API responses normally contain relative paths. If an older response or
+  // a proxy has prefixed one with the frontend origin, still move it to the
+  // backend; otherwise Vite returns index.html instead of image bytes.
+  if (/^https?:\/\//i.test(rawPath)) {
+    try {
+      const parsed = new URL(rawPath)
+      if (parsed.pathname.startsWith('/api/')) {
+        return `${API_BASE_URL}${parsed.pathname}${parsed.search}${parsed.hash}`
+      }
+    } catch (error) {
+      return rawPath
+    }
+
+    return rawPath
+  }
+
+  return `${API_BASE_URL}${rawPath.startsWith('/') ? '' : '/'}${rawPath}`
+}
+
+export const apiRequest = async (path, options = {}) => {
+  const auth = getStoredAuth()
+  const activeScience = options.science || getActiveScience()
+  const method = String(options.method || 'GET').toUpperCase()
+  const canCache = method === 'GET'
+    && options.cache !== 'no-store'
+    && cacheablePaths.some((cacheablePath) => path === cacheablePath || path.startsWith(`${cacheablePath}?`))
+  const cacheKey = `${API_BASE_URL}${activeScience}${path}|${auth?.token ? 'auth' : 'public'}`
+
+  if (method !== 'GET') {
+    responseCache.clear()
+  }
+
+  if (canCache) {
+    const cached = responseCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      // Let callers render cached data immediately while refreshing it in the
+      // background. The refresh deliberately bypasses the cache once so the
+      // visible page never waits on the network during navigation or focus.
+      if (options.revalidate) {
+        void apiRequest(path, {
+          ...options,
+          cache: 'no-store',
+          revalidate: false,
+        }).then((freshData) => {
+          responseCache.set(cacheKey, { data: freshData, expiresAt: Date.now() + CACHE_TTL })
+        }).catch(() => {})
+      }
+      return cached.data
+    }
+  }
+
+  if (method === 'GET' && pendingRequests.has(cacheKey)) {
+    return pendingRequests.get(cacheKey)
+  }
+
+  const headers = {
+    ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+    ...options.headers,
+  }
+
+  if (auth?.token) {
+    headers.Authorization = `Bearer ${auth.token}`
+  }
+  headers['X-Science'] = activeScience
+  if (typeof Intl !== 'undefined') {
+    headers['X-Timezone'] = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Calcutta'
+  }
+
+  const request = fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers,
+  }).then(async (response) => {
+    const isJson = response.headers.get('content-type')?.includes('application/json')
+    const data = isJson ? await response.json() : null
+
+    if (!response.ok) {
+      const deletedFirebaseAccount = response.status === 410 && path === '/api/auth/firebase'
+      if (response.status === 401 || deletedFirebaseAccount) {
+        clearAuth()
+        // Account deletion invalidates the backend session first. End the
+        // Firebase session too, otherwise the client could try to sync it
+        // again and appear signed in until the token refreshes.
+        signOut(firebaseAuth).catch(() => {})
+      }
+
+      const error = new Error(data?.message || 'Something went wrong.')
+      error.status = response.status
+      throw error
+    }
+
+    if (canCache) {
+      responseCache.set(cacheKey, { data, expiresAt: Date.now() + CACHE_TTL })
+    }
+
+    return data
+  }).finally(() => {
+    if (method === 'GET') pendingRequests.delete(cacheKey)
+  })
+
+  if (method === 'GET') pendingRequests.set(cacheKey, request)
+  return request
+}

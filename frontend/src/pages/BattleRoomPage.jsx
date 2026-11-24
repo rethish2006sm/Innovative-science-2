@@ -1,0 +1,2751 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import {
+  ArrowLeft,
+  ArrowRight,
+  BadgeCheck,
+  CheckCircle2,
+  Check,
+  Crown,
+  Cog,
+  BellRing,
+  LogOut,
+  MessageCircleMore,
+  Plus,
+  Send,
+  ShieldAlert,
+  Swords,
+  Trophy,
+  Users,
+  UserPlus,
+  Save,
+  Trash2,
+  Zap,
+  WifiOff,
+  X,
+} from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { apiRequest, assetUrl } from '../api'
+import { getStoredAuth } from '../authStorage'
+import { createBattleSocket } from '../lib/battleSocket'
+import { clearBattleSession, getBattleSession, saveBattleSession } from '../lib/battleSession'
+import BattleResultsPage from './BattleResultsPage'
+import BattleNavbar from '../components/BattleNavbar'
+
+const reactionChoices = ['🔥', '😂', '😎', '😱', '💪', '👏', '❤️', '🤣', '🚀', '🎯', '🧠']
+const battleQuestionCounts = [10, 15, 20, 25]
+
+const BattleRoomLoading = () => (
+  <section className="battle-room-loading" role="status" aria-label="Loading battle room">
+    <div className="battle-room-loading-arena" aria-hidden="true">
+      <div className="battle-room-loading-ring battle-room-loading-ring-one" />
+      <div className="battle-room-loading-ring battle-room-loading-ring-two" />
+      <div className="battle-room-loading-core"><Swords size={25} /></div>
+      <span className="battle-room-loading-spark battle-room-loading-spark-one" />
+      <span className="battle-room-loading-spark battle-room-loading-spark-two" />
+      <span className="battle-room-loading-spark battle-room-loading-spark-three" />
+    </div>
+    <p className="battle-room-loading-kicker">Battle arena</p>
+    <p className="battle-room-loading-title">Deploying your room<span className="battle-loading-dots">...</span></p>
+    <p className="battle-room-loading-subtitle">Syncing players and questions</p>
+  </section>
+)
+const battleTimeLimits = [10, 15]
+const battleDifficultyOptions = [
+  { value: 'easy', label: 'Easy' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'hard', label: 'Hard' },
+]
+
+const buildLobbySettingsDraft = (room = {}) => ({
+  roomName: String(room.settings?.roomName || 'Battle Room'),
+  questionsCount: String(room.settings?.questionsCount || 10),
+  timeLimitSeconds: String(room.settings?.timeLimitSeconds || 20),
+  difficulty: room.settings?.difficulty || 'medium',
+  emojiReactions: Boolean(room.settings?.emojiReactions),
+  roomChat: Boolean(room.settings?.roomChat),
+})
+
+const buildAnswerFeedback = ({ isCorrect, streakAfter = 0, scoreAwarded = 0, rank = null, correctOption = null }) => {
+  const safeScore = Math.max(0, Number(scoreAwarded) || 0)
+  const parsedRank = Number(rank)
+  const safeRank = Number.isInteger(parsedRank) && parsedRank > 0 ? parsedRank : null
+
+  return {
+    tone: isCorrect ? 'success' : 'danger',
+    badge: isCorrect ? 'Correct answer' : 'Wrong answer',
+    title: isCorrect ? `+${safeScore}` : '+0',
+    message: isCorrect
+      ? safeRank
+        ? `#${safeRank} on the board`
+        : 'Points added to your score.'
+      : 'No points awarded.',
+    streakLabel: isCorrect && streakAfter > 0 ? `Streak x${streakAfter}` : '',
+    positionLabel: safeRank ? `#${safeRank}` : '',
+    scoreAwarded: safeScore,
+    correctOption,
+  }
+}
+
+const normalizeRoom = (room = {}, authUserId = '') => {
+  const normalizeUserId = (value) => String(value?.id || value?._id || value || '')
+  const currentUserId = normalizeUserId(authUserId)
+  const markSelf = (player) => ({
+    ...player,
+    isSelf: normalizeUserId(player.userId || player.id || player._id) === currentUserId,
+  })
+  const players = Array.isArray(room.players)
+    ? room.players.map(markSelf)
+    : []
+
+  return {
+    ...room,
+    players,
+    leaderboard: Array.isArray(room.leaderboard)
+      ? room.leaderboard.map(markSelf)
+      : [],
+    chatMessages: Array.isArray(room.chatMessages) ? room.chatMessages : [],
+    reactions: Array.isArray(room.reactions) ? room.reactions : [],
+    currentQuestion: room.currentQuestion || null,
+    settings: {
+      roomName: room.settings?.roomName || 'Battle Room',
+      chapterIds: Array.isArray(room.settings?.chapterIds) ? room.settings.chapterIds : [],
+      objectiveTypes: Array.isArray(room.settings?.objectiveTypes) ? room.settings.objectiveTypes : [],
+      topicIds: Array.isArray(room.settings?.topicIds) ? room.settings.topicIds : [],
+      objectiveTypeIds: Array.isArray(room.settings?.objectiveTypeIds) ? room.settings.objectiveTypeIds : [],
+      questionsCount: Number(room.settings?.questionsCount || 0),
+      timeLimitSeconds: Number(room.settings?.timeLimitSeconds || 20),
+      difficulty: room.settings?.difficulty || 'medium',
+      emojiReactions: Boolean(room.settings?.emojiReactions),
+      roomChat: Boolean(room.settings?.roomChat),
+      maxPlayers: Number(room.settings?.maxPlayers || 4),
+      minPlayers: Number(room.settings?.minPlayers || 2),
+    },
+  }
+}
+
+const shouldAcceptBattleRoom = (current, next) => {
+  if (!current) return true
+  if (current.status !== next.status) return true
+  if (Number(next.currentQuestionIndex || 0) > Number(current.currentQuestionIndex || 0)) return true
+  if (Number(next.currentQuestionIndex || 0) < Number(current.currentQuestionIndex || 0)) return false
+
+  const currentActivity = current.lastActivityAt ? new Date(current.lastActivityAt).getTime() : 0
+  const nextActivity = next.lastActivityAt ? new Date(next.lastActivityAt).getTime() : 0
+  return nextActivity >= currentActivity
+}
+
+const BattleRoomPage = () => {
+  const { roomCode, stage = 'lobby' } = useParams()
+  const navigate = useNavigate()
+  const auth = getStoredAuth()
+  const socketRef = useRef(null)
+  const voicePeersRef = useRef(new Map())
+  const voiceAudioRef = useRef(new Map())
+  const pendingVoiceIceRef = useRef(new Map())
+  const localVoiceStreamRef = useRef(null)
+  const voiceEnabledRef = useRef(false)
+  const [room, setRoom] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [socketState, setSocketState] = useState('connecting')
+  const [selectedAnswer, setSelectedAnswer] = useState(null)
+  const [now, setNow] = useState(Date.now())
+  const [floatingReactions, setFloatingReactions] = useState([])
+  const [toast, setToast] = useState('')
+  const [answerFeedback, setAnswerFeedback] = useState(null)
+  const [roomAction, setRoomAction] = useState('')
+  const [lobbyReminder, setLobbyReminder] = useState('')
+  const [incomingInvite, setIncomingInvite] = useState(null)
+  const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
+  const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
+  const [resultsLockedUntil, setResultsLockedUntil] = useState(0)
+  const answerFeedbackTimerRef = useRef(null)
+  const lobbyReminderTimerRef = useRef(null)
+  const lastFeedbackKeyRef = useRef('')
+
+  const activeBattle = room?.status === 'active'
+  const currentQuestion = room?.currentQuestion || null
+  const visibleStage = room?.status === 'active'
+    ? 'arena'
+    : room?.status === 'finished'
+      ? 'results'
+      : 'lobby'
+  const currentQuestionTimeLeft = useMemo(() => {
+    if (!room?.questionEndsAt) {
+      return 0
+    }
+
+    return Math.max(0, Math.ceil((new Date(room.questionEndsAt).getTime() - now) / 1000))
+  }, [now, room?.questionEndsAt])
+  const currentQuestionProgress = useMemo(() => {
+    if (!room?.totalQuestions) {
+      return 0
+    }
+
+    const denominator = room.totalQuestions
+    const numerator = Math.max(0, Math.min(room.currentQuestionIndex - 1, denominator))
+    return Math.min(100, Math.round((numerator / denominator) * 100))
+  }, [room?.currentQuestionIndex, room?.totalQuestions])
+  const allReady = Boolean(room?.players?.length) && room.players.every((player) => player.ready)
+  const isCreator = Boolean(room) && String(room.createdBy) === String(auth?.user?.id)
+  const selfPlayer = room?.players?.find((player) => player.isSelf) || null
+  const alreadyAnswered = Boolean(selfPlayer?.answeredQuestions?.some((answer) => answer.questionIndex === room?.currentQuestionIndex - 1))
+  const canAnswer = socketState === 'connected' && room?.status === 'active' && currentQuestion && selectedAnswer === null && !alreadyAnswered && currentQuestionTimeLeft > 0
+  const resultsLocked = visibleStage === 'results' && resultsLockedUntil > now
+  const resultsSeconds = resultsLocked ? Math.max(1, Math.ceil((resultsLockedUntil - now) / 1000)) : 0
+
+  const closeVoicePeer = (remoteUserId) => {
+    const peer = voicePeersRef.current.get(String(remoteUserId))
+    peer?.close()
+    voicePeersRef.current.delete(String(remoteUserId))
+    const audio = voiceAudioRef.current.get(String(remoteUserId))
+    if (audio) {
+      audio.srcObject = null
+      audio.remove()
+      voiceAudioRef.current.delete(String(remoteUserId))
+    }
+    pendingVoiceIceRef.current.delete(String(remoteUserId))
+  }
+
+  const createVoicePeer = async (remoteUserId, initiator = false) => {
+    const remoteId = String(remoteUserId || '')
+    if (!remoteId || remoteId === String(auth?.user?.id || '') || !localVoiceStreamRef.current) return
+    if (voicePeersRef.current.has(remoteId)) return
+
+    const peer = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+      ],
+    })
+    voicePeersRef.current.set(remoteId, peer)
+    localVoiceStreamRef.current.getTracks().forEach((track) => peer.addTrack(track, localVoiceStreamRef.current))
+    peer.onicecandidate = (event) => {
+      if (event.candidate) socketRef.current?.emit('battle:voice-ice', { roomCode, targetUserId: remoteId, candidate: event.candidate })
+    }
+    peer.ontrack = (event) => {
+      let audio = voiceAudioRef.current.get(remoteId)
+      if (!audio) {
+        audio = new Audio()
+        audio.autoplay = true
+        audio.controls = false
+        audio.volume = 1
+        audio.muted = false
+        audio.setAttribute('playsinline', 'true')
+        audio.style.position = 'fixed'
+        audio.style.left = '-9999px'
+        audio.style.width = '1px'
+        audio.style.height = '1px'
+        audio.style.opacity = '0.01'
+        document.body.appendChild(audio)
+        voiceAudioRef.current.set(remoteId, audio)
+      }
+      audio.srcObject = event.streams[0] || new MediaStream([event.track])
+      audio.play().catch(() => {})
+    }
+    peer.onconnectionstatechange = () => {
+      if (['failed', 'closed'].includes(peer.connectionState)) closeVoicePeer(remoteId)
+    }
+
+    if (initiator) {
+      const offer = await peer.createOffer()
+      await peer.setLocalDescription(offer)
+      socketRef.current?.emit('battle:voice-offer', { roomCode, targetUserId: remoteId, offer })
+    }
+  }
+
+  const toggleVoice = async () => {
+    if (voiceEnabledRef.current) {
+      socketRef.current?.emit('battle:voice-leave', { roomCode })
+      localVoiceStreamRef.current?.getTracks().forEach((track) => track.stop())
+      localVoiceStreamRef.current = null
+      voicePeersRef.current.forEach((_, remoteId) => closeVoicePeer(remoteId))
+      voiceEnabledRef.current = false
+      setVoiceEnabled(false)
+      return
+    }
+
+    try {
+      setVoiceError('')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      localVoiceStreamRef.current = stream
+      voiceEnabledRef.current = true
+      setVoiceEnabled(true)
+      socketRef.current?.emit('battle:voice-join', { roomCode })
+    } catch {
+      setVoiceError('Microphone permission is required for room voice.')
+      window.setTimeout(() => setVoiceError(''), 3500)
+    }
+  }
+
+  useEffect(() => {
+    setSelectedAnswer(null)
+    setAnswerFeedback(null)
+    lastFeedbackKeyRef.current = ''
+  }, [room?.currentQuestionIndex])
+
+  useEffect(() => {
+    if (socketState === 'connected' && !alreadyAnswered) {
+      setSelectedAnswer(null)
+    }
+  }, [socketState, alreadyAnswered])
+
+  useEffect(() => {
+    if (!room?.code || room.status !== 'active' || currentQuestionTimeLeft !== 0) {
+      return undefined
+    }
+
+    let cancelled = false
+    const syncExpiredQuestion = async () => {
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${room.code}`)
+        if (cancelled) return
+
+        const nextRoom = normalizeRoom(data.room, auth.user.id)
+        setRoom(nextRoom)
+        if (nextRoom.status === 'finished') {
+          navigate(`/battle-mode/room/${nextRoom.code}/results`, { replace: true })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setToast(err.message || 'Could not sync the next question. Reconnecting...')
+        }
+      }
+    }
+
+    syncExpiredQuestion()
+    const syncTimer = window.setInterval(syncExpiredQuestion, 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(syncTimer)
+    }
+  }, [auth?.user?.id, currentQuestionTimeLeft, navigate, room?.code, room?.status])
+
+  useEffect(() => {
+    if (!room?.code || room.status !== 'active') {
+      return undefined
+    }
+
+    let cancelled = false
+    const syncBattleRoom = async () => {
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${room.code}`)
+        if (cancelled) return
+
+        const nextRoom = normalizeRoom(data.room, auth.user.id)
+        setRoom((current) => {
+          const currentActivity = current?.lastActivityAt ? new Date(current.lastActivityAt).getTime() : 0
+          const nextActivity = nextRoom.lastActivityAt ? new Date(nextRoom.lastActivityAt).getTime() : 0
+          if (!current || nextRoom.currentQuestionIndex > current.currentQuestionIndex || nextRoom.status !== current.status || nextActivity >= currentActivity) {
+            return nextRoom
+          }
+          return current
+        })
+      } catch (err) {
+        // Socket reconnect/status messaging handles temporary sync failures.
+      }
+    }
+
+    const syncTimer = window.setInterval(syncBattleRoom, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(syncTimer)
+    }
+  }, [auth?.user?.id, room?.code, room?.status])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadRoom = async () => {
+      if (!auth?.token) {
+        navigate('/signin')
+        return
+      }
+
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${roomCode}`)
+        if (cancelled) {
+          return
+        }
+
+        const nextRoom = normalizeRoom(data.room, auth.user.id)
+        setRoom(nextRoom)
+        saveBattleSession({
+          roomCode: nextRoom.code,
+          roomId: nextRoom.id,
+          status: nextRoom.status,
+          route: nextRoom.status === 'active' ? 'arena' : nextRoom.status === 'finished' ? 'results' : 'lobby',
+        })
+
+        if (nextRoom.status === 'active' && stage !== 'arena') {
+          navigate(`/battle-mode/room/${nextRoom.code}/arena`, { replace: true })
+        }
+
+        if (nextRoom.status === 'finished' && stage !== 'results') {
+          navigate(`/battle-mode/room/${nextRoom.code}/results`, { replace: true })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    loadRoom()
+
+    return () => {
+      cancelled = true
+    }
+  }, [auth?.token, auth?.user?.id, navigate, roomCode, stage])
+
+  useEffect(() => {
+    if (!auth?.token || !room?.code) {
+      return undefined
+    }
+
+    const socket = createBattleSocket(auth.token)
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      setSocketState('connected')
+      socket.emit('battle:subscribe', { roomCode: room.code })
+    })
+
+    socket.on('disconnect', () => {
+      setSocketState('offline')
+    })
+
+    socket.on('connect_error', () => {
+      setSocketState('offline')
+    })
+
+    socket.io.on('reconnect_attempt', () => {
+      setSocketState('connecting')
+    })
+
+    socket.on('battle:error', (payload) => {
+      setToast(payload?.message || 'Battle update failed.')
+      window.setTimeout(() => setToast(''), 2600)
+    })
+
+    socket.on('battle:voice-peer-joined', ({ userId }) => {
+      if (voiceEnabledRef.current) createVoicePeer(userId, true).catch(() => {})
+    })
+    socket.on('battle:voice-peers', ({ userIds = [] }) => {
+      userIds.forEach((userId) => createVoicePeer(userId, false).catch(() => {}))
+    })
+    socket.on('battle:voice-offer', async ({ fromUserId, offer }) => {
+      if (!voiceEnabledRef.current || !offer) return
+      await createVoicePeer(fromUserId, false).catch(() => {})
+      const peer = voicePeersRef.current.get(String(fromUserId))
+      if (!peer) return
+      await peer.setRemoteDescription(offer)
+      const pendingCandidates = pendingVoiceIceRef.current.get(String(fromUserId)) || []
+      pendingVoiceIceRef.current.delete(String(fromUserId))
+      await Promise.all(pendingCandidates.map((candidate) => peer.addIceCandidate(candidate).catch(() => {})))
+      const answer = await peer.createAnswer()
+      await peer.setLocalDescription(answer)
+      socket.emit('battle:voice-answer', { roomCode, targetUserId: fromUserId, answer })
+    })
+    socket.on('battle:voice-answer', async ({ fromUserId, answer }) => {
+      const peer = voicePeersRef.current.get(String(fromUserId))
+      if (peer && answer) {
+        await peer.setRemoteDescription(answer).catch(() => {})
+        const pendingCandidates = pendingVoiceIceRef.current.get(String(fromUserId)) || []
+        pendingVoiceIceRef.current.delete(String(fromUserId))
+        await Promise.all(pendingCandidates.map((candidate) => peer.addIceCandidate(candidate).catch(() => {})))
+      }
+    })
+    socket.on('battle:voice-ice', async ({ fromUserId, candidate }) => {
+      const peer = voicePeersRef.current.get(String(fromUserId))
+      if (!candidate) return
+      if (!peer?.remoteDescription) {
+        const pending = pendingVoiceIceRef.current.get(String(fromUserId)) || []
+        pending.push(candidate)
+        pendingVoiceIceRef.current.set(String(fromUserId), pending)
+        return
+      }
+      await peer.addIceCandidate(candidate).catch(() => {})
+    })
+    socket.on('battle:voice-peer-left', ({ userId }) => closeVoicePeer(userId))
+
+    socket.on('battle:room-update', (payload) => {
+      const nextRoom = normalizeRoom(payload?.room || {}, auth.user.id)
+      if (nextRoom.status === 'lobby' && stage === 'results') {
+        return
+      }
+      setRoom((current) => shouldAcceptBattleRoom(current, nextRoom) ? nextRoom : current)
+      saveBattleSession({
+        roomCode: nextRoom.code,
+        roomId: nextRoom.id,
+        status: nextRoom.status,
+        route: nextRoom.status === 'active' ? 'arena' : nextRoom.status === 'finished' ? 'results' : 'lobby',
+      })
+
+      if (nextRoom.status === 'active' && stage !== 'arena') {
+        navigate(`/battle-mode/room/${nextRoom.code}/arena`, { replace: true })
+      }
+
+      if (nextRoom.status === 'finished' && stage !== 'results') {
+        navigate(`/battle-mode/room/${nextRoom.code}/results`, { replace: true })
+      }
+
+      if (nextRoom.status === 'finished') {
+        window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
+      }
+    })
+
+    socket.on('battle:room-deleted', (payload) => {
+      const message = payload?.message || 'The room was deleted.'
+      setToast(message)
+      clearBattleSession()
+      window.setTimeout(() => {
+        navigate('/battle-mode', { replace: true })
+      }, 1200)
+    })
+
+    socket.on('battle:ready-reminder', (payload) => {
+      if (String(payload?.targetUserId || '') !== String(auth.user.id)) {
+        return
+      }
+
+      const message = payload?.message || 'Please click Ready.'
+      setLobbyReminder(message)
+      window.clearTimeout(lobbyReminderTimerRef.current)
+      lobbyReminderTimerRef.current = window.setTimeout(() => setLobbyReminder(''), 2600)
+    })
+
+    socket.on('battle:room-invite', (payload) => {
+      setIncomingInvite(payload)
+      window.setTimeout(() => setIncomingInvite((current) => current?.inviteId === payload?.inviteId ? null : current), 10000)
+    })
+
+    socket.on('battle:room-invite-status', (payload) => {
+      if (payload?.status === 'sent') setToast(`Invite sent to ${payload.targetUserId || 'your friend'}.`)
+      if (payload?.status === 'offline') setToast('That friend is currently offline.')
+      if (payload?.status === 'accepted') setToast(`${payload.responderName || 'Your friend'} accepted the invite.`)
+      if (payload?.status === 'rejected') setToast(`${payload.responderName || 'Your friend'} declined the invite.`)
+      if (payload?.status === 'error') setToast(payload.message || 'Could not send the invite.')
+      if (payload?.status) window.setTimeout(() => setToast(''), 2600)
+    })
+
+    socket.on('battle:question-update', (payload) => {
+      const nextRoom = normalizeRoom(payload?.room || {}, auth.user.id)
+      setRoom((current) => shouldAcceptBattleRoom(current, nextRoom) ? nextRoom : current)
+      setSelectedAnswer(null)
+      setAnswerFeedback(null)
+      lastFeedbackKeyRef.current = ''
+      saveBattleSession({
+        roomCode: nextRoom.code,
+        roomId: nextRoom.id,
+        status: nextRoom.status,
+        route: 'arena',
+      })
+      if (stage !== 'arena' && nextRoom.status === 'active') {
+        navigate(`/battle-mode/room/${nextRoom.code}/arena`, { replace: true })
+      }
+    })
+
+    socket.on('battle:chat-message', (payload) => {
+      setRoom((current) => {
+        if (!current) return current
+        return {
+          ...current,
+          chatMessages: [...(current.chatMessages || []), payload.message].slice(-40),
+        }
+      })
+    })
+
+    socket.on('battle:reaction', (payload) => {
+      const reaction = payload?.reaction
+      if (!reaction) {
+        return
+      }
+
+      setFloatingReactions((current) => [
+        ...current.slice(-10),
+        {
+          id: reaction.id,
+          emoji: reaction.emoji,
+          name: reaction.name || 'Player',
+          x: 12 + Math.random() * 76,
+          travel: Math.min(620, Math.max(300, window.innerHeight * 0.68)),
+        },
+      ])
+      window.setTimeout(() => {
+        setFloatingReactions((current) => current.filter((item) => item.id !== reaction.id))
+      }, 2200)
+    })
+
+    socket.on('battle:answer-received', (payload) => {
+      if (String(payload?.userId || '') !== String(auth.user.id)) {
+        return
+      }
+
+      const feedbackKey = `${payload.questionIndex}:${payload.isCorrect ? 'correct' : 'wrong'}:${payload.answerIndex}`
+      if (lastFeedbackKeyRef.current === feedbackKey) {
+        return
+      }
+
+      lastFeedbackKeyRef.current = feedbackKey
+
+      const nextFeedback = buildAnswerFeedback({
+        isCorrect: Boolean(payload?.isCorrect),
+        streakAfter: Number(payload?.streakAfter || 0),
+        scoreAwarded: Number(payload?.scoreAwarded || 0),
+        rank: Number(payload?.rank || 0),
+        correctOption: Number(payload?.correctOption ?? -1),
+      })
+
+      setAnswerFeedback(nextFeedback)
+      window.clearTimeout(answerFeedbackTimerRef.current)
+      answerFeedbackTimerRef.current = window.setTimeout(() => {
+        setAnswerFeedback(null)
+      }, 2600)
+    })
+
+    socket.on('battle:battle-end', (payload) => {
+      const nextRoom = normalizeRoom(payload?.room || {}, auth.user.id)
+      setRoom(nextRoom)
+      window.clearTimeout(answerFeedbackTimerRef.current)
+      setAnswerFeedback(null)
+      setSelectedAnswer(null)
+      lastFeedbackKeyRef.current = ''
+      saveBattleSession({
+        roomCode: nextRoom.code,
+        roomId: nextRoom.id,
+        status: nextRoom.status,
+        route: 'results',
+      })
+      window.dispatchEvent(new CustomEvent('innovative-science-progress-updated'))
+      navigate(`/battle-mode/room/${nextRoom.code}/results`, { replace: true })
+    })
+
+    return () => {
+      window.clearTimeout(answerFeedbackTimerRef.current)
+      socket.emit('battle:voice-leave', { roomCode })
+      localVoiceStreamRef.current?.getTracks().forEach((track) => track.stop())
+      voicePeersRef.current.forEach((_, remoteId) => closeVoicePeer(remoteId))
+      voiceEnabledRef.current = false
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [auth?.token, auth?.user?.id, navigate, room?.code, stage])
+
+  useEffect(() => {
+    if (!activeBattle && !resultsLocked) {
+      return undefined
+    }
+
+    const beforeUnload = (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+      return ''
+    }
+
+    const trapBack = () => {
+      window.history.pushState(null, '', window.location.href)
+    }
+
+    window.history.pushState(null, '', window.location.href)
+    window.addEventListener('beforeunload', beforeUnload)
+    window.addEventListener('popstate', trapBack)
+
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload)
+      window.removeEventListener('popstate', trapBack)
+    }
+  }, [activeBattle, resultsLocked])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => () => window.clearTimeout(lobbyReminderTimerRef.current), [])
+
+  useEffect(() => {
+    if (!room?.code) {
+      return undefined
+    }
+
+    if (room.status === 'finished' && stage !== 'results') {
+      navigate(`/battle-mode/room/${room.code}/results`, { replace: true })
+      return undefined
+    }
+
+    if (room.status === 'active' && stage !== 'arena') {
+      navigate(`/battle-mode/room/${room.code}/arena`, { replace: true })
+      return undefined
+    }
+
+    return undefined
+  }, [navigate, room?.code, room?.status, stage])
+
+  useEffect(() => {
+    if (visibleStage !== 'results') {
+      return undefined
+    }
+
+    window.clearTimeout(answerFeedbackTimerRef.current)
+    setAnswerFeedback(null)
+    setSelectedAnswer(null)
+    lastFeedbackKeyRef.current = ''
+
+    return undefined
+  }, [visibleStage])
+
+  const sendReady = () => {
+    socketRef.current?.emit('battle:ready', { roomCode, ready: !selfPlayer?.ready })
+  }
+
+  const sendRoomInvite = (targetUserId) => {
+    socketRef.current?.emit('battle:room-invite', { roomCode, targetUserId })
+  }
+
+  const respondToRoomInvite = async (status) => {
+    if (!incomingInvite) return
+    socketRef.current?.emit('battle:room-invite-response', {
+      inviteId: incomingInvite.inviteId,
+      roomCode: incomingInvite.roomCode,
+      senderId: incomingInvite.senderId,
+      status,
+    })
+    setIncomingInvite(null)
+    if (status === 'accepted') {
+      try {
+        const data = await apiRequest(`/api/battle-mode/rooms/${incomingInvite.roomCode}/join`, { method: 'POST' })
+        navigate(`/battle-mode/room/${data.room.code}/${data.room.status === 'active' ? 'arena' : 'lobby'}`)
+      } catch (error) {
+        setToast(error.message || 'Could not join the invited room.')
+        window.setTimeout(() => setToast(''), 2600)
+      }
+    }
+  }
+
+  const startBattle = () => {
+    if (!roomCode) {
+      return
+    }
+
+    apiRequest(`/api/battle-mode/rooms/${roomCode}/start`, {
+      method: 'POST',
+    })
+      .then((data) => {
+        const nextRoom = normalizeRoom(data.room || {}, auth.user.id)
+        setRoom(nextRoom)
+        saveBattleSession({
+          roomCode: nextRoom.code,
+          roomId: nextRoom.id,
+          status: nextRoom.status,
+          route: nextRoom.status === 'active' ? 'arena' : 'lobby',
+        })
+
+        if (nextRoom.status === 'active') {
+          navigate(`/battle-mode/room/${nextRoom.code}/arena`, { replace: true })
+        }
+      })
+      .catch((err) => {
+        setToast(err.message || 'Could not start the battle.')
+        window.setTimeout(() => setToast(''), 2600)
+      })
+  }
+
+  const sendChat = (message) => {
+    const text = String(message || '').trim()
+    if (!text) {
+      return
+    }
+
+    socketRef.current?.emit('battle:chat', { roomCode, message: text })
+  }
+
+  const sendReaction = (emoji) => {
+    socketRef.current?.emit('battle:reaction', { roomCode, emoji })
+  }
+
+  const sendReadyReminder = (targetUserId, targetName) => {
+    if (!targetUserId) {
+      return
+    }
+
+    socketRef.current?.emit('battle:ready-reminder', { roomCode, targetUserId })
+    setToast(`Reminder sent to ${targetName || 'player'}.`)
+    window.setTimeout(() => setToast(''), 2200)
+  }
+
+  const leaveLobby = async () => {
+    if (!room || room.status !== 'lobby') {
+      setToast('You can only leave before the battle starts.')
+      window.setTimeout(() => setToast(''), 2200)
+      return
+    }
+
+    try {
+      setRoomAction('leaving')
+      await apiRequest(`/api/battle-mode/rooms/${roomCode}/leave`, {
+        method: 'POST',
+      })
+      clearBattleSession()
+      navigate('/battle-mode', { replace: true })
+    } catch (err) {
+      setToast(err.message || 'Could not leave the room.')
+      window.setTimeout(() => setToast(''), 2600)
+    } finally {
+      setRoomAction('')
+    }
+  }
+
+  const deleteLobby = async () => {
+    if (!room || room.status !== 'lobby' || !isCreator) {
+      return
+    }
+
+    const confirmed = window.confirm('Delete this room and remove everyone from the lobby?')
+    if (!confirmed) {
+      return
+    }
+
+    try {
+      setRoomAction('deleting')
+      await apiRequest(`/api/battle-mode/rooms/${roomCode}`, {
+        method: 'DELETE',
+      })
+    } catch (err) {
+      setToast(err.message || 'Could not delete the room.')
+      window.setTimeout(() => setToast(''), 2600)
+    } finally {
+      setRoomAction('')
+    }
+  }
+
+  const saveLobbySettings = async (nextSettings) => {
+    if (!room || room.status !== 'lobby' || !isCreator) {
+      throw new Error('Only the room creator can edit the lobby settings.')
+    }
+
+    const data = await apiRequest(`/api/battle-mode/rooms/${roomCode}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(nextSettings),
+    })
+
+    const nextRoom = normalizeRoom(data.room || {}, auth.user.id)
+    setRoom(nextRoom)
+    setToast('Room settings updated.')
+    window.setTimeout(() => setToast(''), 2200)
+    return nextRoom
+  }
+
+  const submitAnswer = (optionIndex) => {
+    if (!canAnswer) {
+      return
+    }
+
+    setSelectedAnswer(optionIndex)
+    socketRef.current?.emit('battle:answer', { roomCode, answerIndex: optionIndex })
+  }
+
+  const leaveToHome = async () => {
+    if (room?.status === 'lobby') {
+      leaveLobby()
+      return
+    }
+
+    if (room?.status === 'active') {
+      setToast('The battle is locked until the match ends.')
+      window.setTimeout(() => setToast(''), 2200)
+      return
+    }
+
+    if (room?.status === 'finished') {
+      try {
+        await apiRequest(`/api/battle-mode/rooms/${roomCode}/leave`, { method: 'POST' })
+      } catch (error) {
+        setToast(error.message || 'Could not leave the battle room.')
+        window.setTimeout(() => setToast(''), 2200)
+      }
+    }
+    clearBattleSession()
+    navigate('/')
+  }
+
+  const returnToBattleLobby = () => {
+    apiRequest(`/api/battle-mode/rooms/${roomCode}/replay`, { method: 'POST' })
+      .then((data) => {
+        clearBattleSession()
+        saveBattleSession({
+          roomCode: data.room.code,
+          roomId: data.room.id,
+          status: 'lobby',
+          route: 'lobby',
+        })
+        navigate(`/battle-mode/room/${data.room.code}/lobby`, { replace: true })
+      })
+      .catch((error) => {
+        setToast(error.message || 'Could not reopen the battle lobby.')
+        window.setTimeout(() => setToast(''), 2600)
+      })
+  }
+
+  useEffect(() => {
+    if (visibleStage !== 'results' || !room?.finishedAt) {
+      setResultsLockedUntil(0)
+      return undefined
+    }
+
+    const unlockAt = Date.now() + 10_000
+    setResultsLockedUntil(unlockAt)
+    const redirectTimer = window.setTimeout(() => returnToBattleLobby(), 10_000)
+    return () => window.clearTimeout(redirectTimer)
+  }, [visibleStage, room?.finishedAt, room?.code])
+
+  if (!auth?.token) {
+    return null
+  }
+
+  if (loading) {
+    return <BattleRoomLoading />
+  }
+
+  if (error && !room) {
+    return (
+      <section className="battle-lobby min-h-screen overflow-hidden px-4 pb-12 pt-5 text-slate-900 sm:px-8">
+        <div className="mx-auto max-w-6xl"><BattleNavbar /><div className="relative mx-auto mt-8 max-w-2xl overflow-hidden rounded-[2rem] border border-orange-200 bg-white p-8 text-center shadow-[0_20px_60px_rgba(249,115,22,.14)]">
+          <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-orange-100 blur-3xl" />
+          <div className="relative"><p className="text-[10px] font-black uppercase tracking-[.24em] text-orange-600">Battle arena</p><p className="mt-2 text-xl font-black text-slate-950">Battle room unavailable</p>
+          <p className="mt-3 text-sm font-semibold text-orange-700">{error}</p>
+          <button
+            type="button"
+            onClick={leaveToHome}
+            className="mt-6 inline-flex h-11 items-center justify-center rounded-full bg-gradient-to-r from-[#ff8a00] to-[#ff5500] px-5 text-sm font-black text-white shadow-[0_12px_30px_rgba(255,105,0,.25)] transition hover:-translate-y-0.5"
+          >
+            Return home
+          </button></div></div></div>
+      </section>
+    )
+  }
+
+  if (!room) {
+    return null
+  }
+
+  return (
+    <section className={`relative overflow-x-hidden bg-[radial-gradient(circle_at_top,_rgba(34,197,94,0.12),_transparent_26%),radial-gradient(circle_at_bottom_right,_rgba(14,165,233,0.1),_transparent_26%),linear-gradient(180deg,#f8feff_0%,#f8fafc_46%,#eef9f6_100%)] text-slate-950 ${visibleStage === 'arena' ? 'min-h-[calc(100dvh-6rem)] px-2 py-2 pb-28 sm:px-4 sm:py-4 sm:pb-32 lg:pb-24' : 'min-h-[calc(100vh-6rem)] px-3 py-3 sm:px-4 sm:py-4'}`}>
+      <div className={`mx-auto flex w-full max-w-[1600px] flex-col gap-3 lg:gap-4 ${visibleStage === 'arena' ? 'min-h-[calc(100dvh-6rem)]' : 'min-h-[calc(100vh-7rem)] lg:min-h-[calc(100vh-8rem)]'}`}>
+        <header className="shrink-0 rounded-[1.25rem] border border-slate-200 bg-white/90 px-3 py-2.5 shadow-[0_12px_40px_rgba(15,23,42,0.07)] backdrop-blur-xl sm:px-4 sm:py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={leaveToHome}
+                disabled={resultsLocked}
+                className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Return home"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.24em] text-cyan-700">Battle Room</p>
+                <h1 className="mt-0.5 max-w-[14rem] truncate text-lg font-black tracking-tight text-slate-950 sm:max-w-[24rem] sm:text-xl">
+                  {room.settings.roomName || 'Battle Room'}
+                </h1>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsHeaderSettingsOpen(true)}
+                disabled={resultsLocked}
+                className="group flex min-w-[4.8rem] shrink-0 flex-col items-center justify-center rounded-xl border border-orange-200 bg-orange-50 px-2 py-1.5 text-orange-600 shadow-[0_5px_14px_rgba(255,105,0,0.1)] transition duration-200 hover:-translate-y-0.5 hover:border-orange-300 hover:bg-orange-100 hover:shadow-[0_8px_20px_rgba(255,105,0,0.2)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-100 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={isCreator && room.status === 'lobby' ? 'Edit room settings' : 'View room settings'}
+                title={isCreator && room.status === 'lobby' ? 'Edit room settings' : 'View room settings'}
+              >
+                <Cog className="h-5 w-5 transition-transform duration-500 ease-out group-hover:rotate-90 group-focus-visible:rotate-90" />
+                <span className="mt-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-orange-700">Room settings</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <SettingsModal
+          open={isHeaderSettingsOpen}
+          onClose={() => setIsHeaderSettingsOpen(false)}
+          room={room}
+          isCreator={isCreator && room.status === 'lobby'}
+          onSave={saveLobbySettings}
+          onDeleteRoom={deleteLobby}
+          onLeaveLobby={leaveLobby}
+        />
+
+        {visibleStage === 'lobby' && <LobbyStage room={room} isCreator={isCreator} allReady={allReady} onReady={sendReady} onStart={startBattle} onReaction={sendReaction} onSendMessage={sendChat} onSendReadyReminder={sendReadyReminder} onLeaveLobby={leaveLobby} onDeleteLobby={deleteLobby} onSaveSettings={saveLobbySettings} onInviteFriend={sendRoomInvite} roomAction={roomAction} />}
+        {visibleStage === 'arena' && <ArenaStage room={room} currentQuestion={currentQuestion} selectedAnswer={selectedAnswer} answerFeedback={answerFeedback} canAnswer={canAnswer} currentQuestionTimeLeft={currentQuestionTimeLeft} currentQuestionProgress={currentQuestionProgress} socketState={socketState} onAnswer={submitAnswer} reactions={reactionChoices} onReaction={sendReaction} onSendMessage={sendChat} />}
+        {visibleStage === 'results' && <BattleResultsPage room={room} returnToLobby={returnToBattleLobby} resultLocked={resultsLocked} resultSeconds={resultsSeconds} />}
+
+        <BattleInvitePrompt invite={incomingInvite} onRespond={respondToRoomInvite} />
+
+        <AnimatePresence>
+          {lobbyReminder && visibleStage === 'lobby' && (
+            <motion.div
+              initial={{ opacity: 0, y: -18, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -18, scale: 0.96 }}
+              transition={{ duration: 0.22, ease: 'easeOut' }}
+              className="fixed left-1/2 top-4 z-[175] w-[min(92vw,30rem)] -translate-x-1/2"
+              aria-live="polite"
+            >
+              <div className="flex items-center gap-3 rounded-full border border-cyan-200 bg-white px-4 py-3 shadow-[0_18px_50px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-cyan-50 text-cyan-700">
+                  <BellRing className="h-4 w-4" />
+                </span>
+                <p className="text-sm font-bold text-slate-900">{lobbyReminder}</p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {answerFeedback && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 10 }}
+              transition={{ duration: 0.24, ease: 'easeOut' }}
+              className="fixed inset-0 z-[170] flex items-center justify-center px-4 text-center"
+              aria-live="polite"
+            >
+              <div className="flex max-w-[min(92vw,28rem)] flex-col items-center gap-2">
+                <h3
+                  className={`text-6xl font-black tracking-tight drop-shadow-[0_10px_30px_rgba(15,23,42,0.14)] sm:text-7xl ${
+                    answerFeedback.tone === 'success'
+                      ? 'text-emerald-700'
+                      : 'text-red-700'
+                  }`}
+                >
+                  {answerFeedback.title}
+                </h3>
+                {answerFeedback.streakLabel && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0, scale: [0.9, 1.06, 1] }}
+                    transition={{ delay: 0.08, duration: 0.18 }}
+                    className="-mt-1 inline-flex items-center gap-2 rounded-full border-2 border-orange-300 bg-gradient-to-r from-amber-100 via-orange-100 to-amber-200 px-4 py-2 text-base font-black uppercase tracking-[0.16em] text-orange-800 shadow-[0_8px_24px_rgba(245,158,11,0.3)] sm:px-5 sm:py-2.5 sm:text-lg"
+                  >
+                    <span className="text-2xl leading-none drop-shadow-sm" role="img" aria-label="Fire">
+                      🔥
+                    </span>
+                    <span>{answerFeedback.streakLabel}</span>
+                  </motion.div>
+                )}
+                <p className="text-base font-semibold text-slate-700 sm:text-lg">
+                  {answerFeedback.message}
+                </p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {toast && (
+          <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-lg">
+            {toast}
+          </div>
+        )}
+
+        <AnimatePresence>
+          {floatingReactions.map((item) => (
+            <motion.div
+              key={item.id}
+              initial={{ opacity: 0, y: 24, scale: 0.9 }}
+              animate={{ opacity: [0, 1, 1, 0], y: -item.travel, scale: [0.9, 1, 1, 0.96] }}
+              exit={{ opacity: 0, y: -40, scale: 0.9 }}
+              transition={{ duration: 2.2, ease: 'easeOut' }}
+              style={{ left: `${item.x}%` }}
+              className="pointer-events-none fixed bottom-6 z-[110] -translate-x-1/2"
+            >
+              <div className="flex flex-col items-center gap-1 px-2 py-1 text-slate-950 drop-shadow-[0_1px_6px_rgba(255,255,255,0.75)]">
+                <span className="max-w-[9rem] truncate text-[10px] font-black uppercase tracking-[0.22em] text-slate-950">
+                  {item.name}
+                </span>
+                <span className="text-3xl leading-none sm:text-4xl">{item.emoji}</span>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </section>
+  )
+}
+
+const StatusPill = ({ label, value, accent = 'slate' }) => (
+  <div className={`rounded-2xl border px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] sm:px-4 sm:py-2 ${
+    accent === 'danger'
+      ? 'border-red-200 bg-red-50 text-red-900'
+      : accent === 'cyan'
+      ? 'border-cyan-200 bg-cyan-50 text-cyan-900'
+      : 'border-slate-200 bg-white text-slate-700'
+  }`}>
+    <span className="block text-[8px] text-slate-500 sm:text-[9px]">{label}</span>
+    <span className="mt-0.5 block text-[13px] font-black tracking-normal text-slate-950 sm:mt-1 sm:text-sm">{value}</span>
+  </div>
+)
+
+const LobbyStage = ({ room, isCreator, allReady, onReady, onStart, onReaction, onSendMessage, onSendReadyReminder, onLeaveLobby, onDeleteLobby, onSaveSettings, onInviteFriend, roomAction }) => {
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isFriendsOpen, setIsFriendsOpen] = useState(false)
+  const [friends, setFriends] = useState([])
+  const [addedFriendIds, setAddedFriendIds] = useState({})
+  const [friendAction, setFriendAction] = useState('')
+  const [inviteStates, setInviteStates] = useState({})
+  const [readyNotice, setReadyNotice] = useState('')
+  const [showJoinWelcome, setShowJoinWelcome] = useState(true)
+  const readyButtonRef = useRef(null)
+  const selfPlayer = room.players.find((player) => player.isSelf) || null
+  const selfReady = Boolean(selfPlayer?.ready)
+  const expiryMs = Math.max(0, new Date(room.codeExpiresAt).getTime() - Date.now())
+  const minutes = Math.floor(expiryMs / 60000)
+  const seconds = Math.floor((expiryMs % 60000) / 1000)
+
+  useEffect(() => {
+    let cancelled = false
+    const loadFriends = async () => {
+      try {
+        const data = await apiRequest(`/api/battle-mode/friends?roomCode=${encodeURIComponent(room.code || '')}`, { cache: 'no-store' })
+        if (!cancelled) setFriends(data.friends || [])
+      } catch {
+        if (!cancelled) setFriends([])
+      }
+    }
+    loadFriends()
+    const refreshTimer = window.setInterval(loadFriends, 5000)
+    const handlePresence = (event) => {
+      const { userId, online } = event.detail || {}
+      setFriends((current) => current.map((friend) => String(friend.id) === String(userId) ? { ...friend, online } : friend))
+    }
+    const handleSnapshot = (event) => {
+      const ids = event.detail?.userIds || []
+      setFriends((current) => current.map((friend) => ({ ...friend, online: ids.includes(String(friend.id)) })))
+    }
+    window.addEventListener('innovative-science-battle-presence-updated', handlePresence)
+    window.addEventListener('innovative-science-battle-presence-snapshot', handleSnapshot)
+    return () => {
+      cancelled = true
+      window.clearInterval(refreshTimer)
+      window.removeEventListener('innovative-science-battle-presence-updated', handlePresence)
+      window.removeEventListener('innovative-science-battle-presence-snapshot', handleSnapshot)
+    }
+  }, [room.code])
+
+  const inviteFriend = (friend) => {
+    if (!friend.online || inviteStates[friend.id] === 'pending') return
+    setInviteStates((current) => ({ ...current, [friend.id]: 'pending' }))
+    onInviteFriend?.(friend.id)
+    window.setTimeout(() => setInviteStates((current) => current[friend.id] === 'pending' ? { ...current, [friend.id]: 'expired' } : current), 10000)
+  }
+
+  const addFriend = async (player) => {
+    if (!player?.userId || player.isSelf || addedFriendIds[player.userId] || friends.some((friend) => String(friend.id) === String(player.userId))) return
+    try {
+      setFriendAction(String(player.userId))
+      await apiRequest('/api/battle-mode/friend-requests', {
+        method: 'POST',
+        body: JSON.stringify({ userId: player.userId, gameId: player.gameId || undefined }),
+      })
+      setAddedFriendIds((current) => ({ ...current, [player.userId]: true }))
+      setReadyNotice(`Friend request sent to ${player.name}.`)
+    } catch (error) {
+      setReadyNotice(error.message || 'Could not add this friend.')
+    } finally {
+      setFriendAction('')
+    }
+  }
+
+  useEffect(() => {
+    if (room.status === 'lobby') {
+      readyButtonRef.current?.focus({ preventScroll: true })
+    }
+  }, [room.status])
+
+  useEffect(() => {
+    if (room.status !== 'lobby') {
+      setShowJoinWelcome(false)
+      return undefined
+    }
+
+    setShowJoinWelcome(true)
+    return undefined
+  }, [room.code, room.status])
+
+  useEffect(() => {
+    if (!isSettingsOpen) {
+      return undefined
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsSettingsOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isSettingsOpen])
+
+  useEffect(() => {
+    if (!readyNotice) {
+      return undefined
+    }
+
+    const timer = window.setTimeout(() => setReadyNotice(''), 2600)
+    return () => window.clearTimeout(timer)
+  }, [readyNotice])
+
+  return (
+    <>
+      <AnimatePresence>
+        {showJoinWelcome && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[190] flex items-center justify-center bg-slate-950/35 px-4 py-6 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 24, scale: 0.94 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 18, scale: 0.96 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+              className="relative w-full max-w-xl overflow-hidden rounded-[2rem] border border-orange-200 bg-gradient-to-br from-orange-50 via-amber-50 to-cyan-50 px-6 py-8 text-center shadow-[0_30px_100px_rgba(15,23,42,0.28)] sm:px-10 sm:py-12"
+            >
+              <motion.span
+                aria-hidden="true"
+                animate={{ x: ['-130%', '130%'] }}
+                transition={{ duration: 2.8, repeat: Infinity, ease: 'linear' }}
+                className="pointer-events-none absolute inset-y-0 left-0 w-1/2 skew-x-[-18deg] bg-gradient-to-r from-transparent via-white/60 to-transparent"
+              />
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setShowJoinWelcome(false)
+                }}
+                onMouseDown={(event) => event.stopPropagation()}
+                className="absolute right-4 top-4 z-20 grid h-10 w-10 place-items-center rounded-full border border-orange-200 bg-white/80 text-orange-600 transition hover:rotate-90 hover:bg-white"
+                aria-label="Close battle welcome"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <div className="relative">
+                <p className="text-[11px] font-black uppercase tracking-[0.28em] text-orange-600">Battle lobby</p>
+                <h2 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">⚔️ You&apos;re in the {room.settings.roomName || 'Battle Room'}!</h2>
+                <p className="mx-auto mt-3 max-w-md text-sm font-semibold leading-6 text-slate-600 sm:text-base">Lock in your readiness to join the fight.</p>
+                <motion.button
+                  type="button"
+                  onClick={() => {
+                    onReady()
+                    setShowJoinWelcome(false)
+                  }}
+                  disabled={roomAction === 'leaving' || roomAction === 'deleting'}
+                  whileHover={{ scale: 1.04, y: -2 }}
+                  whileTap={{ scale: 0.97 }}
+                  animate={{ boxShadow: ['0 12px 28px rgba(249,115,22,.2)', '0 20px 45px rgba(249,115,22,.38)', '0 12px 28px rgba(249,115,22,.2)'] }}
+                  transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                  className="mt-7 inline-flex h-14 min-w-48 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#ff8a00] to-[#ff5500] px-7 text-sm font-black uppercase tracking-[0.12em] text-white shadow-[0_14px_34px_rgba(249,115,22,.25)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  I&apos;M READY
+                  <Check className="h-5 w-5 stroke-[3]" />
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {readyNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: -22, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -22, scale: 0.96 }}
+            transition={{ duration: 0.22 }}
+            className="fixed left-1/2 top-3 z-[170] w-[min(92vw,28rem)] -translate-x-1/2 rounded-full border border-cyan-200 bg-white px-4 py-3 text-center text-sm font-bold text-cyan-800 shadow-[0_18px_50px_rgba(15,23,42,0.16)]"
+          >
+            {readyNotice}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1.08fr)_380px]">
+        <div className="space-y-4 pb-28 lg:pb-0">
+          <div className="rounded-[1.5rem] border border-white/80 bg-white p-3 shadow-[0_16px_50px_rgba(15,23,42,0.07)] backdrop-blur-xl sm:p-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">Room code</p>
+              <div className="mt-2 flex flex-wrap items-end gap-2 sm:gap-3">
+                <h2 className="text-3xl font-black tracking-[0.2em] text-slate-950 sm:text-5xl sm:tracking-[0.25em]">{room.code}</h2>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-slate-600 sm:text-xs">
+                  {minutes.toString().padStart(2, '0')}:{seconds.toString().padStart(2, '0')} left
+                </span>
+              </div>
+            </div>
+
+          <div className="mt-5 flex flex-col gap-3">
+              <motion.button
+                type="button"
+                ref={readyButtonRef}
+                onClick={() => {
+                  onReady()
+                  setReadyNotice(selfReady ? 'Not ready. You can join when you are set.' : 'Ready locked in. Waiting for the squad.')
+                }}
+                disabled={roomAction === 'leaving' || roomAction === 'deleting'}
+                aria-pressed={selfReady}
+                aria-label={selfReady ? 'Change ready status to not ready' : 'Mark yourself ready'}
+                animate={
+                  selfReady
+                    ? {
+                        y: [0, -2, 0],
+                        scale: [1, 1.02, 1],
+                        boxShadow: [
+                          '0 12px 32px rgba(16,185,129,0.14)',
+                          '0 18px 54px rgba(16,185,129,0.24)',
+                          '0 12px 32px rgba(16,185,129,0.14)',
+                        ],
+                      }
+                    : {
+                        y: [0, -5, 0],
+                        scale: [1, 1.02, 1],
+                        boxShadow: [
+                          '0 12px 34px rgba(245,158,11,0.14)',
+                          '0 20px 60px rgba(245,158,11,0.28)',
+                          '0 12px 34px rgba(245,158,11,0.14)',
+                        ],
+                      }
+                }
+                transition={{ duration: selfReady ? 2.2 : 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                whileHover={{ scale: 1.02, y: -2 }}
+                whileTap={{ scale: 0.98 }}
+                className={`battle-ready-action hidden ${isCreator ? 'is-host' : ''} group relative z-[151] min-h-[58px] w-[min(15rem,calc(100vw-10rem))] cursor-pointer overflow-hidden rounded-full border-2 p-2 text-left shadow-[0_10px_24px_rgba(245,158,11,0.14)] transition hover:-translate-y-1 hover:shadow-[0_16px_34px_rgba(245,158,11,0.22)] focus:outline-none focus-visible:ring-4 focus-visible:ring-cyan-300/70 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-[64px] sm:p-2.5 ${
+                  selfReady
+                    ? 'border-emerald-400 bg-gradient-to-br from-emerald-50 to-emerald-100 shadow-[0_14px_30px_rgba(16,185,129,0.18)] hover:shadow-[0_20px_42px_rgba(16,185,129,0.28)]'
+                    : 'border-amber-400 bg-gradient-to-br from-amber-50 to-orange-100'
+                }`}
+              >
+                <motion.span
+                  aria-hidden="true"
+                  animate={{ x: ['-130%', '130%'] }}
+                  transition={{ duration: 3.4, repeat: Infinity, ease: 'linear' }}
+                  className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0),rgba(255,255,255,0.45),rgba(255,255,255,0))]"
+                />
+                <motion.span
+                  aria-hidden="true"
+                  animate={{ opacity: [0.18, 0.6, 0.18], scale: [0.98, 1.03, 0.98] }}
+                  transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+                  className={`pointer-events-none absolute inset-[2px] rounded-[1.15rem] border ${
+                    selfReady ? 'border-emerald-300/70' : 'border-amber-300/70'
+                  }`}
+                />
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <motion.span
+                    animate={selfReady ? { scale: [1, 1.12, 1], rotate: [0, -8, 0] } : { scale: 1, rotate: 0 }}
+                    transition={{ duration: 0.35 }}
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-xl border-2 bg-white shadow-sm sm:h-9 sm:w-9 ${
+                      selfReady ? 'border-emerald-500 text-emerald-600' : 'border-orange-300 text-orange-500'
+                    }`}
+                  >
+                    {selfReady ? <Check className="h-4 w-4 stroke-[3] sm:h-5 sm:w-5" /> : <span className="h-2.5 w-2.5 rounded-md border-2 border-orange-300" />}
+                  </motion.span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-950 sm:text-xs sm:tracking-[0.2em]">{selfReady ? 'READY ✓' : "I'M READY"}</p>
+                    <p className="mt-0.5 text-[9px] leading-3 text-slate-600 sm:text-[10px] sm:leading-4">
+                      {selfReady ? 'Locked in · tap to remove.' : 'Tap to lock in your readiness.'}
+                    </p>
+                  </div>
+                </div>
+              </motion.button>
+
+            </div>
+
+          </div>
+
+          <div className="rounded-[2rem] border border-white/80 bg-white p-4 shadow-[0_20px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.24em] text-cyan-700">Players</p>
+                <h3 className="mt-0.5 text-lg font-black text-slate-950 sm:text-xl">{room.players.length} joined</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFriendsOpen(true)}
+                className="grid h-9 w-9 place-items-center rounded-xl border border-orange-200 bg-orange-50 text-orange-600 transition hover:-translate-y-0.5 hover:bg-orange-100"
+                aria-label="Open friend list"
+                title="Invite friends"
+              >
+                <UserPlus className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {room.players.map((player) => (
+                <PlayerCard
+                  key={player.userId}
+                  player={player}
+                  compact
+                  isCreator={String(player.userId) === String(room.createdBy)}
+                  isFriend={Boolean(addedFriendIds[player.userId] || friends.some((friend) => String(friend.id) === String(player.userId)))}
+                  friendAction={friendAction === String(player.userId)}
+                  onAddFriend={addFriend}
+                  onSendReadyReminder={onSendReadyReminder}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="hidden lg:block lg:sticky lg:top-4 lg:h-[calc(100vh-10rem)] lg:min-h-0 lg:inset-auto lg:z-auto">
+          <ChatPanel room={room} onSendMessage={onSendMessage} sendReaction={onReaction} disabled={!room.settings.roomChat} reactionsEnabled={room.settings.emojiReactions} compact />
+        </div>
+      </div>
+
+      <MobileChatDock room={room} onSendMessage={onSendMessage} disabled={!room.settings.roomChat} />
+
+      <MobileReactionDock
+        onReaction={onReaction}
+        enabled={room.settings.emojiReactions}
+      />
+
+      <AnimatePresence>
+        {isFriendsOpen && (
+          <div className="fixed inset-0 z-[210] flex items-center justify-center bg-orange-950/20 px-3 py-4 backdrop-blur-md" onMouseDown={(event) => event.target === event.currentTarget && setIsFriendsOpen(false)}>
+            <motion.div initial={{ opacity: 0, scale: .96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .96, y: 12 }} className="w-full max-w-md rounded-[1.75rem] border border-orange-100 bg-white p-5 shadow-[0_24px_90px_rgba(255,105,0,.2)]">
+              <div className="flex items-start justify-between gap-3">
+                <div><p className="text-[10px] font-black uppercase tracking-[.24em] text-orange-600">Squad invites</p><h3 className="mt-1 text-2xl font-black text-slate-950">Invite a friend</h3></div>
+                <button type="button" onClick={() => setIsFriendsOpen(false)} className="grid h-9 w-9 place-items-center rounded-full bg-orange-50 text-orange-600" aria-label="Close friend list"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="mt-4 grid max-h-[min(55vh,24rem)] gap-2 overflow-y-auto">
+                {friends.length ? friends.map((friend) => {
+                  const inviteState = inviteStates[friend.id]
+                  const battleStatus = friend.battleStatus || 'available'
+                  const statusLabel = battleStatus === 'active'
+                    ? 'Playing battle'
+                    : battleStatus === 'current-lobby'
+                      ? 'In this lobby'
+                      : battleStatus === 'lobby'
+                        ? 'In another lobby'
+                        : friend.online ? 'Online' : 'Offline'
+                  const canInvite = friend.online && battleStatus === 'available' && inviteState !== 'pending'
+                  return <div key={friend.id} className="flex items-center gap-3 rounded-2xl border border-orange-100 bg-[#fffaf5] px-3 py-2.5">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-orange-100 font-black text-orange-600">{friend.profileImageUrl ? <img src={assetUrl(friend.profileImageUrl)} alt="" className="h-full w-full object-cover" /> : friend.name?.slice(0, 1).toUpperCase()}</div>
+                    <div className="min-w-0 flex-1"><p className="truncate text-sm font-black text-slate-950">{friend.name}</p><p className="flex items-center gap-1 text-[10px] font-bold text-slate-500"><span className={`h-2 w-2 rounded-full ${battleStatus === 'available' && friend.online ? 'bg-emerald-500' : battleStatus === 'active' ? 'bg-orange-500' : battleStatus === 'current-lobby' ? 'bg-cyan-500' : battleStatus === 'lobby' ? 'bg-amber-500' : 'bg-slate-300'}`} />{inviteState === 'pending' ? 'Request sent' : statusLabel}</p></div>
+                    <button type="button" onClick={() => inviteFriend(friend)} disabled={!canInvite} className="grid h-8 w-8 place-items-center rounded-full bg-orange-500 text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400" aria-label={canInvite ? `Invite ${friend.name}` : `${friend.name} is ${statusLabel.toLowerCase()}`} title={canInvite ? `Invite ${friend.name}` : statusLabel}><Plus className="h-4 w-4" /></button>
+                    {inviteState && <span className="hidden text-[9px] font-black uppercase tracking-wider text-orange-600 sm:inline">{inviteState}</span>}
+                  </div>
+                }) : <p className="rounded-2xl bg-orange-50 p-4 text-center text-sm font-bold text-slate-500">No friends found.</p>}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <button
+        type="button"
+        onClick={() => {
+          onReady()
+          setReadyNotice(selfReady ? 'Not ready. You can join when you are set.' : 'Ready locked in. Waiting for the squad.')
+        }}
+        disabled={roomAction === 'leaving' || roomAction === 'deleting'}
+        className={`battle-desktop-ready ${isCreator ? 'is-host' : ''} hidden items-center gap-3 rounded-full border-2 px-4 py-2.5 text-left shadow-[0_12px_30px_rgba(245,158,11,0.2)] transition hover:-translate-y-0.5 focus:outline-none focus-visible:ring-4 focus-visible:ring-orange-200 disabled:cursor-not-allowed disabled:opacity-60 lg:inline-flex ${selfReady ? 'border-emerald-400 bg-emerald-50' : 'border-orange-400 bg-orange-50'}`}
+        aria-pressed={selfReady}
+        aria-label={selfReady ? 'Change ready status to not ready' : 'Mark yourself ready'}
+      >
+        <span className={`grid h-9 w-9 place-items-center rounded-xl border-2 bg-white ${selfReady ? 'border-emerald-500 text-emerald-600' : 'border-orange-300 text-orange-500'}`}>
+          {selfReady ? <Check className="h-5 w-5 stroke-[3]" /> : <span className="h-2.5 w-2.5 rounded-md border-2 border-orange-300" />}
+        </span>
+          <span>
+          <span className="block text-[11px] font-black uppercase tracking-[0.18em] text-slate-950">{selfReady ? 'READY ✓' : "I'M READY"}</span>
+          <span className="mt-0.5 block text-[10px] text-slate-600">{selfReady ? 'Locked in · tap to remove.' : 'Tap to lock in.'}</span>
+        </span>
+      </button>
+
+      {isCreator && (
+        <button
+          type="button"
+          onClick={onStart}
+          disabled={!allReady || roomAction === 'leaving' || roomAction === 'deleting'}
+        className="fixed bottom-5 left-1/2 z-[150] hidden h-12 w-[min(15rem,calc(100vw-10rem))] -translate-x-1/2 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#ff8a00] to-[#ff5500] px-5 text-sm font-black text-white shadow-[0_12px_34px_rgba(255,105,0,0.3)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none lg:inline-flex"
+        >
+          Start Battle
+          <ArrowRight className="h-4 w-4" />
+        </button>
+      )}
+
+      <div className="battle-responsive-dock flex lg:hidden">
+        <button
+          type="button"
+          onClick={() => {
+            onReady()
+            setReadyNotice(selfReady ? 'Not ready. You can join when you are set.' : 'Ready locked in. Waiting for the squad.')
+          }}
+          disabled={roomAction === 'leaving' || roomAction === 'deleting'}
+          className={`inline-flex h-12 w-[min(15rem,calc(100vw-10rem))] items-center justify-center gap-3 rounded-full border-2 px-4 text-left shadow-[0_12px_30px_rgba(245,158,11,.2)] transition hover:-translate-y-0.5 disabled:opacity-60 ${selfReady ? 'border-emerald-400 bg-emerald-50' : 'border-orange-400 bg-orange-50'}`}
+        >
+          <span className={`grid h-8 w-8 place-items-center rounded-xl border-2 bg-white ${selfReady ? 'border-emerald-500 text-emerald-600' : 'border-orange-300 text-orange-500'}`}>
+            {selfReady ? <Check className="h-4 w-4 stroke-[3]" /> : <span className="h-2.5 w-2.5 rounded-md border-2 border-orange-300" />}
+          </span>
+          <span><span className="block text-[10px] font-black uppercase tracking-[.16em] text-slate-950">{selfReady ? 'READY ✓' : "I'M READY"}</span><span className="block text-[9px] text-slate-600">{selfReady ? 'Locked in · tap to remove.' : 'Tap to lock in.'}</span></span>
+        </button>
+        {isCreator && <button type="button" onClick={onStart} disabled={!allReady || roomAction === 'leaving' || roomAction === 'deleting'} className="inline-flex h-12 w-[min(15rem,calc(100vw-10rem))] items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#ff8a00] to-[#ff5500] px-5 text-sm font-black text-white shadow-[0_12px_34px_rgba(255,105,0,.3)] transition hover:scale-[1.02] disabled:opacity-45"><span>Start Battle</span><ArrowRight className="h-4 w-4" /></button>}
+      </div>
+
+      <SettingsModal open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} room={room} isCreator={isCreator && room?.status === 'lobby'} onSave={onSaveSettings} onDeleteRoom={onDeleteLobby} onLeaveLobby={onLeaveLobby} />
+    </>
+  )
+}
+
+const ArenaStage = ({ room, currentQuestion, selectedAnswer, answerFeedback, canAnswer, currentQuestionTimeLeft, currentQuestionProgress, socketState, onAnswer, reactions, onReaction, onSendMessage }) => {
+  const isCriticalTimer = currentQuestionTimeLeft > 0 && currentQuestionTimeLeft <= 5
+  const needsSync = socketState !== 'connected' || !currentQuestion
+  const syncMessage = socketState === 'offline'
+    ? 'Connection lost. Check your internet; we are reconnecting and will sync the latest question automatically.'
+    : socketState === 'connecting'
+      ? 'Reconnecting to the live battle. Please keep this page open.'
+      : 'Syncing the latest question from the battle server. Please wait a moment.'
+
+  return (
+    <>
+      {needsSync && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm" role="status" aria-live="polite">
+          <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          <div>
+            <p className="text-sm font-black">Battle connection needs attention</p>
+            <p className="mt-1 text-xs leading-5 text-amber-800">{syncMessage}</p>
+          </div>
+        </div>
+      )}
+      <div className="grid flex-1 min-h-0 gap-3 items-start lg:grid-cols-[minmax(0,1fr)_360px] lg:min-h-0">
+        <div className="flex h-full min-h-0 flex-col gap-2 rounded-[2rem] border border-white/80 bg-white p-2.5 shadow-[0_20px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-4 lg:h-[calc(100vh-9rem)] lg:overflow-y-auto lg:pr-1">
+          <div className="sticky top-0 z-20 rounded-[1.25rem] border border-slate-200 bg-slate-50/95 px-3 py-2 backdrop-blur lg:hidden">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-700">Live leaderboard</p>
+                <h3 className="mt-1 text-sm font-black text-slate-950">Ranks</h3>
+              </div>
+              <Trophy className="h-4 w-4 shrink-0 text-amber-500" />
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {room.leaderboard.slice(0, 4).map((player) => (
+                <motion.div
+                  layout
+                  transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                  key={player.userId}
+                  className={`relative rounded-2xl border px-2 pb-2 pt-2.5 transition-shadow ${
+                    player.rank === 1 ? 'border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 shadow-[0_8px_20px_rgba(245,158,11,.14)]' : player.isSelf ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white'
+                  }`}
+                >
+                  {player.isSelf && <span className="absolute right-2 top-2 z-10 inline-flex items-center gap-0.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[.12em] text-white shadow-sm"><BadgeCheck className="h-2.5 w-2.5" /> You</span>}
+                  <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-slate-500 shadow-sm">
+                    <span>🔥</span>
+                    <span>{player.streak || 0}</span>
+                  </div>
+                  <div className="flex items-end justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg text-[10px] font-black ${player.rank === 1 ? 'bg-amber-300 text-amber-950' : 'bg-slate-100 text-slate-600'}`}>{player.rank === 1 ? <Crown className="h-3.5 w-3.5 fill-amber-500" /> : `#${player.rank}`}</span>
+                      <p className="min-w-0 whitespace-normal break-words text-[12px] font-black leading-tight text-slate-950" title={player.name}>{player.name || 'Student'}</p>
+                    </div>
+                    <p className="shrink-0 text-sm font-black text-cyan-700">{player.score}</p>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-row items-start justify-between gap-2 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-2.5 sm:items-center sm:gap-3 sm:p-4">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-700">
+                Question {room.currentQuestionIndex}/{room.totalQuestions}
+              </p>
+              <h2 className="mt-1 text-[14px] font-black leading-tight text-slate-950 sm:text-2xl lg:text-[2rem] lg:leading-tight">
+                {currentQuestion?.question || 'Preparing the next question...'}
+              </h2>
+            </div>
+            <div className="grid shrink-0 gap-1 text-right sm:gap-2 sm:justify-items-end">
+              <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${isCriticalTimer ? 'animate-pulse text-red-600' : 'text-amber-700'}`}>
+                Time left
+              </p>
+              <p className={`text-[1.6rem] font-black leading-none sm:text-3xl ${isCriticalTimer ? 'animate-pulse text-red-600' : 'text-slate-950'}`}>
+                {currentQuestionTimeLeft}s
+              </p>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 items-start justify-center">
+            <div className="flex h-full min-h-0 w-full max-w-4xl flex-col">
+              <div className="h-2 shrink-0 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all"
+                    style={{ width: `${currentQuestionProgress}%` }}
+                  />
+              </div>
+              <div className="mt-2 grid flex-1 gap-1.5 sm:mt-4 sm:grid-cols-2 sm:gap-3">
+                  {(currentQuestion?.options || []).map((option, index) => (
+                    <button
+                      key={`${option}-${index}`}
+                      type="button"
+                      onClick={() => onAnswer(index)}
+                      disabled={!canAnswer}
+                      aria-pressed={selectedAnswer === index}
+                      className={`min-h-[3.2rem] rounded-2xl border px-3 py-2 text-left text-[12px] font-bold leading-4 transition sm:min-h-[5rem] sm:rounded-3xl sm:px-4 sm:py-3 sm:text-base ${
+                        selectedAnswer === index
+                          ? answerFeedback?.tone === 'success'
+                            ? 'border-emerald-800 bg-emerald-700 text-white shadow-[0_0_0_1px_rgba(4,120,87,0.28)]'
+                          : answerFeedback?.tone === 'danger'
+                              ? 'border-red-800 bg-red-700 text-white shadow-[0_0_0_1px_rgba(153,27,27,0.28)]'
+                              : 'border-cyan-300 bg-cyan-50 text-slate-950'
+                          : answerFeedback?.tone === 'danger' && answerFeedback?.correctOption === index
+                            ? 'border-emerald-800 bg-emerald-700 text-white shadow-[0_0_0_1px_rgba(4,120,87,0.22)]'
+                            : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      <span className={`block text-[9px] font-black uppercase tracking-[0.18em] sm:tracking-[0.22em] ${
+                        selectedAnswer === index && answerFeedback?.tone === 'success'
+                          ? 'text-emerald-100'
+                          : selectedAnswer === index && answerFeedback?.tone === 'danger'
+                            ? 'text-red-100'
+                            : answerFeedback?.tone === 'danger' && answerFeedback?.correctOption === index
+                              ? 'text-emerald-100'
+                              : 'text-slate-500'
+                      }`}>
+                        Option {index + 1}
+                      </span>
+                      <span className="mt-1.5 block sm:mt-2">{option}</span>
+                    </button>
+                  ))}
+                </div>
+            </div>
+          </div>
+
+          <div className="hidden shrink-0 rounded-[1.5rem] border border-slate-200 bg-white px-3 py-2.5 shadow-sm sm:px-4 sm:py-3 lg:block lg:sticky lg:bottom-0 lg:z-10 lg:bg-white/95 lg:backdrop-blur">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-700">Live leaderboard</p>
+                <h3 className="mt-1 text-sm font-black text-slate-950 sm:text-base">Ranks</h3>
+              </div>
+              <Trophy className="h-4 w-4 text-amber-500 sm:h-5 sm:w-5" />
+            </div>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              {room.leaderboard.map((player) => (
+                <motion.div
+                  layout
+                  transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                  key={player.userId}
+                  className={`relative min-w-[8.8rem] rounded-2xl border px-2 pb-2 pt-2.5 transition-shadow ${
+                    player.rank === 1 ? 'border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 shadow-[0_8px_20px_rgba(245,158,11,.14)]' : player.isSelf ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'
+                  }`}
+                >
+                  {player.isSelf && <span className="absolute right-2 top-2 z-10 inline-flex items-center gap-0.5 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[.12em] text-white shadow-sm"><BadgeCheck className="h-2.5 w-2.5" /> You</span>}
+                  <div className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-slate-500 shadow-sm">
+                    <span className="text-[11px] leading-none">🔥</span>
+                    <span>{player.streak || 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-start gap-1.5"><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg text-[10px] font-black ${player.rank === 1 ? 'bg-amber-300 text-amber-950' : 'bg-white text-slate-600'}`}>{player.rank === 1 ? <Crown className="h-3.5 w-3.5 fill-amber-500" /> : `#${player.rank}`}</span><p className="min-w-0 whitespace-normal break-words text-[13px] font-black leading-tight text-slate-950" title={player.name}>{player.name || 'Student'}</p></div>
+                    </div>
+                    <p className="text-sm font-black text-cyan-700 sm:text-base">{player.score}</p>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="hidden min-h-0 lg:flex lg:h-[calc(100vh-9rem)] lg:flex-col lg:gap-3">
+          <ChatPanel room={room} onSendMessage={onSendMessage} disabled={!room.settings.roomChat} compact scrollable messageLimit={6} />
+        </div>
+      </div>
+
+      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[120] hidden justify-center lg:flex">
+        <div className="pointer-events-auto flex max-w-[min(90vw,42rem)] items-center gap-2 overflow-x-auto px-2 py-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          {reactions.slice(0, 10).map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              onClick={() => onReaction(emoji)}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-2xl transition hover:-translate-y-0.5 hover:scale-110"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <MobileChatDock room={room} onSendMessage={onSendMessage} disabled={!room.settings.roomChat} />
+
+      <MobileReactionDock
+        onReaction={onReaction}
+        enabled={room.settings.emojiReactions}
+      />
+    </>
+  )
+}
+
+const PremiumResultsStage = ({ room, leaveToHome }) => {
+  const rewards = room.battleSummary?.rewards || []
+  const selfPlayer = room.players.find((player) => player.isSelf) || null
+  const selfReward = rewards.find((item) => String(item.userId) === String(selfPlayer?.userId))
+  const selfRank = Number(selfReward?.rank || selfPlayer?.rank || 0)
+  const ordinal = (rank) => `${rank}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'}`
+
+  return (
+    <div className="relative flex-1 overflow-hidden rounded-[2.25rem] bg-slate-950 p-1 shadow-[0_30px_100px_rgba(15,23,42,0.22)] sm:p-2">
+      <div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-cyan-400/20 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 h-80 w-80 rounded-full bg-emerald-400/15 blur-3xl" />
+      <div className="relative grid gap-4 p-4 sm:p-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)] lg:p-8">
+        <section className="flex min-w-0 flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.24em] text-amber-200">
+              <Crown className="h-4 w-4" /> Match complete
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Room {room.code}</span>
+          </div>
+
+          <div className="mt-8 max-w-2xl">
+            <p className="text-sm font-bold uppercase tracking-[0.22em] text-cyan-300">Final standings are in</p>
+            <h2 className="mt-3 text-4xl font-black leading-[0.98] tracking-tight text-white sm:text-6xl">{selfRank === 1 ? 'Victory is yours.' : 'You made it to the finish line.'}</h2>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">Every answer counted, and your rewards are now locked into your profile.</p>
+          </div>
+
+          <div className="mt-8 grid gap-3 sm:grid-cols-[1.15fr_0.85fr]">
+            <div className="relative overflow-hidden rounded-[1.75rem] border border-cyan-300/30 bg-gradient-to-br from-cyan-400 to-emerald-400 p-5 text-slate-950 shadow-[0_20px_50px_rgba(34,211,238,0.18)] sm:p-6">
+              <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/25 blur-2xl" />
+              <div className="relative flex items-start justify-between gap-4">
+                <div className="min-w-0"><p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-950/60">Your result</p><h3 className="mt-2 truncate text-2xl font-black sm:text-3xl">{selfPlayer?.name || 'Your score'}</h3></div>
+                <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-slate-950 text-xl font-black text-white shadow-lg">#{selfRank || '-'}</div>
+              </div>
+              <div className="relative mt-7 flex items-end justify-between gap-3"><div><p className="text-4xl font-black tracking-tight sm:text-5xl">{selfReward?.score || selfPlayer?.score || 0}</p><p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-950/60">Total points</p></div><div className="text-right"><p className="text-2xl font-black">+{selfReward?.brainCells || 0}</p><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-950/60">Brain Cells</p></div></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 rounded-[1.75rem] border border-white/10 bg-white/[0.06] p-4 sm:p-5">
+              <ResultStat label="Correct" value={selfPlayer?.correctCount || 0} /><ResultStat label="Wrong" value={selfPlayer?.wrongCount || 0} /><ResultStat label="Best streak" value={selfPlayer?.highestStreak || 0} /><ResultStat label="Players" value={room.players.length} />
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3"><ResultStat label="Questions" value={room.battleSummary?.totalQuestions || room.totalQuestions || 0} dark /><ResultStat label="Chat" value={room.settings.roomChat ? 'On' : 'Off'} dark /><ResultStat label="Reactions" value={room.settings.emojiReactions ? 'On' : 'Off'} dark /></div>
+          <button type="button" onClick={leaveToHome} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-black text-slate-950 shadow-[0_14px_35px_rgba(255,255,255,0.12)] transition hover:-translate-y-0.5 hover:bg-cyan-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-cyan-300/60 sm:w-fit">Return to website <ArrowRight className="h-4 w-4" /></button>
+        </section>
+
+        <section className="min-w-0 rounded-[1.75rem] border border-white/10 bg-white/[0.06] p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-300">The podium</p><h3 className="mt-1 text-2xl font-black text-white">Final leaderboard</h3></div><Trophy className="h-7 w-7 text-amber-300" /></div>
+          <div className="mt-5 grid gap-2.5">{room.leaderboard.map((player) => <div key={player.userId} className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${player.isSelf ? 'border-emerald-300/60 bg-emerald-300/15' : 'border-white/10 bg-slate-950/30'}`}><div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-sm font-black ${player.rank === 1 ? 'bg-amber-300 text-amber-950' : 'bg-white/10 text-white'}`}>{player.rank}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-black text-white">{player.name}{player.isSelf ? ' · You' : ''}</p><p className="mt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{player.correctCount} correct · 🔥 {player.streak || 0} streak</p></div><p className="shrink-0 text-lg font-black text-cyan-200">{player.score}</p></div>)}</div>
+          <div className="mt-5 border-t border-white/10 pt-5"><p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-300">Rewards by rank</p><div className="mt-3 grid gap-2">{room.leaderboard.slice(0, 3).map((player) => { const reward = rewards.find((item) => String(item.userId) === String(player.userId)); return <div key={player.userId} className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.05] px-3 py-2.5"><span className="text-xs font-bold text-slate-300">{ordinal(player.rank)} · {player.name}</span><span className="text-xs font-black text-emerald-300">+{reward?.brainCells || 0} cells</span></div> })}</div></div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+const ResultStat = ({ label, value, dark = false }) => (
+  <div className={dark ? 'rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3' : 'rounded-2xl bg-slate-950/25 px-3 py-3'}><p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-lg font-black text-white">{value}</p></div>
+)
+
+const ResultsStage = ({ room, leaveToHome }) => {
+  const rewards = room.battleSummary?.rewards || []
+  const podiumRanks = [1, 2, 3, 4].map((rank) => {
+    const reward = rewards.find((item) => Number(item.rank) === rank)
+    const player = reward ? room.players.find((item) => String(item.userId) === String(reward.userId)) : null
+
+    return {
+      rank,
+      label: `${rank}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'}`,
+      reward,
+      player,
+    }
+  })
+
+  return (
+    <div className="grid flex-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm backdrop-blur-xl sm:p-6">
+        <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.24em] text-amber-700">
+          <Crown className="h-4 w-4" />
+          Battle results
+        </div>
+        <h2 className="mt-5 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">Final standings</h2>
+        <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600">
+          The room is finished. Brain Cells were awarded by rank and the normal website is unlocked again after you leave this page.
+        </p>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          {podiumRanks.map((entry) => {
+            const reward = entry.reward
+
+            return (
+              <div
+                key={entry.rank}
+                className={`rounded-[1.5rem] border p-4 ${
+                  entry.rank === 1
+                    ? 'border-amber-300 bg-amber-50'
+                    : entry.rank === 2
+                      ? 'border-slate-300 bg-slate-50'
+                      : entry.rank === 3
+                        ? 'border-orange-300 bg-orange-50'
+                        : 'border-slate-200 bg-white'
+                }`}
+              >
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">
+                  {entry.label} place
+                </p>
+                <h3 className="mt-2 text-2xl font-black text-slate-950">
+                  {entry.player?.name || 'Waiting for player'}
+                </h3>
+                <div className="mt-1 flex items-center gap-2 text-xs font-bold text-slate-600">
+                  {entry.player ? (
+                    <>
+                      <Crown className="h-4 w-4 text-amber-500" />
+                      Rank {entry.rank}
+                    </>
+                  ) : (
+                    'Open slot'
+                  )}
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <Metric label="Score" value={reward?.score || 0} />
+                  <Metric label="Brain Cells" value={reward?.brainCells || 0} />
+                  <Metric label="Correct" value={entry.player?.correctCount || 0} />
+                  <Metric label="Highest streak" value={entry.player?.highestStreak || 0} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={leaveToHome}
+          className="mt-6 inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-emerald-500 px-6 text-sm font-black text-slate-950 transition hover:scale-[1.01]"
+        >
+          Return to website
+          <ArrowRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="grid gap-4">
+        <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm backdrop-blur-xl">
+          <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-700">Final leaderboard</p>
+          <div className="mt-4 grid gap-2">
+            {room.leaderboard.map((player) => (
+              <div key={player.userId} className={`flex items-center justify-between rounded-2xl border px-4 py-3 ${player.isSelf ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                <div>
+                  <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500 shadow-sm">
+                    <span className="text-[11px] leading-none">🔥</span>
+                    <span>{player.streak || 0}</span>
+                  </div>
+                  <p className="text-sm font-black text-slate-950">
+                    {player.rank === 1 ? '1st' : player.rank === 2 ? '2nd' : player.rank === 3 ? '3rd' : `${player.rank}th`} {player.name}
+                  </p>
+                  <p className="text-[11px] text-slate-500">{player.correctCount} correct, {player.wrongCount} wrong</p>
+                </div>
+                <p className="text-lg font-black text-amber-700">{player.score}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm backdrop-blur-xl">
+          <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">Match summary</p>
+          <div className="mt-4 grid gap-3 text-sm text-slate-600">
+            <MetricRow label="Questions played" value={room.battleSummary?.totalQuestions || room.totalQuestions || 0} />
+            <MetricRow label="Players" value={room.battleSummary?.totalPlayers || room.players.length} />
+            <MetricRow label="Chat" value={room.settings.roomChat ? 'Enabled' : 'Disabled'} />
+            <MetricRow label="Reactions" value={room.settings.emojiReactions ? 'Enabled' : 'Disabled'} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const LegacySettingsModal = ({ open, onClose, room, isCreator = false, onSave, onDeleteRoom, onLeaveLobby }) => {
+  const [draft, setDraft] = useState(() => buildLobbySettingsDraft(room))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) {
+      return undefined
+    }
+
+    setDraft(buildLobbySettingsDraft(room))
+    setSaving(false)
+    setError('')
+    return undefined
+  }, [open, room])
+
+  const editable = Boolean(isCreator && room.status === 'lobby')
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    if (!editable) {
+      return
+    }
+
+    try {
+      setSaving(true)
+      setError('')
+      await onSave?.({
+        roomName: draft.roomName,
+        questionsCount: Number(draft.questionsCount),
+        timeLimitSeconds: Number(draft.timeLimitSeconds),
+        difficulty: draft.difficulty,
+        emojiReactions: Boolean(draft.emojiReactions),
+        roomChat: Boolean(draft.roomChat),
+      })
+      onClose()
+    } catch (err) {
+      setError(err.message || 'Could not save the room settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <div className="fixed inset-0 z-[220] flex h-[100dvh] items-center justify-center overflow-hidden bg-orange-950/20 px-0 py-0 backdrop-blur-md sm:px-4 sm:py-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 18 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 18 }}
+            transition={{ duration: 0.18 }}
+            className="h-[100dvh] max-h-[100dvh] w-full max-w-2xl overflow-hidden rounded-none border border-orange-100 bg-white p-4 shadow-[0_24px_90px_rgba(255,105,0,0.2)] sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:overflow-y-auto sm:rounded-[2rem] sm:p-6 md:p-7"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-orange-600">
+                  {editable ? 'Edit room settings' : 'Battle settings'}
+                </p>
+                <h3 className="mt-1 text-2xl font-black text-slate-950">
+                  {editable ? 'Update lobby options' : 'Room configuration'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-orange-100 bg-orange-50 text-orange-600 transition hover:rotate-90 hover:bg-orange-100 sm:h-10 sm:w-10"
+                aria-label="Close settings"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {editable ? (
+              <form className="mt-3 grid gap-2 sm:mt-5 sm:gap-4" onSubmit={handleSubmit}>
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-700">Room name</span>
+                  <input
+                    type="text"
+                    value={draft.roomName}
+                    onChange={(event) => setDraft((current) => ({ ...current, roomName: event.target.value }))}
+                    className="h-10 rounded-2xl border border-orange-100 bg-orange-50/40 px-4 text-sm font-semibold text-slate-950 outline-none transition focus:border-orange-400 focus:bg-white focus:ring-4 focus:ring-orange-100 sm:h-12"
+                    maxLength={120}
+                  />
+                </label>
+
+                <div className="grid gap-2 sm:gap-3 sm:grid-cols-2">
+                  <label className="grid gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-700">Questions</span>
+                    <select
+                      value={draft.questionsCount}
+                      onChange={(event) => setDraft((current) => ({ ...current, questionsCount: event.target.value }))}
+                      className="h-10 rounded-2xl border border-orange-100 bg-orange-50/40 px-4 text-sm font-semibold text-slate-950 outline-none transition focus:border-orange-400 focus:bg-white focus:ring-4 focus:ring-orange-100 sm:h-12"
+                    >
+                      {battleQuestionCounts.map((count) => (
+                        <option key={count} value={count}>
+                          {count}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-700">Time / question</span>
+                    <select
+                      value={draft.timeLimitSeconds}
+                      onChange={(event) => setDraft((current) => ({ ...current, timeLimitSeconds: event.target.value }))}
+                      className="h-10 rounded-2xl border border-orange-100 bg-orange-50/40 px-4 text-sm font-semibold text-slate-950 outline-none transition focus:border-orange-400 focus:bg-white focus:ring-4 focus:ring-orange-100 sm:h-12"
+                    >
+                      {battleTimeLimits.map((seconds) => (
+                        <option key={seconds} value={seconds}>
+                          {seconds}s
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grid gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-700">Difficulty</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {battleDifficultyOptions.map((option) => {
+                      const selected = draft.difficulty === option.value
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setDraft((current) => ({ ...current, difficulty: option.value }))}
+                          className={`rounded-2xl border px-3 py-2 text-sm font-black transition sm:py-3 ${
+                            selected
+                              ? 'border-orange-300 bg-orange-50 text-orange-700 shadow-[0_8px_20px_rgba(255,105,0,0.12)]'
+                              : 'border-orange-100 bg-orange-50/30 text-slate-700 hover:border-orange-200 hover:bg-white'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid gap-2 sm:gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setDraft((current) => ({ ...current, emojiReactions: !current.emojiReactions }))}
+                    className={`flex items-center justify-between rounded-2xl border px-4 py-2.5 text-left transition sm:py-3 ${
+                      draft.emojiReactions
+                        ? 'border-orange-200 bg-orange-50'
+                        : 'border-orange-100 bg-orange-50/30'
+                    }`}
+                  >
+                    <div>
+                      <span className="block text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Emoji reactions</span>
+                      <span className="mt-1 block text-sm font-bold text-slate-950">
+                        {draft.emojiReactions ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-black uppercase tracking-[0.18em] ${
+                      draft.emojiReactions ? 'bg-orange-100 text-orange-700' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {draft.emojiReactions ? 'On' : 'Off'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDraft((current) => ({ ...current, roomChat: !current.roomChat }))}
+                    className={`flex items-center justify-between rounded-2xl border px-4 py-2.5 text-left transition sm:py-3 ${
+                      draft.roomChat
+                        ? 'border-orange-200 bg-orange-50'
+                        : 'border-orange-100 bg-orange-50/30'
+                    }`}
+                  >
+                    <div>
+                      <span className="block text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Room chat</span>
+                      <span className="mt-1 block text-sm font-bold text-slate-950">
+                        {draft.roomChat ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-black uppercase tracking-[0.18em] ${
+                      draft.roomChat ? 'bg-orange-100 text-orange-700' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {draft.roomChat ? 'On' : 'Off'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-orange-200 bg-[#fffaf5] p-2.5 text-[11px] leading-4 text-orange-900 sm:p-4 sm:text-sm sm:leading-6">
+                  Updating these settings resets every player to not ready so the lobby stays in sync.
+                </div>
+
+                {error && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
+                    {error}
+                  </div>
+                )}
+
+                <div className="grid gap-2 sm:gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (editable) {
+                        onClose()
+                        onDeleteRoom?.()
+                        return
+                      }
+                      onClose()
+                    }}
+                    className={`inline-flex h-10 items-center justify-center gap-2 rounded-[1.25rem] px-5 text-sm font-bold transition sm:h-12 ${
+                      editable
+                        ? 'border border-red-200 bg-red-50 text-red-600 hover:bg-red-100'
+                        : 'border border-orange-100 bg-white text-slate-700 hover:border-orange-200 hover:bg-orange-50'
+                    }`}
+                    disabled={saving}
+                  >
+                    {editable && <Trash2 className="h-4 w-4" />}
+                    {editable ? 'Delete room' : 'Cancel'}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-[1.25rem] bg-gradient-to-r from-[#ff8a00] to-[#ff5500] px-5 text-sm font-black text-white shadow-[0_12px_30px_rgba(255,105,0,0.25)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-70 sm:h-12"
+                  >
+                    <Save className="h-4 w-4" />
+                    {saving ? 'Saving...' : 'Save changes'}
+                  </button>
+                </div>
+
+              </form>
+            ) : (
+              <>
+                <div className="mt-4 grid gap-2 sm:mt-5">
+                  <SettingRow label="Questions" value={room.settings.questionsCount} />
+                  <SettingRow label="Time / question" value={`${room.settings.timeLimitSeconds}s`} />
+                  <SettingRow label="Difficulty" value={room.settings.difficulty} />
+                  <SettingRow label="Emoji reactions" value={room.settings.emojiReactions ? 'On' : 'Off'} />
+                  <SettingRow label="Room chat" value={room.settings.roomChat ? 'On' : 'Off'} />
+                  <SettingRow label="Players" value={`${room.players.length}/${room.settings.maxPlayers}`} />
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-orange-100 bg-[#fffaf5] p-3 text-xs leading-5 text-slate-600 sm:p-4 sm:text-sm sm:leading-6">
+                  {room.status === 'lobby'
+                    ? 'Only the room creator can edit these lobby settings.'
+                    : 'The room is locked now. Reconnects restore the same settings and players.'}
+                </div>
+
+                {!isCreator && room.status === 'lobby' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose()
+                      onLeaveLobby?.()
+                    }}
+                    className="group mt-2 flex w-full items-center gap-3 rounded-[1.25rem] border border-slate-200 bg-slate-950 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-lg sm:rounded-[1.5rem] sm:p-4"
+                  >
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white/10 text-white shadow-sm sm:h-11 sm:w-11">
+                      <LogOut className="h-4 w-4 sm:h-5 sm:w-5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-white sm:text-sm sm:tracking-[0.18em]">Leave group</span>
+                      <span className="mt-1 block text-[10px] leading-4 text-white/85 sm:text-xs sm:leading-5">Exit safely before the battle starts.</span>
+                    </span>
+                  </button>
+                )}
+              </>
+            )}
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  )
+}
+
+const battleSettingsObjectiveTypes = [
+  { value: 'mcqs', label: 'MCQs' },
+  { value: 'true-or-false', label: 'True or False' },
+  { value: 'correlation', label: 'Correlations' },
+]
+
+const SettingsModal = ({ open, onClose, room, isCreator = false, onSave, onDeleteRoom, onLeaveLobby }) => {
+  const [activeTab, setActiveTab] = useState('controls')
+  const [draft, setDraft] = useState(() => ({ ...buildLobbySettingsDraft(room), chapterIds: room.settings?.chapterIds || [], objectiveTypes: room.settings?.objectiveTypes || [] }))
+  const [chapters, setChapters] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const editable = Boolean(isCreator && room.status === 'lobby')
+
+  useEffect(() => {
+    if (!open) return undefined
+    setActiveTab('controls')
+    setDraft({ ...buildLobbySettingsDraft(room), chapterIds: room.settings?.chapterIds || [], objectiveTypes: room.settings?.objectiveTypes || [] })
+    setSaving(false)
+    setError('')
+    apiRequest('/api/chapters', { cache: 'no-store' }).then((data) => setChapters(Array.isArray(data.chapters) ? data.chapters : [])).catch(() => setChapters([]))
+    return undefined
+  }, [open, room])
+
+  const updateDraft = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
+  useEffect(() => {
+    if (!open) return undefined
+    const handleSettingToggle = (event) => {
+      if (!editable) return
+      const key = event.detail === 'Emoji reactions' ? 'emojiReactions' : event.detail === 'Room chat' ? 'roomChat' : ''
+      if (key) updateDraft(key, !draft[key])
+    }
+    window.addEventListener('battle-settings-toggle', handleSettingToggle)
+    return () => window.removeEventListener('battle-settings-toggle', handleSettingToggle)
+  }, [open, editable, draft])
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    if (!editable) return
+    try {
+      setSaving(true)
+      setError('')
+      await onSave?.({ roomName: draft.roomName, chapterIds: draft.chapterIds, objectiveTypes: draft.objectiveTypes, questionsCount: Number(draft.questionsCount), timeLimitSeconds: Number(draft.timeLimitSeconds), difficulty: draft.difficulty, emojiReactions: Boolean(draft.emojiReactions), roomChat: Boolean(draft.roomChat) })
+      onClose()
+    } catch (err) {
+      setError(err.message || 'Could not save the room settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+  const selectedChapterNames = (draft.chapterIds || []).map((id) => chapters.find((chapter) => String(chapter._id) === String(id))?.name || 'Selected chapter')
+
+  return <AnimatePresence>{open && <div className="fixed inset-0 z-[220] flex h-[100dvh] items-center justify-center overflow-hidden bg-orange-950/20 px-0 py-0 backdrop-blur-md sm:px-4 sm:py-4"><motion.div initial={{ opacity: 0, scale: .96, y: 18 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .96, y: 18 }} className="box-border h-[100dvh] max-h-[100dvh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-none border border-orange-100 bg-white p-3 shadow-[0_24px_90px_rgba(255,105,0,.2)] sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:rounded-[2rem] sm:p-6">
+    <div className="flex min-w-0 items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-[9px] font-black uppercase tracking-[.2em] text-orange-600">{editable ? 'Edit room settings' : 'Battle settings'}</p><h3 className="mt-1 text-xl font-black leading-tight text-slate-950 sm:text-2xl">Room configuration</h3></div>{editable ? <div className="flex shrink-0 items-center gap-1.5"><button type="button" onClick={onClose} disabled={saving} className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-2.5 text-[10px] font-black text-slate-600 transition hover:bg-slate-50 disabled:opacity-60">Cancel</button><button type="submit" form="battle-settings-form" disabled={saving} className="inline-flex h-9 items-center justify-center gap-1 whitespace-nowrap rounded-xl bg-gradient-to-r from-[#ff8a00] to-[#ff5500] px-2.5 text-[10px] font-black text-white shadow-[0_8px_18px_rgba(249,115,22,.18)] disabled:opacity-60">{saving ? 'Saving...' : 'Save changes'}<Save className="h-3 w-3" /></button></div> : <button type="button" onClick={onClose} className="inline-flex h-9 items-center justify-center rounded-xl border border-orange-100 bg-orange-50 px-3 text-[10px] font-black text-orange-700">Done</button>}</div>
+    <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-2xl bg-orange-50 p-1 sm:mt-5"><button type="button" onClick={() => setActiveTab('controls')} className={`rounded-xl px-2 py-2 text-[10px] font-black uppercase tracking-[.12em] ${activeTab === 'controls' ? 'bg-white text-orange-700 shadow-sm' : 'text-slate-500'}`}>Controls</button><button type="button" onClick={() => setActiveTab('chapters')} className={`rounded-xl px-2 py-2 text-[10px] font-black uppercase tracking-[.12em] ${activeTab === 'chapters' ? 'bg-white text-orange-700 shadow-sm' : 'text-slate-500'}`}>Chapters</button></div>
+    <form id="battle-settings-form" className="mt-3 grid gap-2.5 sm:mt-5 sm:gap-4" onSubmit={handleSubmit}>
+      {activeTab === 'controls' ? <>{editable && <label className="grid gap-2"><span className="text-[10px] font-black uppercase tracking-[.22em] text-orange-700">Room name</span><input value={draft.roomName} onChange={(event) => updateDraft('roomName', event.target.value)} maxLength={120} className="h-11 rounded-2xl border border-orange-100 bg-orange-50/40 px-4 text-sm font-semibold outline-none focus:border-orange-400 focus:bg-white" /></label>}<div className="grid gap-2 sm:grid-cols-2"><SettingControl label="Questions" value={draft.questionsCount} editable={editable} options={battleQuestionCounts} onChange={(value) => updateDraft('questionsCount', value)} /><SettingControl label="Time / question" value={draft.timeLimitSeconds} suffix="s" editable={editable} options={battleTimeLimits} onChange={(value) => updateDraft('timeLimitSeconds', value)} /></div><div className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4"><p className="text-[10px] font-black uppercase tracking-[.22em] text-orange-700">Difficulty</p>{editable ? <div className="mt-3 grid grid-cols-3 gap-2">{['easy', 'medium', 'hard'].map((value) => <button key={value} type="button" onClick={() => updateDraft('difficulty', value)} className={`rounded-xl border px-2 py-2 text-xs font-black capitalize ${draft.difficulty === value ? 'border-orange-300 bg-orange-100 text-orange-700' : 'border-slate-200 bg-white text-slate-600'}`}>{value}</button>)}</div> : <p className="mt-2 text-base font-black capitalize text-slate-950">{draft.difficulty}</p>}</div><div className="grid gap-2 sm:grid-cols-2"><SettingValue label="Emoji reactions" value={draft.emojiReactions ? 'On' : 'Off'} /><SettingValue label="Room chat" value={draft.roomChat ? 'On' : 'Off'} /></div></> : <div className="grid gap-4"><div><p className="text-[10px] font-black uppercase tracking-[.22em] text-orange-700">Selected chapters</p>{editable ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{chapters.map((chapter) => <button key={chapter._id} type="button" onClick={() => { const selected = draft.chapterIds.includes(String(chapter._id)); if (selected && draft.chapterIds.length === 1) { setError('At least one chapter is required.'); return } updateDraft('chapterIds', selected ? draft.chapterIds.filter((id) => id !== String(chapter._id)) : [...draft.chapterIds, String(chapter._id)]) }} className={`rounded-xl border px-3 py-2 text-left text-sm font-bold ${draft.chapterIds.includes(String(chapter._id)) ? 'border-orange-300 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-600'}`}>{chapter.name}</button>)}</div> : <div className="mt-3 flex flex-wrap gap-2">{selectedChapterNames.map((name, index) => <span key={`${name}-${index}`} className="rounded-full bg-orange-50 px-3 py-1.5 text-xs font-bold text-orange-700">{name}</span>)}</div>}</div><div><p className="text-[10px] font-black uppercase tracking-[.22em] text-orange-700">Objective types</p><div className="mt-3 grid gap-2">{battleSettingsObjectiveTypes.map((objective) => editable ? <button key={objective.value} type="button" onClick={() => { const selected = draft.objectiveTypes.includes(objective.value); if (selected && draft.objectiveTypes.length === 1) { setError('At least one objective type is required.'); return } updateDraft('objectiveTypes', selected ? draft.objectiveTypes.filter((value) => value !== objective.value) : [...draft.objectiveTypes, objective.value]) }} className={`rounded-xl border px-3 py-2 text-left text-sm font-bold ${draft.objectiveTypes.includes(objective.value) ? 'border-orange-300 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-600'}`}>{objective.label}</button> : <span key={objective.value} className={`rounded-xl border px-3 py-2 text-sm font-bold ${draft.objectiveTypes.includes(objective.value) ? 'border-orange-200 bg-orange-50 text-orange-700' : 'hidden'}`}>{objective.label}</span>)}</div></div></div>}
+      {error && <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p>}
+      <div className="grid gap-2 sm:grid-cols-2">{editable ? <><button type="button" onClick={() => { onClose(); onLeaveLobby?.() }} disabled={saving} className="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60">Leave group</button><button type="button" onClick={() => { onClose(); onDeleteRoom?.() }} disabled={saving} className="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-bold text-red-600 transition hover:bg-red-100 disabled:opacity-60">Delete room</button></> : <button type="button" onClick={() => { if (room.status === 'lobby') { onClose(); onLeaveLobby?.() } else onClose() }} className={`inline-flex h-11 items-center justify-center rounded-xl px-4 text-sm font-bold ${room.status === 'lobby' ? 'bg-slate-950 text-white' : 'border border-orange-100 bg-white text-slate-700'}`}>{room.status === 'lobby' ? 'Leave group' : 'Close'}</button>}</div>
+    </form>
+  </motion.div></div>}</AnimatePresence>
+}
+
+const SettingControl = ({ label, value, options, suffix = '', editable, onChange }) => editable ? <label className="grid gap-2"><span className="text-[10px] font-black uppercase tracking-[.22em] text-orange-700">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)} className="h-11 rounded-2xl border border-orange-100 bg-orange-50/40 px-3 text-sm font-bold outline-none">{options.map((option) => <option key={option} value={option}>{option}{suffix}</option>)}</select></label> : <SettingValue label={label} value={`${value}${suffix}`} />
+const SettingValue = ({ label, value }) => <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('battle-settings-toggle', { detail: label }))} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-orange-200 hover:bg-orange-50"><p className="text-[9px] font-black uppercase tracking-[.16em] text-slate-500">{label}</p><p className={`rounded-full px-3 py-1 text-xs font-black capitalize ${value === 'On' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>{value}</p></button>
+
+const BattleInvitePrompt = ({ invite, onRespond }) => (
+  <AnimatePresence>
+    {invite && (
+      <motion.div initial={{ opacity: 0, y: -18, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -18, scale: .96 }} className="fixed left-1/2 top-4 z-[240] w-[min(92vw,25rem)] -translate-x-1/2 rounded-[1.5rem] border border-orange-200 bg-white p-4 shadow-[0_18px_60px_rgba(255,105,0,.24)]">
+        <p className="text-[10px] font-black uppercase tracking-[.22em] text-orange-600">Battle invite · 10 seconds</p>
+        <p className="mt-1 text-sm font-black text-slate-950"><span className="text-orange-600">{invite.senderName}</span> invited you to {invite.roomName}.</p>
+        <div className="mt-3 flex gap-2">
+          <button type="button" onClick={() => onRespond('accepted')} className="h-10 flex-1 rounded-xl bg-gradient-to-r from-[#ff8a00] to-[#ff5500] text-xs font-black text-white">Accept</button>
+          <button type="button" onClick={() => onRespond('rejected')} className="h-10 flex-1 rounded-xl border border-orange-100 bg-orange-50 text-xs font-black text-slate-700">Reject</button>
+        </div>
+      </motion.div>
+    )}
+  </AnimatePresence>
+)
+
+const ReadyConfirmModal = ({ open, onClose, onConfirm, ready }) => (
+  <AnimatePresence>
+    {open && (
+      <div className="fixed inset-0 z-[135] flex items-end justify-center bg-slate-950/55 px-3 py-3 backdrop-blur-sm sm:items-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96, y: 18 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.96, y: 18 }}
+          transition={{ duration: 0.18 }}
+          className="w-full max-w-md rounded-[2rem] border border-white/80 bg-white p-5 shadow-[0_30px_100px_rgba(15,23,42,0.28)] sm:p-6"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">Ready check</p>
+              <h3 className="mt-1 text-2xl font-black text-slate-950">
+                {ready ? 'Switch back to not ready?' : 'Mark yourself ready?'}
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200"
+              aria-label="Close ready dialog"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
+            {ready
+              ? 'You are already locked in. This will unlock your ready state so you can change settings or step away.'
+              : 'This will tell the host you are set. The Start Battle button unlocks only when everyone is ready.'}
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-12 items-center justify-center rounded-[1.25rem] border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="inline-flex h-12 items-center justify-center rounded-[1.25rem] bg-gradient-to-r from-cyan-500 to-emerald-500 px-5 text-sm font-black text-slate-950 shadow-[0_12px_40px_rgba(34,211,238,0.24)] transition hover:scale-[1.01]"
+            >
+              {ready ? 'Unready' : 'Ready up'}
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    )}
+  </AnimatePresence>
+)
+
+const ChatPanel = ({ room, onSendMessage, sendReaction, disabled = false, reactionsEnabled = true, compact = false, scrollable = true, messageLimit = 10, reverseMessages = false, hideScrollbar = true, autoScroll = true }) => {
+  const [message, setMessage] = useState('')
+  const messagesRef = useRef(null)
+
+  const send = (event) => {
+    event.preventDefault()
+    const value = message.trim()
+    if (!value) {
+      return
+    }
+
+    onSendMessage?.(value)
+    setMessage('')
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      send(event)
+    }
+  }
+
+  useEffect(() => {
+    if (!autoScroll || !messagesRef.current) {
+      return undefined
+    }
+
+    const node = messagesRef.current
+    const scrollToLatest = () => {
+      node.scrollTop = node.scrollHeight
+    }
+
+    const frame = window.requestAnimationFrame(scrollToLatest)
+    return () => window.cancelAnimationFrame(frame)
+  }, [autoScroll, reverseMessages, room.chatMessages, messageLimit])
+
+  const visibleMessages = reverseMessages
+    ? [...(room.chatMessages || [])].slice(-messageLimit).reverse()
+    : [...(room.chatMessages || [])].slice(-messageLimit)
+
+  const messageListClassName = [
+    'mt-4 space-y-2 pr-1',
+    scrollable ? 'min-h-0 flex-1 overflow-y-auto' : '',
+    hideScrollbar ? 'no-scrollbar' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[2rem] border border-white/80 bg-white p-4 shadow-[0_20px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">Room chat</p>
+          <h3 className="mt-1 text-lg font-black text-slate-950">Battle banter</h3>
+        </div>
+        <MessageCircleMore className="h-5 w-5 text-cyan-700" />
+      </div>
+      {disabled ? (
+        <div className="mt-4 rounded-[1.25rem] border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+          Room chat is off for this lobby, so only the host can move the room forward.
+        </div>
+      ) : (
+        <>
+          <div ref={messagesRef} className={messageListClassName}>
+            {visibleMessages.map((item) => (
+              <div key={item.id || `${item.userId}-${item.createdAt}`} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-700">{item.name}</p>
+                <p className="mt-1 leading-6 text-slate-600">{item.message}</p>
+              </div>
+            ))}
+            {!room.chatMessages?.length && <p className="text-sm text-slate-500">No chat yet. Say hello or drop a reaction.</p>}
+          </div>
+
+          {onSendMessage && (
+            <form onSubmit={send} className="mt-4 space-y-3">
+              <textarea
+                rows={compact ? 2 : 3}
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type a message..."
+                className="min-h-24 w-full rounded-[1.25rem] border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-50"
+              />
+
+              {sendReaction && reactionsEnabled && (
+                <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                  {reactionChoices.slice(0, 10).map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => sendReaction(emoji)}
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-slate-200 bg-slate-50 text-xl transition hover:-translate-y-0.5 hover:bg-slate-100"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {sendReaction && !reactionsEnabled && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                  Emoji reactions are turned off for this room.
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-[1.25rem] bg-gradient-to-r from-cyan-500 to-emerald-500 px-4 text-sm font-black text-slate-950 shadow-[0_12px_40px_rgba(34,211,238,0.24)] transition hover:scale-[1.01]"
+              >
+                <Send className="h-4 w-4" />
+                Send message
+              </button>
+              <p className="text-[11px] font-medium text-slate-500">Press Enter to send, Shift+Enter for a new line.</p>
+            </form>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+const MobileChatDock = ({ room, onSendMessage, disabled = false }) => {
+  const [isOpen, setIsOpen] = useState(false)
+  const [message, setMessage] = useState('')
+  const [floatingMessages, setFloatingMessages] = useState([])
+  const messagesRef = useRef(null)
+  const seenChatKeysRef = useRef(new Set())
+  const initializedRef = useRef(false)
+  const cleanupTimersRef = useRef([])
+  const messages = Array.isArray(room.chatMessages) ? room.chatMessages : []
+  const hasMessages = messages.length > 0
+
+  const buildChatKey = (item) => item.id || `${item.userId || 'chat'}-${item.createdAt || ''}-${item.message || ''}`
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined
+    }
+
+    setFloatingMessages([])
+    return undefined
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen || !messagesRef.current) {
+      return undefined
+    }
+
+    const node = messagesRef.current
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollTop = node.scrollHeight
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [isOpen, messages])
+
+  useEffect(() => {
+    const nextKeys = messages.map(buildChatKey)
+
+    if (!initializedRef.current) {
+      nextKeys.forEach((key) => seenChatKeysRef.current.add(key))
+      initializedRef.current = true
+      return undefined
+    }
+
+    const freshMessages = messages.filter((item) => !seenChatKeysRef.current.has(buildChatKey(item)))
+    nextKeys.forEach((key) => seenChatKeysRef.current.add(key))
+
+    if (!isOpen && freshMessages.length) {
+      const floatItems = freshMessages.slice(-3).map((item) => ({
+        id: buildChatKey(item),
+        name: item.name || 'Player',
+        message: item.message || '',
+      }))
+
+      setFloatingMessages((current) => [...current, ...floatItems].slice(-6))
+
+      floatItems.forEach((item, index) => {
+        const timer = window.setTimeout(() => {
+          setFloatingMessages((current) => current.filter((entry) => entry.id !== item.id))
+        }, 2600 + index * 120)
+        cleanupTimersRef.current.push(timer)
+      })
+    }
+
+    return undefined
+  }, [isOpen, messages])
+
+  useEffect(() => () => {
+    cleanupTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+    cleanupTimersRef.current = []
+  }, [])
+
+  if (disabled) {
+    return null
+  }
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    const value = message.trim()
+    if (!value) {
+      return
+    }
+
+    onSendMessage?.(value)
+    setMessage('')
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      handleSubmit(event)
+    }
+  }
+
+  return (
+    <div className="lg:hidden">
+      <AnimatePresence>
+        {!isOpen && floatingMessages.map((item, index) => (
+          <motion.div
+            key={item.id}
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: [0, 1, 1, 0], y: -80 - index * 20, scale: [0.96, 1, 1, 0.98] }}
+            exit={{ opacity: 0, y: -20, scale: 0.96 }}
+            transition={{ duration: 2.6, ease: 'easeOut' }}
+            className="pointer-events-none fixed bottom-24 right-4 z-[140] max-w-[min(18rem,calc(100vw-5rem))]"
+          >
+            <div className="rounded-2xl border border-white/70 bg-slate-950/90 px-3 py-2 text-sm text-white shadow-2xl backdrop-blur-md">
+              <span className="font-black text-cyan-100">{item.name}:</span>{' '}
+              <span className="text-white/90">{item.message}</span>
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="fixed bottom-4 right-4 z-[150] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 shadow-[0_18px_50px_rgba(34,211,238,0.35)] transition hover:scale-[1.03]"
+        aria-label={isOpen ? 'Close chat' : 'Open chat'}
+      >
+        <MessageCircleMore className="h-6 w-6" />
+        {hasMessages && !isOpen && (
+          <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-black text-white shadow-lg">
+            {messages.length > 9 ? '9+' : messages.length}
+          </span>
+        )}
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 24, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 24, scale: 0.98 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-x-3 bottom-3 z-[145] rounded-[2rem] border border-white/80 bg-white p-4 shadow-[0_30px_100px_rgba(15,23,42,0.25)] backdrop-blur-xl"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">Room chat</p>
+                <h3 className="mt-1 text-lg font-black text-slate-950">Battle banter</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200"
+                aria-label="Close chat"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div ref={messagesRef} className="mt-4 max-h-[40vh] space-y-2 overflow-y-auto pr-1 no-scrollbar">
+              {messages.slice(-12).map((item) => (
+                <div key={item.id || `${item.userId}-${item.createdAt}`} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <p className="font-black text-cyan-700">
+                    {item.name}: <span className="font-medium text-slate-700">{item.message}</span>
+                  </p>
+                </div>
+              ))}
+              {!messages.length && <p className="text-sm text-slate-500">No chat yet. Be the first to say hi.</p>}
+            </div>
+
+            <div className="mt-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-3">
+              <form onSubmit={handleSubmit} className="space-y-3">
+                <textarea
+                  rows={2}
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Type a message..."
+                  className="min-h-24 w-full rounded-[1.25rem] border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-50"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-[1.25rem] bg-gradient-to-r from-cyan-500 to-emerald-500 px-4 text-sm font-black text-slate-950 shadow-[0_12px_40px_rgba(34,211,238,0.24)] transition hover:scale-[1.01]"
+                >
+                  <Send className="h-4 w-4" />
+                  Send message
+                </button>
+              </form>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+const MobileReactionDock = ({ onReaction, enabled = false }) => {
+  const [isOpen, setIsOpen] = useState(false)
+
+  if (!enabled) {
+    return null
+  }
+
+  return (
+    <div className="lg:hidden">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="fixed bottom-4 left-4 z-[150] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 shadow-[0_18px_50px_rgba(251,191,36,0.35)] transition hover:scale-[1.03]"
+        aria-label={isOpen ? 'Close reactions' : 'Open reactions'}
+      >
+        <span className="text-xl">😊</span>
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, x: -28, scale: 0.98 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: -28, scale: 0.98 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-4 left-4 z-[145] w-[min(20rem,calc(100vw-5rem))] rounded-[2rem] border border-white/80 bg-white p-4 shadow-[0_30px_100px_rgba(15,23,42,0.25)] backdrop-blur-xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-700">Quick reactions</p>
+                <h3 className="mt-1 text-lg font-black text-slate-950">Tap a vibe</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200"
+                aria-label="Close reactions"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {reactionChoices.slice(0, 10).map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => {
+                    onReaction?.(emoji)
+                    setIsOpen(false)
+                  }}
+                  className="grid h-11 w-11 place-items-center rounded-2xl border border-slate-200 bg-slate-50 text-xl transition hover:-translate-y-0.5 hover:bg-slate-100"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+const PlayerCard = ({ player, compact = false, isCreator = false, isFriend = false, friendAction = false, onAddFriend = null, onSendReadyReminder = null }) => {
+  if (compact) {
+    return (
+      <div className={`relative overflow-hidden rounded-[1.35rem] border px-2.5 py-2.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_28px_rgba(15,23,42,0.08)] sm:px-3 ${player.ready ? 'border-emerald-300 bg-gradient-to-r from-emerald-50 to-emerald-100/80' : 'border-amber-300 bg-gradient-to-r from-amber-50 to-yellow-100/80'}`}>
+        <span className={`pointer-events-none absolute inset-y-0 left-0 w-1 ${player.ready ? 'bg-emerald-400' : 'bg-amber-300'}`} />
+        <div className="flex items-center gap-2.5 pl-1 sm:gap-3">
+          <div className={`relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-[0.9rem] border-2 text-sm font-black shadow-sm sm:h-11 sm:w-11 ${player.ready ? 'border-emerald-300 bg-emerald-100 text-emerald-700' : 'border-orange-200 bg-orange-100 text-orange-700'}`}>
+            {player.profileImageUrl
+              ? <img src={assetUrl(player.profileImageUrl)} alt="" className="h-full w-full object-cover" />
+              : player.name?.slice(0, 1)?.toUpperCase() || 'S'}
+            {player.ready && <span className="absolute bottom-0 right-0 grid h-4 w-4 translate-x-0.5 translate-y-0.5 place-items-center rounded-full border-2 border-white bg-emerald-500 text-white"><Check className="h-2.5 w-2.5 stroke-[4]" /></span>}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h4 className="truncate text-sm font-black text-slate-950 sm:text-[15px]">{player.name}</h4>
+              {player.isSelf && <span className="shrink-0 rounded-full bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.12em] text-cyan-700">You</span>}
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[9px] font-bold text-slate-500 sm:text-[10px]">
+              {isCreator ? <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 font-black uppercase tracking-[0.1em] text-amber-700"><Crown className="h-3 w-3 fill-amber-400" /> Host</span> : <span>Player</span>}
+              {player.className && <><span className="text-slate-300">·</span><span className="truncate">{player.className}</span></>}
+            </div>
+          </div>
+          {!player.isSelf && !isFriend && player.userId && onAddFriend && <button type="button" onClick={() => onAddFriend(player)} disabled={friendAction} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-orange-200 bg-white text-orange-600 shadow-sm transition hover:-translate-y-0.5 hover:bg-orange-50 hover:text-orange-700 disabled:cursor-wait disabled:opacity-60" aria-label={`Add ${player.name} as a friend`} title={friendAction ? 'Adding friend...' : `Add ${player.name} as a friend`}><UserPlus className="h-4 w-4" /></button>}
+          {onSendReadyReminder && !player.ready && <button type="button" onClick={() => onSendReadyReminder(player.userId, player.name)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-cyan-200 bg-white text-cyan-700 shadow-sm transition hover:-translate-y-0.5 hover:bg-cyan-50 hover:text-cyan-800" aria-label={`Send ready reminder to ${player.name}`} title={`Send ready reminder to ${player.name}`}><BellRing className="h-4 w-4" /></button>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`rounded-[1.5rem] border px-4 py-4 ${player.isSelf ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+      <div className="flex items-center gap-3">
+        <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-900 text-sm font-black text-white">
+          {player.name?.slice(0, 1)?.toUpperCase() || 'S'}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h4 className="truncate text-sm font-black text-slate-950">{player.name}</h4>
+            {player.ready ? <BadgeCheck className="h-4 w-4 text-emerald-600" /> : <ShieldAlert className="h-4 w-4 text-amber-500" />}
+          </div>
+          {player.className ? <p className="truncate text-[11px] text-slate-500">{player.className}</p> : null}
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px] font-bold text-slate-600">
+        <div className="rounded-2xl bg-white px-2 py-2">
+          <p className="text-slate-500">Score</p>
+          <p className="mt-1 text-slate-950">{player.score}</p>
+        </div>
+        <div className="rounded-2xl bg-white px-2 py-2">
+          <p className="text-slate-500">Streak</p>
+          <p className="mt-1 text-slate-950">{player.streak}</p>
+        </div>
+        <div className="rounded-2xl bg-white px-2 py-2">
+          <p className="text-slate-500">Answer</p>
+          <p className="mt-1 text-slate-950">{player.answeredQuestions?.length ? 'Done' : 'Waiting'}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const CornerPlayerPosition = ({ align, player }) => {
+  if (!player) return null
+
+  const positionMap = {
+    'top-left': 'top-4 left-4',
+    'top-right': 'top-4 right-4',
+    'bottom-left': 'bottom-4 left-4',
+    'bottom-right': 'bottom-4 right-4',
+  }
+
+  return (
+    <div className={`absolute ${positionMap[align]} w-64 rounded-[1.5rem] border border-slate-200 bg-white p-3 shadow-sm backdrop-blur-xl`}>
+      <PlayerCard player={player} />
+    </div>
+  )
+}
+
+const SettingRow = ({ label, value }) => (
+  <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-3 py-3">
+    <span className="text-slate-500">{label}</span>
+    <span className="font-black text-slate-950">{value}</span>
+  </div>
+)
+
+const Metric = ({ label, value }) => (
+  <div className="rounded-2xl bg-white px-3 py-3 shadow-sm">
+    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">{label}</p>
+    <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+  </div>
+)
+
+const MetricRow = ({ label, value }) => (
+  <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+    <span className="text-slate-500">{label}</span>
+    <span className="font-black text-slate-950">{value}</span>
+  </div>
+)
+
+export default BattleRoomPage
+
+
