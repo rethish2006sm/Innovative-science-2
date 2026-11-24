@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowRight,
@@ -31,8 +31,8 @@ import {
   Lightbulb,
   History,
   UserRound,
-} from 'lucide-react'
-import { Link } from 'react-router-dom'
+} from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   motion,
   useReducedMotion,
@@ -41,7 +41,7 @@ import {
   useTransform,
   useInView,
   animate,
-} from 'framer-motion'
+} from "framer-motion";
 
 // --------------------------------------------------
 // GLOBAL STYLES (scoped helpers for this page)
@@ -110,37 +110,45 @@ const pageStyles = `
     .ab-marquee-track,
     .ab-gradient-text { animation: none !important; }
   }
-`
+`;
 
 // --------------------------------------------------
 // ANIMATION VARIANTS — lighter & faster
 // --------------------------------------------------
 
-const EASE = [0.22, 1, 0.36, 1]
+const EASE = [0.22, 1, 0.36, 1];
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.42, ease: EASE } },
-}
+};
 
 const fadeLeft = {
   hidden: { opacity: 0, x: -18 },
   visible: { opacity: 1, x: 0, transition: { duration: 0.45, ease: EASE } },
-}
+};
 
 const fadeRight = {
   hidden: { opacity: 0, x: 18 },
   visible: { opacity: 1, x: 0, transition: { duration: 0.45, ease: EASE } },
-}
+};
 
 const popIn = {
   hidden: { opacity: 0, scale: 0.96 },
   visible: { opacity: 1, scale: 1, transition: { duration: 0.4, ease: EASE } },
-}
+};
 
 // Viewport presets — trigger earlier so animations feel instant while scrolling
-const VIEWPORT_EARLY = { once: true, amount: 0.03, margin: '0px 0px 140px 0px' }
-const VIEWPORT_EARLY_SMALL = { once: true, amount: 0.03, margin: '0px 0px 100px 0px' }
+const VIEWPORT_EARLY = {
+  once: true,
+  amount: 0.03,
+  margin: "0px 0px 140px 0px",
+};
+const VIEWPORT_EARLY_SMALL = {
+  once: true,
+  amount: 0.03,
+  margin: "0px 0px 100px 0px",
+};
 
 // --------------------------------------------------
 // HOOKS — detect mobile / lite mode
@@ -148,27 +156,27 @@ const VIEWPORT_EARLY_SMALL = { once: true, amount: 0.03, margin: '0px 0px 100px 
 
 const useIsMobile = () => {
   const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === 'undefined') return false
-    return window.matchMedia('(max-width: 767px)').matches
-  })
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 767px)").matches;
+  });
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)')
-    const update = () => setIsMobile(mq.matches)
-    update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
-  }, [])
+    const mq = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
 
-  return isMobile
-}
+  return isMobile;
+};
 
 /** true when motion should be kept minimal (mobile or reduced-motion). */
 const useLiteMode = () => {
-  const reduced = useReducedMotion()
-  const isMobile = useIsMobile()
-  return Boolean(reduced) || isMobile
-}
+  const reduced = useReducedMotion();
+  const isMobile = useIsMobile();
+  return Boolean(reduced) || isMobile;
+};
 
 // --------------------------------------------------
 // DATA
@@ -176,227 +184,238 @@ const useLiteMode = () => {
 
 const features = [
   {
-    number: '01',
+    number: "01",
     icon: BookOpen,
-    title: 'Chapter-based learning',
+    title: "Chapter-based learning",
     description:
-      'Explore Science 2 chapters, study individual topics, read learning material and continue practising from where you left off.',
-    tag: 'LEARN',
-    color: 'orange',
+      "Explore Science 2 chapters, study individual topics, read learning material and continue practising from where you left off.",
+    tag: "LEARN",
+    color: "orange",
   },
   {
-    number: '02',
+    number: "02",
     icon: Layers3,
-    title: 'Multiple question types',
+    title: "Multiple question types",
     description:
-      'Practise MCQs, True or False, Correlation, Odd Man Out, Match the Following, tables, diagrams, symbols and numericals.',
-    tag: 'PRACTICE',
-    color: 'blue',
+      "Practise MCQs, True or False, Correlation, Odd Man Out, Match the Following, tables, diagrams, symbols and numericals.",
+    tag: "PRACTICE",
+    color: "blue",
   },
   {
-    number: '03',
+    number: "03",
     icon: Brain,
-    title: 'Brain Cell rewards',
+    title: "Brain Cell rewards",
     description:
-      'Earn Brain Cells through eligible questions. Rewards are tracked separately to prevent repeated rewards for the same question.',
-    tag: 'REWARDS',
-    color: 'purple',
+      "Earn Brain Cells through eligible questions. Rewards are tracked separately to prevent repeated rewards for the same question.",
+    tag: "REWARDS",
+    color: "purple",
   },
   {
-    number: '04',
+    number: "04",
     icon: Flame,
-    title: 'Daily Streak',
+    title: "Daily Streak",
     description:
-      'Build a consistent learning habit with daily challenges, streak records, challenge accuracy and milestone rewards.',
-    tag: 'CONSISTENCY',
-    color: 'orange',
+      "Build a consistent learning habit with daily challenges, streak records, challenge accuracy and milestone rewards.",
+    tag: "CONSISTENCY",
+    color: "orange",
   },
   {
-    number: '05',
+    number: "05",
     icon: Swords,
-    title: 'Battle Mode',
+    title: "Battle Mode",
     description:
-      'Create or join live battle rooms, compete using room codes, answer timed questions and explore your battle results.',
-    tag: 'COMPETE',
-    color: 'red',
+      "Create or join live battle rooms, compete using room codes, answer timed questions and explore your battle results.",
+    tag: "COMPETE",
+    color: "red",
   },
   {
-    number: '06',
+    number: "06",
     icon: Trophy,
-    title: 'Leaderboards',
+    title: "Leaderboards",
     description:
-      'Explore overall and class rankings, compare Brain Cells and track your position within your learning community.',
-    tag: 'RANKINGS',
-    color: 'yellow',
+      "Explore overall and class rankings, compare Brain Cells and track your position within your learning community.",
+    tag: "RANKINGS",
+    color: "yellow",
   },
   {
-    number: '07',
+    number: "07",
     icon: Target,
-    title: 'Custom Test Builder',
+    title: "Custom Test Builder",
     description:
-      'Build personalised practice tests by selecting chapters, topics, question types and the number of questions.',
-    tag: 'TESTS',
-    color: 'blue',
+      "Build personalised practice tests by selecting chapters, topics, question types and the number of questions.",
+    tag: "TESTS",
+    color: "blue",
   },
   {
-    number: '08',
+    number: "08",
     icon: FileText,
-    title: 'Previous Year Questions',
+    title: "Previous Year Questions",
     description:
-      'Access previous year Science 2 question papers with year-wise browsing and month-wise paper organisation.',
-    tag: 'EXAM PREP',
-    color: 'purple',
+      "Access previous year Science 2 question papers with year-wise browsing and month-wise paper organisation.",
+    tag: "EXAM PREP",
+    color: "purple",
   },
   {
-    number: '09',
+    number: "09",
     icon: BarChart3,
-    title: 'Performance dashboard',
+    title: "Performance dashboard",
     description:
-      'Understand your learning through accuracy, activity graphs, performance trends, personal records and practice history.',
-    tag: 'ANALYTICS',
-    color: 'green',
+      "Understand your learning through accuracy, activity graphs, performance trends, personal records and practice history.",
+    tag: "ANALYTICS",
+    color: "green",
   },
   {
-    number: '10',
+    number: "10",
     icon: ChartNoAxesCombined,
-    title: 'Chapter & topic analysis',
+    title: "Chapter & topic analysis",
     description:
-      'Identify strong chapters, weaker topics, accuracy, attempts and the areas that need more revision.',
-    tag: 'INSIGHTS',
-    color: 'orange',
+      "Identify strong chapters, weaker topics, accuracy, attempts and the areas that need more revision.",
+    tag: "INSIGHTS",
+    color: "orange",
   },
   {
-    number: '11',
+    number: "11",
     icon: History,
-    title: 'Progress history',
+    title: "Progress history",
     description:
-      'Review saved attempts, question-level answers, test results, chapter breakdowns and reward history.',
-    tag: 'HISTORY',
-    color: 'blue',
+      "Review saved attempts, question-level answers, test results, chapter breakdowns and reward history.",
+    tag: "HISTORY",
+    color: "blue",
   },
   {
-    number: '12',
+    number: "12",
     icon: Gauge,
-    title: 'Answering speed',
+    title: "Answering speed",
     description:
-      'Analyse response time, average speed, median time and the time taken for correct and incorrect answers when available.',
-    tag: 'SPEED',
-    color: 'green',
+      "Analyse response time, average speed, median time and the time taken for correct and incorrect answers when available.",
+    tag: "SPEED",
+    color: "green",
   },
   {
-    number: '13',
+    number: "13",
     icon: UserRound,
-    title: 'Student profile',
+    title: "Student profile",
     description:
-      'Manage your personal information, profile image, class details, password and notification preferences.',
-    tag: 'PROFILE',
-    color: 'purple',
+      "Manage your personal information, profile image, class details, password and notification preferences.",
+    tag: "PROFILE",
+    color: "purple",
   },
   {
-    number: '14',
+    number: "14",
     icon: Users,
-    title: 'Class community',
+    title: "Class community",
     description:
-      'Access class information, notices, announcements, learning materials and class-based leaderboards according to your access.',
-    tag: 'COMMUNITY',
-    color: 'blue',
+      "Access class information, notices, announcements, learning materials and class-based leaderboards according to your access.",
+    tag: "COMMUNITY",
+    color: "blue",
   },
   {
-    number: '15',
+    number: "15",
     icon: MessageCircle,
-    title: 'Feedback & support',
+    title: "Feedback & support",
     description:
-      'Share feedback, submit ratings, report questions and request help whenever you need assistance.',
-    tag: 'SUPPORT',
-    color: 'orange',
+      "Share feedback, submit ratings, report questions and request help whenever you need assistance.",
+    tag: "SUPPORT",
+    color: "orange",
   },
-]
+];
 
 const steps = [
   {
-    number: '01',
+    number: "01",
     icon: UserRound,
-    title: 'Create your account',
-    text: 'Sign up or log in to access your personalised learning space.',
+    title: "Create your account",
+    text: "Sign up or log in to access your personalised learning space.",
   },
   {
-    number: '02',
+    number: "02",
     icon: BookOpen,
-    title: 'Choose what to learn',
-    text: 'Select a chapter, topic, custom test or daily challenge.',
+    title: "Choose what to learn",
+    text: "Select a chapter, topic, custom test or daily challenge.",
   },
   {
-    number: '03',
+    number: "03",
     icon: Zap,
-    title: 'Start practising',
-    text: 'Answer questions loaded from the learning database.',
+    title: "Start practising",
+    text: "Answer questions loaded from the learning database.",
   },
   {
-    number: '04',
+    number: "04",
     icon: CheckCircle2,
-    title: 'Get your results',
-    text: 'Your answers are checked and your results are recorded.',
+    title: "Get your results",
+    text: "Your answers are checked and your results are recorded.",
   },
   {
-    number: '05',
+    number: "05",
     icon: Brain,
-    title: 'Earn rewards',
-    text: 'Eligible activities update your Brain Cells and progress.',
+    title: "Earn rewards",
+    text: "Eligible activities update your Brain Cells and progress.",
   },
   {
-    number: '06',
+    number: "06",
     icon: LineChart,
-    title: 'Analyse performance',
-    text: 'Explore your accuracy, speed, attempts and improvement.',
+    title: "Analyse performance",
+    text: "Explore your accuracy, speed, attempts and improvement.",
   },
   {
-    number: '07',
+    number: "07",
     icon: Lightbulb,
-    title: 'Find weak areas',
-    text: 'Identify topics that need more attention and revision.',
+    title: "Find weak areas",
+    text: "Identify topics that need more attention and revision.",
   },
   {
-    number: '08',
+    number: "08",
     icon: RefreshCw,
-    title: 'Improve continuously',
-    text: 'Practise again and build stronger learning habits.',
+    title: "Improve continuously",
+    text: "Practise again and build stronger learning habits.",
   },
-]
+];
 
 // --------------------------------------------------
 // SHARED PRIMITIVES
 // --------------------------------------------------
 
-const Reveal = ({ children, className = '', variants = fadeUp, amount = 0.03, as = 'div' }) => {
-  const reduced = useReducedMotion()
-  const MotionTag = motion[as] || motion.div
+const Reveal = ({
+  children,
+  className = "",
+  variants = fadeUp,
+  amount = 0.03,
+  as = "div",
+}) => {
+  const reduced = useReducedMotion();
+  const MotionTag = motion[as] || motion.div;
 
-  if (reduced) return <div className={className}>{children}</div>
+  if (reduced) return <div className={className}>{children}</div>;
 
   return (
     <MotionTag
       className={className}
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, amount, margin: '0px 0px 120px 0px' }}
+      viewport={{ once: true, amount, margin: "0px 0px 120px 0px" }}
       variants={variants}
     >
       {children}
     </MotionTag>
-  )
-}
+  );
+};
 
-const StaggerGroup = ({ children, className = '', stagger = 0.04, amount = 0.03 }) => {
-  const reduced = useReducedMotion()
+const StaggerGroup = ({
+  children,
+  className = "",
+  stagger = 0.04,
+  amount = 0.03,
+}) => {
+  const reduced = useReducedMotion();
 
-  if (reduced) return <div className={className}>{children}</div>
+  if (reduced) return <div className={className}>{children}</div>;
 
   return (
     <motion.div
       className={className}
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, amount, margin: '0px 0px 120px 0px' }}
+      viewport={{ once: true, amount, margin: "0px 0px 120px 0px" }}
       variants={{
         hidden: {},
         visible: { transition: { staggerChildren: stagger } },
@@ -404,55 +423,55 @@ const StaggerGroup = ({ children, className = '', stagger = 0.04, amount = 0.03 
     >
       {children}
     </motion.div>
-  )
-}
+  );
+};
 
-const Counter = ({ value, suffix = '', className = '' }) => {
-  const ref = useRef(null)
-  const inView = useInView(ref, { once: true, amount: 0.3 })
-  const reduced = useReducedMotion()
-  const [display, setDisplay] = useState(0)
+const Counter = ({ value, suffix = "", className = "" }) => {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, amount: 0.3 });
+  const reduced = useReducedMotion();
+  const [display, setDisplay] = useState(0);
 
   useEffect(() => {
-    if (!inView) return
+    if (!inView) return;
     if (reduced) {
-      setDisplay(value)
-      return
+      setDisplay(value);
+      return;
     }
     const controls = animate(0, value, {
       duration: 1.1,
       ease: EASE,
       onUpdate: (v) => setDisplay(Math.round(v)),
-    })
-    return () => controls.stop()
-  }, [inView, value, reduced])
+    });
+    return () => controls.stop();
+  }, [inView, value, reduced]);
 
   return (
     <span ref={ref} className={className}>
       {display}
       {suffix}
     </span>
-  )
-}
+  );
+};
 
 const ScrollProgress = () => {
-  const { scrollYProgress } = useScroll()
+  const { scrollYProgress } = useScroll();
   const scaleX = useSpring(scrollYProgress, {
     stiffness: 160,
     damping: 30,
     restDelta: 0.001,
-  })
+  });
 
   return (
     <motion.div
       style={{ scaleX }}
       className="fixed inset-x-0 top-0 z-[60] h-[3px] origin-left bg-gradient-to-r from-orange-400 via-orange-500 to-amber-400"
     />
-  )
-}
+  );
+};
 
-const SectionHeading = ({ eyebrow, title, description, align = 'left' }) => {
-  const reduced = useReducedMotion()
+const SectionHeading = ({ eyebrow, title, description, align = "left" }) => {
+  const reduced = useReducedMotion();
 
   return (
     <motion.div
@@ -460,7 +479,9 @@ const SectionHeading = ({ eyebrow, title, description, align = 'left' }) => {
       whileInView={{ opacity: 1, y: 0 }}
       viewport={VIEWPORT_EARLY}
       transition={{ duration: 0.45, ease: EASE }}
-      className={align === 'center' ? 'mx-auto max-w-3xl text-center' : 'max-w-3xl'}
+      className={
+        align === "center" ? "mx-auto max-w-3xl text-center" : "max-w-3xl"
+      }
     >
       <span className="inline-flex items-center gap-2 rounded-full border border-orange-200/70 bg-orange-50/70 px-3.5 py-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-orange-700">
         <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
@@ -475,15 +496,15 @@ const SectionHeading = ({ eyebrow, title, description, align = 'left' }) => {
         {description}
       </p>
     </motion.div>
-  )
-}
+  );
+};
 
 const trackPointer = (event) => {
-  const el = event.currentTarget
-  const rect = el.getBoundingClientRect()
-  el.style.setProperty('--mx', `${event.clientX - rect.left}px`)
-  el.style.setProperty('--my', `${event.clientY - rect.top}px`)
-}
+  const el = event.currentTarget;
+  const rect = el.getBoundingClientRect();
+  el.style.setProperty("--mx", `${event.clientX - rect.left}px`);
+  el.style.setProperty("--my", `${event.clientY - rect.top}px`);
+};
 
 // --------------------------------------------------
 // MAIN PAGE
@@ -506,27 +527,27 @@ const Aboutpage = () => {
       <TransparencySection />
       <FinalCTASection />
     </main>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 01 · HERO
 // --------------------------------------------------
 
 const HeroSection = () => {
-  const reduced = useReducedMotion()
-  const lite = useLiteMode()
-  const ref = useRef(null)
+  const reduced = useReducedMotion();
+  const lite = useLiteMode();
+  const ref = useRef(null);
 
   const { scrollYProgress } = useScroll({
     target: ref,
-    offset: ['start start', 'end start'],
-  })
+    offset: ["start start", "end start"],
+  });
 
   // Parallax only when not lite; values stay at 0 otherwise (free of cost)
-  const textY = useTransform(scrollYProgress, [0, 1], [0, lite ? 0 : 30])
-  const visualY = useTransform(scrollYProgress, [0, 1], [0, lite ? 0 : 60])
-  const blobY = useTransform(scrollYProgress, [0, 1], [0, lite ? 0 : -40])
+  const textY = useTransform(scrollYProgress, [0, 1], [0, lite ? 0 : 30]);
+  const visualY = useTransform(scrollYProgress, [0, 1], [0, lite ? 0 : 60]);
+  const blobY = useTransform(scrollYProgress, [0, 1], [0, lite ? 0 : -40]);
 
   return (
     <section
@@ -582,8 +603,9 @@ const HeroSection = () => {
             transition={{ duration: 0.5, delay: 0.08, ease: EASE }}
             className="mt-7 max-w-xl text-[15px] leading-8 text-slate-500"
           >
-            Innovative Science 2 is an interactive Science 2 learning platform designed to
-            make practice meaningful, progress measurable and exam preparation more engaging.
+            Innovative Science 2 is an interactive Science 2 learning platform
+            designed to make practice meaningful, progress measurable and exam
+            preparation more engaging.
           </motion.p>
 
           <motion.div
@@ -637,7 +659,10 @@ const HeroSection = () => {
         </motion.div>
 
         {/* VISUAL */}
-        <motion.div style={{ y: visualY }} className="relative mx-auto w-full max-w-[520px]">
+        <motion.div
+          style={{ y: visualY }}
+          className="relative mx-auto w-full max-w-[520px]"
+        >
           <div className="absolute -inset-6 -z-10 rounded-[46px] bg-gradient-to-br from-orange-200/50 via-amber-100/40 to-transparent blur-xl md:blur-2xl" />
 
           <motion.div
@@ -671,7 +696,9 @@ const HeroSection = () => {
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-100">
                     Reward system
                   </p>
-                  <p className="mt-2 text-2xl font-black tracking-tight">Brain Cells</p>
+                  <p className="mt-2 text-2xl font-black tracking-tight">
+                    Brain Cells
+                  </p>
                   <p className="mt-1 text-[11px] text-orange-50/90">
                     Earn through eligible questions
                   </p>
@@ -690,10 +717,30 @@ const HeroSection = () => {
 
             {/* Mini grid */}
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <VisualCard icon={Flame} title="Daily Streak" description="Build consistency" tone="orange" />
-              <VisualCard icon={Swords} title="Battle Mode" description="Challenge others" tone="violet" />
-              <VisualCard icon={Trophy} title="Leaderboard" description="Track rankings" tone="amber" />
-              <VisualCard icon={BarChart3} title="Analytics" description="Understand growth" tone="sky" />
+              <VisualCard
+                icon={Flame}
+                title="Daily Streak"
+                description="Build consistency"
+                tone="orange"
+              />
+              <VisualCard
+                icon={Swords}
+                title="Battle Mode"
+                description="Challenge others"
+                tone="violet"
+              />
+              <VisualCard
+                icon={Trophy}
+                title="Leaderboard"
+                description="Track rankings"
+                tone="amber"
+              />
+              <VisualCard
+                icon={BarChart3}
+                title="Analytics"
+                description="Understand growth"
+                tone="sky"
+              />
             </div>
           </motion.div>
 
@@ -702,7 +749,11 @@ const HeroSection = () => {
             <>
               <motion.div
                 animate={{ y: [0, -10, 0], rotate: [0, 5, 0] }}
-                transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
+                transition={{
+                  duration: 5,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
                 className="absolute -right-3 top-24 hidden h-14 w-14 place-items-center rounded-2xl border border-orange-100 bg-white text-orange-500 shadow-xl shadow-orange-500/10 sm:grid"
               >
                 <Sparkles size={23} />
@@ -710,15 +761,23 @@ const HeroSection = () => {
 
               <motion.div
                 animate={{ y: [0, 8, 0] }}
-                transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
+                transition={{
+                  duration: 6,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
                 className="absolute -bottom-5 -left-4 hidden items-center gap-2.5 rounded-2xl border border-emerald-100 bg-white px-3.5 py-2.5 shadow-xl shadow-emerald-500/10 sm:flex"
               >
                 <span className="grid h-8 w-8 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
                   <CheckCircle2 size={17} />
                 </span>
                 <span>
-                  <span className="block text-[11px] font-black text-slate-900">Progress saved</span>
-                  <span className="block text-[10px] text-slate-400">Your learning history</span>
+                  <span className="block text-[11px] font-black text-slate-900">
+                    Progress saved
+                  </span>
+                  <span className="block text-[10px] text-slate-400">
+                    Your learning history
+                  </span>
                 </span>
               </motion.div>
             </>
@@ -739,16 +798,16 @@ const HeroSection = () => {
         </a>
       </div>
     </section>
-  )
-}
+  );
+};
 
 const VisualCard = ({ icon: Icon, title, description, tone }) => {
   const tones = {
-    orange: 'bg-orange-50 text-orange-600',
-    violet: 'bg-violet-50 text-violet-600',
-    amber: 'bg-amber-50 text-amber-600',
-    sky: 'bg-sky-50 text-sky-600',
-  }
+    orange: "bg-orange-50 text-orange-600",
+    violet: "bg-violet-50 text-violet-600",
+    amber: "bg-amber-50 text-amber-600",
+    sky: "bg-sky-50 text-sky-600",
+  };
 
   return (
     <div className="group rounded-2xl border border-slate-100 bg-white p-3.5 transition-all duration-300 hover:-translate-y-1 hover:border-orange-200 hover:shadow-lg hover:shadow-orange-500/10">
@@ -757,19 +816,21 @@ const VisualCard = ({ icon: Icon, title, description, tone }) => {
       >
         <Icon size={18} />
       </div>
-      <p className="mt-3 text-[13px] font-black tracking-tight text-slate-900">{title}</p>
+      <p className="mt-3 text-[13px] font-black tracking-tight text-slate-900">
+        {title}
+      </p>
       <p className="mt-0.5 text-[11px] text-slate-500">{description}</p>
     </div>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 02 · MARQUEE BAND
 // --------------------------------------------------
 
 const MarqueeBand = () => {
-  const reduced = useReducedMotion()
-  const items = features.map((f) => f.title)
+  const reduced = useReducedMotion();
+  const items = features.map((f) => f.title);
 
   return (
     <div className="ab-marquee relative overflow-hidden border-y border-slate-100 bg-gradient-to-r from-slate-50/80 via-white to-slate-50/80 py-4">
@@ -777,8 +838,8 @@ const MarqueeBand = () => {
       <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-white to-transparent sm:w-28" />
 
       <div
-        className={`flex w-max ${reduced ? '' : 'ab-marquee-track'}`}
-        aria-hidden={reduced ? undefined : 'true'}
+        className={`flex w-max ${reduced ? "" : "ab-marquee-track"}`}
+        aria-hidden={reduced ? undefined : "true"}
       >
         {[0, 1].map((copy) => (
           <div key={copy} className="flex shrink-0 items-center">
@@ -795,19 +856,39 @@ const MarqueeBand = () => {
         ))}
       </div>
     </div>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 03 · PLATFORM INTRODUCTION
 // --------------------------------------------------
 
 const platformCards = [
-  { icon: BookOpen, title: 'Learn', description: 'Explore chapters, topics and study materials.', number: '01' },
-  { icon: Target, title: 'Practise', description: 'Solve different objective questions and tests.', number: '02' },
-  { icon: Trophy, title: 'Compete', description: 'Participate in battles and explore rankings.', number: '03' },
-  { icon: LineChart, title: 'Improve', description: 'Understand your performance and revise better.', number: '04' },
-]
+  {
+    icon: BookOpen,
+    title: "Learn",
+    description: "Explore chapters, topics and study materials.",
+    number: "01",
+  },
+  {
+    icon: Target,
+    title: "Practise",
+    description: "Solve different objective questions and tests.",
+    number: "02",
+  },
+  {
+    icon: Trophy,
+    title: "Compete",
+    description: "Participate in battles and explore rankings.",
+    number: "03",
+  },
+  {
+    icon: LineChart,
+    title: "Improve",
+    description: "Understand your performance and revise better.",
+    number: "04",
+  },
+];
 
 const PlatformSection = () => {
   return (
@@ -828,7 +909,10 @@ const PlatformSection = () => {
           description="From learning individual concepts to analysing your exam preparation, everything comes together in one connected learning experience."
         />
 
-        <StaggerGroup className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4" stagger={0.05}>
+        <StaggerGroup
+          className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+          stagger={0.05}
+        >
           {platformCards.map((card) => (
             <motion.article
               key={card.number}
@@ -848,7 +932,9 @@ const PlatformSection = () => {
                 {card.title}
               </h3>
 
-              <p className="mt-2 text-[13px] leading-7 text-slate-500">{card.description}</p>
+              <p className="mt-2 text-[13px] leading-7 text-slate-500">
+                {card.description}
+              </p>
 
               <div className="mt-5 h-1 w-9 rounded-full bg-orange-400 transition-all duration-500 group-hover:w-16" />
             </motion.article>
@@ -856,21 +942,25 @@ const PlatformSection = () => {
         </StaggerGroup>
       </div>
     </section>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 04 · FEATURES
 // --------------------------------------------------
 
 const featureTones = {
-  orange: 'bg-orange-50 text-orange-600 group-hover:from-orange-500 group-hover:to-orange-600',
-  blue: 'bg-sky-50 text-sky-600 group-hover:from-sky-500 group-hover:to-blue-600',
-  purple: 'bg-violet-50 text-violet-600 group-hover:from-violet-500 group-hover:to-purple-600',
-  red: 'bg-rose-50 text-rose-600 group-hover:from-rose-500 group-hover:to-red-600',
-  yellow: 'bg-amber-50 text-amber-600 group-hover:from-amber-400 group-hover:to-orange-500',
-  green: 'bg-emerald-50 text-emerald-600 group-hover:from-emerald-500 group-hover:to-teal-600',
-}
+  orange:
+    "bg-orange-50 text-orange-600 group-hover:from-orange-500 group-hover:to-orange-600",
+  blue: "bg-sky-50 text-sky-600 group-hover:from-sky-500 group-hover:to-blue-600",
+  purple:
+    "bg-violet-50 text-violet-600 group-hover:from-violet-500 group-hover:to-purple-600",
+  red: "bg-rose-50 text-rose-600 group-hover:from-rose-500 group-hover:to-red-600",
+  yellow:
+    "bg-amber-50 text-amber-600 group-hover:from-amber-400 group-hover:to-orange-500",
+  green:
+    "bg-emerald-50 text-emerald-600 group-hover:from-emerald-500 group-hover:to-teal-600",
+};
 
 const FeaturesSection = () => {
   return (
@@ -917,11 +1007,11 @@ const FeaturesSection = () => {
         </StaggerGroup>
       </div>
     </section>
-  )
-}
+  );
+};
 
 const FeatureCard = ({ feature }) => {
-  const Icon = feature.icon
+  const Icon = feature.icon;
 
   return (
     <motion.article
@@ -950,7 +1040,9 @@ const FeatureCard = ({ feature }) => {
           {feature.title}
         </h3>
 
-        <p className="mt-2.5 text-[13px] leading-7 text-slate-500">{feature.description}</p>
+        <p className="mt-2.5 text-[13px] leading-7 text-slate-500">
+          {feature.description}
+        </p>
       </div>
 
       <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
@@ -964,23 +1056,39 @@ const FeatureCard = ({ feature }) => {
         />
       </div>
     </motion.article>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 05 · GAMIFICATION
 // --------------------------------------------------
 
 const gamificationPoints = [
-  { icon: Brain, title: 'Brain Cell rewards', text: 'Earn eligible rewards and monitor your accumulated Brain Cells.' },
-  { icon: Flame, title: 'Daily Streak challenges', text: 'Build a consistent practice routine and celebrate milestones.' },
-  { icon: Swords, title: 'Live Battle Mode', text: 'Challenge classmates and explore your battle performance.' },
-  { icon: Medal, title: 'Student leaderboards', text: 'Discover your ranking across the overall and class leaderboards.' },
-]
+  {
+    icon: Brain,
+    title: "Brain Cell rewards",
+    text: "Earn eligible rewards and monitor your accumulated Brain Cells.",
+  },
+  {
+    icon: Flame,
+    title: "Daily Streak challenges",
+    text: "Build a consistent practice routine and celebrate milestones.",
+  },
+  {
+    icon: Swords,
+    title: "Live Battle Mode",
+    text: "Challenge classmates and explore your battle performance.",
+  },
+  {
+    icon: Medal,
+    title: "Student leaderboards",
+    text: "Discover your ranking across the overall and class leaderboards.",
+  },
+];
 
 const GamificationSection = () => {
-  const reduced = useReducedMotion()
-  const lite = useLiteMode()
+  const reduced = useReducedMotion();
+  const lite = useLiteMode();
 
   return (
     <section className="relative overflow-hidden bg-gradient-to-b from-white via-orange-50/60 to-white py-20 sm:py-28">
@@ -1010,8 +1118,9 @@ const GamificationSection = () => {
           </h2>
 
           <p className="mt-6 max-w-lg text-[14px] leading-8 text-slate-500 sm:text-[15px]">
-            Learning becomes more engaging when students can see their achievements,
-            maintain consistency and understand how their performance changes over time.
+            Learning becomes more engaging when students can see their
+            achievements, maintain consistency and understand how their
+            performance changes over time.
           </p>
 
           <div className="mt-9 grid gap-5">
@@ -1076,7 +1185,11 @@ const GamificationSection = () => {
 
                 <motion.div
                   animate={lite ? {} : { scale: [1, 1.06, 1] }}
-                  transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+                  transition={{
+                    duration: 2.6,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  }}
                   className="grid h-14 w-14 place-items-center rounded-2xl bg-white text-orange-500 shadow-md shadow-orange-500/15"
                 >
                   <Flame size={28} />
@@ -1084,7 +1197,8 @@ const GamificationSection = () => {
               </div>
 
               <p className="relative mt-3 text-[11.5px] leading-6 text-slate-500">
-                Daily challenges, longest streak records, accuracy and milestone rewards.
+                Daily challenges, longest streak records, accuracy and milestone
+                rewards.
               </p>
             </div>
 
@@ -1092,14 +1206,22 @@ const GamificationSection = () => {
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div className="rounded-2xl border border-slate-100 bg-white p-4 transition-all duration-300 hover:-translate-y-1 hover:border-orange-200 hover:shadow-lg hover:shadow-orange-500/10">
                 <Brain size={22} className="text-orange-500" />
-                <p className="mt-3.5 text-[13px] font-black text-slate-900">Brain Cells</p>
-                <p className="mt-0.5 text-[11px] text-slate-400">Question rewards</p>
+                <p className="mt-3.5 text-[13px] font-black text-slate-900">
+                  Brain Cells
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  Question rewards
+                </p>
               </div>
 
               <div className="rounded-2xl border border-slate-100 bg-white p-4 transition-all duration-300 hover:-translate-y-1 hover:border-amber-200 hover:shadow-lg hover:shadow-amber-500/10">
                 <Trophy size={22} className="text-amber-500" />
-                <p className="mt-3.5 text-[13px] font-black text-slate-900">Leaderboard</p>
-                <p className="mt-0.5 text-[11px] text-slate-400">Class rankings</p>
+                <p className="mt-3.5 text-[13px] font-black text-slate-900">
+                  Leaderboard
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  Class rankings
+                </p>
               </div>
             </div>
 
@@ -1110,8 +1232,12 @@ const GamificationSection = () => {
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-black text-slate-900">Battle Mode</p>
-                <p className="mt-0.5 text-[11px] text-slate-400">Compete. Answer. Review.</p>
+                <p className="text-[13px] font-black text-slate-900">
+                  Battle Mode
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  Compete. Answer. Review.
+                </p>
               </div>
 
               <ArrowUpRight
@@ -1123,24 +1249,40 @@ const GamificationSection = () => {
         </motion.div>
       </div>
     </section>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 06 · ANALYTICS
 // --------------------------------------------------
 
 const analyticsPoints = [
-  { icon: Target, title: 'Accuracy tracking', text: 'Understand your correct and incorrect answers.' },
-  { icon: Clock3, title: 'Answering speed', text: 'Review average and median response times when available.' },
-  { icon: BookOpen, title: 'Chapter-wise analysis', text: 'Find strong chapters and topics that need revision.' },
-  { icon: RefreshCw, title: 'Improvement insights', text: 'Compare your recent performance with earlier attempts.' },
-]
+  {
+    icon: Target,
+    title: "Accuracy tracking",
+    text: "Understand your correct and incorrect answers.",
+  },
+  {
+    icon: Clock3,
+    title: "Answering speed",
+    text: "Review average and median response times when available.",
+  },
+  {
+    icon: BookOpen,
+    title: "Chapter-wise analysis",
+    text: "Find strong chapters and topics that need revision.",
+  },
+  {
+    icon: RefreshCw,
+    title: "Improvement insights",
+    text: "Compare your recent performance with earlier attempts.",
+  },
+];
 
-const chartBars = [32, 52, 42, 72, 57, 85, 68, 95, 76, 88, 63, 100]
+const chartBars = [32, 52, 42, 72, 57, 85, 68, 95, 76, 88, 63, 100];
 
 const AnalyticsSection = () => {
-  const reduced = useReducedMotion()
+  const reduced = useReducedMotion();
 
   return (
     <section className="relative overflow-hidden bg-white py-20 sm:py-28">
@@ -1172,14 +1314,17 @@ const AnalyticsSection = () => {
             </h2>
 
             <p className="mt-6 text-[14px] leading-8 text-slate-500 sm:text-[15px]">
-              Your performance dashboard turns saved practice records into meaningful
-              insights. Understand what is improving, what needs attention and where your
-              next practice session should begin.
+              Your performance dashboard turns saved practice records into
+              meaningful insights. Understand what is improving, what needs
+              attention and where your next practice session should begin.
             </p>
 
             <div className="mt-8 grid gap-4">
               {analyticsPoints.map((point) => (
-                <div key={point.title} className="group flex items-start gap-3.5">
+                <div
+                  key={point.title}
+                  className="group flex items-start gap-3.5"
+                >
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-100 bg-white text-orange-600 shadow-sm transition-all duration-300 group-hover:-translate-y-0.5 group-hover:border-orange-200 group-hover:shadow-md">
                     <point.icon size={18} />
                   </div>
@@ -1235,16 +1380,34 @@ const AnalyticsSection = () => {
               </div>
 
               <div className="mt-6 grid grid-cols-2 gap-3">
-                <MetricCard icon={BookOpen} title="Questions" subtitle="Total attempts" />
-                <MetricCard icon={Target} title="Accuracy" subtitle="Answer correctness" />
-                <MetricCard icon={Clock3} title="Response time" subtitle="Answering speed" />
-                <MetricCard icon={Flame} title="Streak" subtitle="Daily consistency" />
+                <MetricCard
+                  icon={BookOpen}
+                  title="Questions"
+                  subtitle="Total attempts"
+                />
+                <MetricCard
+                  icon={Target}
+                  title="Accuracy"
+                  subtitle="Answer correctness"
+                />
+                <MetricCard
+                  icon={Clock3}
+                  title="Response time"
+                  subtitle="Answering speed"
+                />
+                <MetricCard
+                  icon={Flame}
+                  title="Streak"
+                  subtitle="Daily consistency"
+                />
               </div>
 
               {/* Bars */}
               <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-[13px] font-black text-slate-800">Learning activity</p>
+                  <p className="text-[13px] font-black text-slate-800">
+                    Learning activity
+                  </p>
                   <span className="text-[9px] font-black tracking-[0.16em] text-slate-400">
                     VISUAL PREVIEW
                   </span>
@@ -1268,14 +1431,19 @@ const AnalyticsSection = () => {
                 </div>
 
                 <p className="mt-4 text-center text-[10px] leading-5 text-slate-400">
-                  Illustrative interface — actual dashboard data is based on saved attempts.
+                  Illustrative interface — actual dashboard data is based on
+                  saved attempts.
                 </p>
               </div>
 
               <div className="mt-3 flex items-start gap-3 rounded-xl bg-orange-50/80 p-4">
-                <Lightbulb size={19} className="mt-0.5 shrink-0 text-orange-500" />
+                <Lightbulb
+                  size={19}
+                  className="mt-0.5 shrink-0 text-orange-500"
+                />
                 <p className="text-[11.5px] leading-6 text-slate-600">
-                  Learning insights use rule-based calculations from your recorded performance.
+                  Learning insights use rule-based calculations from your
+                  recorded performance.
                 </p>
               </div>
             </div>
@@ -1283,8 +1451,8 @@ const AnalyticsSection = () => {
         </div>
       </div>
     </section>
-  )
-}
+  );
+};
 
 const MetricCard = ({ icon: Icon, title, subtitle }) => (
   <div className="group rounded-2xl border border-slate-100 bg-white p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md hover:shadow-orange-500/10">
@@ -1294,7 +1462,7 @@ const MetricCard = ({ icon: Icon, title, subtitle }) => (
     </div>
     <p className="mt-1.5 text-[10.5px] text-slate-400">{subtitle}</p>
   </div>
-)
+);
 
 // --------------------------------------------------
 // 07 · JOURNEY / HOW IT WORKS
@@ -1321,10 +1489,14 @@ const JourneySection = () => {
           stagger={0.045}
         >
           {steps.map((step, index) => {
-            const Icon = step.icon
+            const Icon = step.icon;
 
             return (
-              <motion.div key={step.number} variants={fadeUp} className="group relative">
+              <motion.div
+                key={step.number}
+                variants={fadeUp}
+                className="group relative"
+              >
                 <div className="relative mb-5 flex items-center justify-between">
                   <div className="grid h-14 w-14 place-items-center rounded-2xl border border-orange-100 bg-white text-orange-600 shadow-sm transition-all duration-300 group-hover:-translate-y-1 group-hover:border-transparent group-hover:bg-gradient-to-br group-hover:from-orange-500 group-hover:to-amber-500 group-hover:text-white">
                     <Icon size={24} />
@@ -1339,7 +1511,9 @@ const JourneySection = () => {
                   {step.title}
                 </h3>
 
-                <p className="mt-2 text-[13px] leading-7 text-slate-500">{step.text}</p>
+                <p className="mt-2 text-[13px] leading-7 text-slate-500">
+                  {step.text}
+                </p>
 
                 {index !== steps.length - 1 && (
                   <div className="absolute right-0 top-7 hidden translate-x-1/2 text-orange-200 lg:block">
@@ -1347,24 +1521,40 @@ const JourneySection = () => {
                   </div>
                 )}
               </motion.div>
-            )
+            );
           })}
         </StaggerGroup>
       </div>
     </section>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 08 · TRANSPARENCY
 // --------------------------------------------------
 
 const trustCards = [
-  { icon: ShieldCheck, title: 'Saved attempts', text: 'Practice history is maintained for performance analysis.' },
-  { icon: LockKeyhole, title: 'Reward tracking', text: 'Previously rewarded questions are tracked separately.' },
-  { icon: Clock3, title: 'Timing records', text: 'Response timing is available for attempts that recorded it.' },
-  { icon: RefreshCw, title: 'Separate challenges', text: 'Daily challenge performance is separate from regular chapter practice.' },
-]
+  {
+    icon: ShieldCheck,
+    title: "Saved attempts",
+    text: "Practice history is maintained for performance analysis.",
+  },
+  {
+    icon: LockKeyhole,
+    title: "Reward tracking",
+    text: "Previously rewarded questions are tracked separately.",
+  },
+  {
+    icon: Clock3,
+    title: "Timing records",
+    text: "Response timing is available for attempts that recorded it.",
+  },
+  {
+    icon: RefreshCw,
+    title: "Separate challenges",
+    text: "Daily challenge performance is separate from regular chapter practice.",
+  },
+];
 
 const TransparencySection = () => {
   return (
@@ -1385,8 +1575,8 @@ const TransparencySection = () => {
             </h2>
 
             <p className="mt-4 max-w-md text-[13.5px] leading-7 text-slate-500">
-              Performance insights are calculated from recorded learning activity, rather
-              than displaying random or invented results.
+              Performance insights are calculated from recorded learning
+              activity, rather than displaying random or invented results.
             </p>
           </Reveal>
 
@@ -1405,7 +1595,9 @@ const TransparencySection = () => {
                   <h3 className="text-[13.5px] font-black tracking-tight text-slate-900">
                     {card.title}
                   </h3>
-                  <p className="mt-1.5 text-[12px] leading-6 text-slate-500">{card.text}</p>
+                  <p className="mt-1.5 text-[12px] leading-6 text-slate-500">
+                    {card.text}
+                  </p>
                 </div>
               </motion.div>
             ))}
@@ -1413,15 +1605,15 @@ const TransparencySection = () => {
         </div>
       </div>
     </section>
-  )
-}
+  );
+};
 
 // --------------------------------------------------
 // 09 · FINAL CTA
 // --------------------------------------------------
 
 const FinalCTASection = () => {
-  const lite = useLiteMode()
+  const lite = useLiteMode();
 
   return (
     <section className="relative px-5 pb-20 pt-4 sm:px-8 sm:pb-28 lg:px-10">
@@ -1433,7 +1625,7 @@ const FinalCTASection = () => {
         {!lite && (
           <motion.div
             animate={{ rotate: 360 }}
-            transition={{ duration: 38, repeat: Infinity, ease: 'linear' }}
+            transition={{ duration: 38, repeat: Infinity, ease: "linear" }}
             className="pointer-events-none absolute right-10 top-10 hidden text-orange-300/60 sm:block"
           >
             <Sparkles size={62} />
@@ -1456,8 +1648,8 @@ const FinalCTASection = () => {
           </h2>
 
           <p className="mx-auto mt-6 max-w-xl text-[13.5px] leading-8 text-slate-500 sm:text-[15px]">
-            Start practising, discover your strengths, work on your weak areas and make
-            every learning session more meaningful.
+            Start practising, discover your strengths, work on your weak areas
+            and make every learning session more meaningful.
           </p>
 
           <div className="mt-9 flex flex-wrap justify-center gap-3">
@@ -1493,7 +1685,7 @@ const FinalCTASection = () => {
         </div>
       </div>
     </section>
-  )
-}
+  );
+};
 
-export default Aboutpage
+export default Aboutpage;
