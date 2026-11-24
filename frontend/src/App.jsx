@@ -30,6 +30,7 @@ const BattleRoomPage = lazy(() => import('./pages/BattleRoomPage'))
 const Improvementpage = lazy(() => import('./pages/Improvementpage'))
 const Identifysymbol = lazy(() => import('./pages/Identifysymbol'))
 const Homepage = lazy(() => import('./pages/Homepage'))
+const WelcomeAnimationPage = lazy(() => import('./pages/WelcomeAnimationPage'))
 const LeaderboardPage = lazy(() => import('./pages/LeaderboardPage'))
 const DailyStreakPage = lazy(() => import('./pages/DailyStreakPage'))
 const DailyPracticePage = lazy(() => import('./pages/DailyPracticePage'))
@@ -403,6 +404,25 @@ const AuthRequiredScreen = () => (
 
 const PageLoading = () => <LoadingState label="Preparing your science space" />
 
+const isFreshUrlVisit = () => {
+  if (typeof window === 'undefined') return false
+
+  const navigationEntry = window.performance?.getEntriesByType?.('navigation')?.[0]
+  if (navigationEntry) return navigationEntry.type === 'navigate'
+
+  return window.performance?.navigation?.type !== 1
+}
+
+const WelcomeGate = ({ showWelcome, onComplete }) => {
+  const completeWelcome = () => {
+    onComplete?.()
+  }
+
+  return showWelcome
+    ? <WelcomeAnimationPage onComplete={completeWelcome} />
+    : <Homepage />
+}
+
 const ProtectedRoute = ({ children }) => {
   const { loading } = useAuth()
 
@@ -416,7 +436,10 @@ const ProtectedRoute = ({ children }) => {
 const AppLayout = () => {
   const { pathname } = useLocation()
   const navigate = useNavigate()
+  const freshVisitRef = useRef(isFreshUrlVisit())
   const [auth, setAuth] = useState(() => getStoredAuth())
+  const [welcomeCompleted, setWelcomeCompleted] = useState(false)
+  const [showWelcome, setShowWelcome] = useState(() => pathname === '/' && freshVisitRef.current)
   const [showSigninReminder, setShowSigninReminder] = useState(false)
   const [siteNotice, setSiteNotice] = useState(null)
   const [globalBattleInvite, setGlobalBattleInvite] = useState(null)
@@ -430,6 +453,13 @@ const AppLayout = () => {
   const isDailyPracticeRoute = pathname === '/daily-streak/dailypractice'
   const showDailyRewards = Boolean(auth?.token && !auth?.user?.isAdmin && (pathname === '/' || isDailyStreakRoute))
   const isAuthRoute = pathname === '/signin' || pathname === '/signup'
+  const isWelcomeScreen = pathname === '/' && showWelcome
+
+  useEffect(() => {
+    if (pathname === '/' && freshVisitRef.current && !welcomeCompleted) {
+      setShowWelcome(true)
+    }
+  }, [pathname, welcomeCompleted])
   const seo = getSeoFromPathname(pathname)
   const siteNoticeKey = siteNotice?.id ? `${siteNotice.id}:${siteNotice.updatedAt || ''}` : ''
   const showSiteNotice = Boolean(siteNotice?.message && !isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && siteNoticeKey && dismissedNoticeKey !== siteNoticeKey)
@@ -781,9 +811,9 @@ const AppLayout = () => {
         noindex={seo.noindex}
         canonicalPath={pathname}
       />
-      <RankNotifier />
-      <StudentMessagePopup />
-      <DailyRewardsPopup enabled={showDailyRewards} showButton={isDailyStreakRoute} />
+      {!isWelcomeScreen && <RankNotifier />}
+      {!isWelcomeScreen && <StudentMessagePopup />}
+      {!isWelcomeScreen && <DailyRewardsPopup enabled={showDailyRewards} showButton={isDailyStreakRoute} />}
       {globalBattleInvite && (
         <div className="fixed inset-0 z-[999] grid place-items-center bg-slate-950/35 px-4 py-6 backdrop-blur-md">
           <div className="battle-invite-pop relative w-full max-w-md overflow-hidden rounded-[2rem] border border-orange-200 bg-white p-5 shadow-[0_30px_110px_rgba(255,105,0,.3)] sm:p-7">
@@ -811,9 +841,9 @@ const AppLayout = () => {
           <button type="button" onClick={() => { setGlobalFriendRequest(null); navigate('/battle-mode'); }} className="mt-3 h-9 w-full rounded-xl bg-slate-950 text-xs font-black text-white transition hover:bg-cyan-700">View request</button>
         </div>
       )}
-      {!isObjectivePracticeRoute && !isBattleRoute && <Navbar />}
-      <div className={isObjectivePracticeRoute || isBattleRoute ? '' : 'pt-24'}>
-        {showSiteNotice && (
+      {!isWelcomeScreen && !isObjectivePracticeRoute && !isBattleRoute && <Navbar />}
+      <div className={isWelcomeScreen || isObjectivePracticeRoute || isBattleRoute ? '' : 'pt-24'}>
+        {showSiteNotice && !isWelcomeScreen && (
           <SiteNoticeBanner
             message={siteNotice.message}
             messageHtml={siteNotice.messageHtml}
@@ -821,10 +851,21 @@ const AppLayout = () => {
             onClose={() => setDismissedNoticeKey(siteNoticeKey)}
           />
         )}
-        <main className="min-h-screen w-full bg-slate-50 text-slate-950">
+        <main className={isWelcomeScreen ? 'min-h-screen w-full' : 'min-h-screen w-full bg-slate-50 text-slate-950'}>
           <Suspense fallback={<PageLoading />}>
           <Routes key={activeScience}>
-          <Route path="/" element={<Homepage />} />
+          <Route
+            path="/"
+            element={
+              <WelcomeGate
+                showWelcome={showWelcome}
+                onComplete={() => {
+                  setWelcomeCompleted(true)
+                  setShowWelcome(false)
+                }}
+              />
+            }
+          />
           <Route path="/about" element={<Aboutpage />} />
           <Route path="/contact" element={<Contactpage />} />
           <Route path="/feedback" element={<Feedbackpage />} />
@@ -905,9 +946,9 @@ const AppLayout = () => {
           </Suspense>
         </main>
       </div>
-      {!isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && pathname !== '/notifications' && <div className="app-footer"><Footer /></div>}
-      {pathname === '/' && <HomeBottomNav />}
-      {showSigninReminder && !auth?.token && !isAuthRoute && (
+      {!isWelcomeScreen && !isObjectivePracticeRoute && !isBattleRoute && !isDailyStreakRoute && !isDailyPracticeRoute && pathname !== '/notifications' && <div className="app-footer"><Footer /></div>}
+      {!isWelcomeScreen && pathname === '/' && <HomeBottomNav />}
+      {!isWelcomeScreen && showSigninReminder && !auth?.token && !isAuthRoute && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[2rem] border border-white/70 bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
