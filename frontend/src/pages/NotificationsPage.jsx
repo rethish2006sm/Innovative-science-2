@@ -1,5 +1,4 @@
-
-import { Bell, Check, Trash2, X } from 'lucide-react'
+import { Bell, Check, Trash2, X, Inbox, AlertCircle, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiRequest } from '../api'
 import LoadingState from '../components/LoadingState'
@@ -277,11 +276,15 @@ const NotificationsPage = () => {
     return <LoadingState label="Gathering your alerts" />
   }
 
+  const isReward = (item) =>
+    item.type === '100_DAY_REWARD_CLAIMED'
+
   return (
     <section
       className="
         box-border min-h-screen w-full min-w-0
-        overflow-x-clip bg-slate-50
+        overflow-x-clip bg-gradient-to-b
+        from-slate-50 via-white to-cyan-50/40
         px-3 pb-24 pt-2 text-slate-950
         select-none sm:px-5 sm:pt-4
       "
@@ -291,27 +294,55 @@ const NotificationsPage = () => {
 
         {/* FIXED NOTIFICATION HEADER */}
         <header
-          className="
+          className={`
             sticky top-24 z-50
             mb-4 flex w-full min-w-0
             flex-wrap items-center justify-between
-            gap-2 rounded-2xl border border-slate-200
-            bg-white/95 px-3 py-3
-            shadow-lg shadow-slate-200/50
-            backdrop-blur-xl
+            gap-2 rounded-3xl border px-3 py-3
+            shadow-lg backdrop-blur-xl
             transition-all duration-300
-            sm:flex-nowrap sm:gap-4 sm:px-5
-          "
+            sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-4
+            ${
+              selectionMode
+                ? 'border-cyan-200 bg-gradient-to-r from-cyan-50/95 via-white/95 to-cyan-50/95 shadow-cyan-200/40'
+                : 'border-slate-200/80 bg-white/90 shadow-slate-200/50'
+            }
+          `}
         >
-          {/* Title */}
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-black tracking-tight sm:text-2xl">
-              Notifications
-            </h1>
+          {/* Title block */}
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div
+              className={`
+                relative grid h-11 w-11 shrink-0
+                place-items-center rounded-2xl
+                transition-all duration-300
+                sm:h-12 sm:w-12
+                ${
+                  unreadCount > 0
+                    ? 'bg-gradient-to-br from-cyan-500 to-emerald-500 text-white shadow-lg shadow-cyan-200/60'
+                    : 'bg-slate-100 text-slate-500'
+                }
+              `}
+            >
+              <Bell className="h-5 w-5 sm:h-6 sm:w-6" />
+              {unreadCount > 0 && (
+                <span className="absolute -right-1 -top-1 grid h-5 min-w-[1.25rem] place-items-center rounded-full border-2 border-white bg-rose-500 px-1 text-[9px] font-black text-white shadow-sm">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </div>
 
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500 sm:text-xs">
-              {unreadCount} unread notifications
-            </p>
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-lg font-black tracking-tight sm:text-2xl">
+                Notifications
+              </h1>
+
+              <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-500 sm:text-xs">
+                {unreadCount > 0
+                  ? `${unreadCount} new update${unreadCount === 1 ? '' : 's'} waiting`
+                  : "You're all caught up"}
+              </p>
+            </div>
           </div>
 
           {/* Selection actions */}
@@ -321,16 +352,17 @@ const NotificationsPage = () => {
               justify-end gap-1.5
               sm:w-auto sm:gap-2
             ">
-
               <button
                 type="button"
                 onClick={selectAll}
                 className="
                   min-h-9 min-w-0 rounded-full
-                  bg-slate-100 px-3 py-2
+                  border border-slate-200
+                  bg-white px-3 py-2
                   text-[10px] font-bold
-                  text-slate-700
-                  transition-colors hover:bg-slate-200
+                  text-slate-700 shadow-sm
+                  transition-all hover:border-slate-300
+                  hover:bg-slate-50
                   active:scale-95 sm:text-xs
                 "
               >
@@ -344,13 +376,17 @@ const NotificationsPage = () => {
                 className="
                   inline-flex min-h-9 min-w-0
                   items-center justify-center gap-1.5
-                  rounded-full bg-rose-600
+                  rounded-full bg-gradient-to-r
+                  from-rose-500 to-rose-600
                   px-3 py-2 text-[10px]
                   font-bold text-white
-                  transition-all hover:bg-rose-700
+                  shadow-md shadow-rose-200/60
+                  transition-all hover:from-rose-600
+                  hover:to-rose-700
                   active:scale-95
                   disabled:cursor-not-allowed
-                  disabled:opacity-50 sm:text-xs
+                  disabled:opacity-50
+                  disabled:shadow-none sm:text-xs
                 "
               >
                 <Trash2 size={14} />
@@ -377,10 +413,13 @@ const NotificationsPage = () => {
             </div>
           ) : (
             <span className="
-              shrink-0 text-right
-              text-[10px] font-semibold
-              text-slate-400 sm:text-xs
+              inline-flex shrink-0 items-center gap-1.5
+              rounded-full bg-slate-100
+              px-2.5 py-1 text-[10px]
+              font-semibold text-slate-500
+              sm:text-xs
             ">
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
               Long press to select
             </span>
           )}
@@ -389,11 +428,14 @@ const NotificationsPage = () => {
         {/* ERROR MESSAGE */}
         {error && (
           <div className="
-            mb-3 rounded-xl border border-rose-200
-            bg-rose-50 p-3 text-xs font-semibold
-            text-rose-700
+            mb-3 flex items-start gap-2
+            rounded-2xl border border-rose-200
+            bg-rose-50 p-3 text-xs
+            font-semibold text-rose-700
+            shadow-sm shadow-rose-100
           ">
-            {error}
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
           </div>
         )}
 
@@ -413,6 +455,8 @@ const NotificationsPage = () => {
                     notifications[index - 1].createdAt
                   )
 
+              const reward = isReward(notification)
+
               return (
                 <div
                   key={notification._id}
@@ -422,27 +466,28 @@ const NotificationsPage = () => {
                     duration-300
                   "
                 >
-
                   {/* DATE DIVIDER */}
                   {showDate && (
                     <div className="
                       mb-3 mt-5 flex items-center gap-3
                       first:mt-1
                     ">
-                      <div className="h-px flex-1 bg-slate-200" />
+                      <div className="h-px flex-1 bg-gradient-to-r from-transparent to-slate-200" />
 
                       <span className="
                         shrink-0 rounded-full
-                        bg-slate-200/70 px-3 py-1
+                        border border-slate-200/70
+                        bg-white px-3 py-1
                         text-[10px] font-bold
-                        text-slate-500 sm:text-xs
+                        text-slate-500 shadow-sm
+                        sm:text-xs
                       ">
                         {notificationDateLabel(
                           notification.createdAt
                         )}
                       </span>
 
-                      <div className="h-px flex-1 bg-slate-200" />
+                      <div className="h-px flex-1 bg-gradient-to-l from-transparent to-slate-200" />
                     </div>
                   )}
 
@@ -458,18 +503,32 @@ const NotificationsPage = () => {
                       event.preventDefault()
                     }
                     className={`
-                      relative box-border w-full min-w-0
-                      overflow-hidden rounded-2xl
-                      border transition-all duration-200
+                      group relative box-border
+                      w-full min-w-0 overflow-hidden
+                      rounded-2xl border
+                      transition-all duration-200
                       ${
                         selected
-                          ? 'border-cyan-500 bg-cyan-50 ring-2 ring-cyan-200 shadow-md'
+                          ? 'border-cyan-500 bg-gradient-to-r from-cyan-50 to-white ring-2 ring-cyan-200 shadow-md shadow-cyan-100'
                           : notification.readAt
-                            ? 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
-                            : 'border-cyan-200 bg-white shadow-sm hover:shadow-md'
+                            ? 'border-slate-200/80 bg-white hover:border-slate-300 hover:shadow-md'
+                            : reward
+                              ? 'border-amber-200 bg-gradient-to-r from-amber-50/70 via-white to-white shadow-sm hover:shadow-md'
+                              : 'border-cyan-100 bg-gradient-to-r from-cyan-50/60 via-white to-white shadow-sm hover:border-cyan-200 hover:shadow-md'
                       }
                     `}
                   >
+                    {/* Left accent for unread */}
+                    {!notification.readAt && !selected && (
+                      <span
+                        aria-hidden="true"
+                        className={`
+                          absolute bottom-2 left-0 top-2
+                          w-1 rounded-r-full
+                          ${reward ? 'bg-gradient-to-b from-amber-400 to-orange-500' : 'bg-gradient-to-b from-cyan-400 to-emerald-500'}
+                        `}
+                      />
+                    )}
 
                     <button
                       type="button"
@@ -482,12 +541,11 @@ const NotificationsPage = () => {
                       className="
                         flex w-full min-w-0
                         items-start gap-3
-                        p-3 text-left
+                        p-3 pl-4 text-left
                         transition-colors duration-200
-                        sm:gap-4 sm:p-4
+                        sm:gap-4 sm:p-4 sm:pl-5
                       "
                     >
-
                       {/* ICON */}
                       <span
                         className={`
@@ -498,15 +556,19 @@ const NotificationsPage = () => {
                           sm:h-12 sm:w-12
                           ${
                             selected
-                              ? 'bg-cyan-600 text-white'
+                              ? 'bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-lg shadow-cyan-200/70'
                               : notification.readAt
                                 ? 'bg-slate-100 text-slate-500'
-                                : 'bg-cyan-50 text-cyan-600'
+                                : reward
+                                  ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-lg shadow-amber-200/70'
+                                  : 'bg-gradient-to-br from-cyan-500 to-emerald-500 text-white shadow-lg shadow-cyan-200/70'
                           }
                         `}
                       >
                         {selected ? (
                           <Check size={19} />
+                        ) : reward ? (
+                          <Sparkles size={19} />
                         ) : (
                           <Bell size={19} />
                         )}
@@ -517,7 +579,7 @@ const NotificationsPage = () => {
                               absolute -right-0.5 -top-0.5
                               h-2.5 w-2.5 rounded-full
                               border-2 border-white
-                              bg-cyan-500
+                              bg-rose-500
                             " />
                           )}
                       </span>
@@ -533,7 +595,7 @@ const NotificationsPage = () => {
                           <h2 className="
                             min-w-0 flex-1
                             break-words
-                            text-[13px] font-bold
+                            text-[13px] font-black
                             leading-5 text-slate-900
                             sm:text-[15px] sm:leading-6
                           ">
@@ -545,17 +607,23 @@ const NotificationsPage = () => {
                               grid h-5 w-5 shrink-0
                               place-items-center rounded-full
                               bg-cyan-600 text-white
+                              shadow-sm shadow-cyan-200
                             ">
                               <Check size={12} />
                             </span>
                           ) : !notification.readAt ? (
-                            <span className="
-                              shrink-0 rounded-full
-                              bg-cyan-100 px-2 py-1
+                            <span className={`
+                              inline-flex shrink-0 items-center gap-1
+                              rounded-full px-2 py-1
                               text-[8px] font-black
-                              uppercase tracking-wide
-                              text-cyan-700 sm:text-[9px]
-                            ">
+                              uppercase tracking-wider
+                              shadow-sm
+                              sm:text-[9px]
+                              ${reward
+                                ? 'bg-gradient-to-r from-amber-400 to-orange-500 text-white shadow-amber-200/60'
+                                : 'bg-gradient-to-r from-cyan-500 to-emerald-500 text-white shadow-cyan-200/60'}
+                            `}>
+                              <span className="h-1 w-1 animate-pulse rounded-full bg-white" />
                               New
                             </span>
                           ) : null}
@@ -589,7 +657,7 @@ const NotificationsPage = () => {
                     {notification.type ===
                       '100_DAY_REWARD_CLAIMED' &&
                       notification.link && (
-                        <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+                        <div className="px-3 pb-3 pl-4 sm:px-4 sm:pb-4 sm:pl-5">
                           <a
                             href={notification.link}
                             onClick={(event) =>
@@ -600,17 +668,20 @@ const NotificationsPage = () => {
                             }
                             className="
                               inline-flex max-w-full
-                              items-center rounded-full
-                              bg-cyan-50 px-3 py-2
+                              items-center gap-1.5
+                              rounded-full border
+                              border-amber-200
+                              bg-amber-50 px-3.5 py-2
                               text-[11px] font-bold
-                              text-cyan-700 underline
-                              decoration-cyan-300
-                              underline-offset-2
+                              text-amber-700
+                              shadow-sm
                               transition-colors
-                              hover:bg-cyan-100
+                              hover:border-amber-300
+                              hover:bg-amber-100
                               sm:text-xs
                             "
                           >
+                            <Sparkles size={13} />
                             Open and download your reward letter
                           </a>
                         </div>
@@ -624,30 +695,37 @@ const NotificationsPage = () => {
 
             /* EMPTY STATE */
             <div className="
-              flex min-h-[300px] flex-col
+              relative flex min-h-[320px] flex-col
               items-center justify-center
-              rounded-3xl border border-dashed
+              overflow-hidden rounded-3xl
+              border border-dashed
               border-slate-300 bg-white p-8
               text-center
             ">
+              {/* Decorative circles */}
+              <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="h-40 w-40 rounded-full bg-cyan-50/70" />
+                <div className="absolute h-24 w-24 rounded-full bg-cyan-100/60" />
+              </div>
+
               <div className="
-                grid h-16 w-16 place-items-center
-                rounded-2xl bg-slate-100
+                relative grid h-16 w-16 place-items-center
+                rounded-2xl bg-gradient-to-br
+                from-cyan-500 to-emerald-500
+                text-white
+                shadow-xl shadow-cyan-200/60
               ">
-                <Bell
-                  size={28}
-                  className="text-slate-400"
-                />
+                <Inbox size={28} />
               </div>
 
               <h2 className="
-                mt-4 text-base font-black text-slate-800
+                relative mt-5 text-lg font-black text-slate-800
               ">
                 You are all caught up
               </h2>
 
               <p className="
-                mt-1 text-xs text-slate-500 sm:text-sm
+                relative mt-1 text-xs text-slate-500 sm:text-sm
               ">
                 New updates will appear here.
               </p>
