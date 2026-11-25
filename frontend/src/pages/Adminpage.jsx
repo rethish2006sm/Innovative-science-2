@@ -187,7 +187,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
   const [messageSuccess, setMessageSuccess] = useState('')
   const [pushTitle, setPushTitle] = useState('')
   const [pushBody, setPushBody] = useState('')
-  const [pushLink, setPushLink] = useState('/#/')
+  const [pushLink, setPushLink] = useState('/')
   const [pushSending, setPushSending] = useState(false)
   const [pushError, setPushError] = useState('')
   const [pushSuccess, setPushSuccess] = useState('')
@@ -1094,7 +1094,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
           targetUserIds: [],
           title: pushTitle.trim(),
           body: pushBody.trim(),
-          link: pushLink.trim() || '/#/',
+          link: pushLink.trim() || '/',
         }),
       })
       const failureHint = data.push?.failures?.[0]?.reason ? ` Provider: ${data.push.failures[0].reason}` : ''
@@ -3155,7 +3155,7 @@ const Adminpage = ({ initialTab = 'students' }) => {
                             </label>
                             <label className="grid gap-2 text-sm font-bold text-slate-600">
                               Open link
-                              <input value={pushLink} onChange={(event) => setPushLink(event.target.value)} placeholder="/#/chapters" className="h-11 rounded-xl border border-slate-200 px-3 text-slate-900 outline-none focus:border-amber-400" />
+                              <input value={pushLink} onChange={(event) => setPushLink(event.target.value)} placeholder="/chapters" className="h-11 rounded-xl border border-slate-200 px-3 text-slate-900 outline-none focus:border-amber-400" />
                             </label>
                           </div>
                           <label className="grid gap-2 text-sm font-bold text-slate-600">

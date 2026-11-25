@@ -1630,7 +1630,7 @@ const getScheduledReminderCandidates = (name, facts) => {
   return [...new Set(candidates)]
 }
 
-const sendVerifiedPushToUsers = async ({ recipients, title, source, link = '/#/', messageForUser }) => {
+const sendVerifiedPushToUsers = async ({ recipients, title, source, link = '/', messageForUser }) => {
   const userIds = recipients.map((recipient) => recipient._id)
   if (!userIds.length) return { sent: 0, registered: 0, skipped: 0 }
   const existing = await Notification.find({ recipient: { $in: userIds }, source }).select('recipient').lean()
@@ -1742,7 +1742,7 @@ const notifyNewClassPost = async (post) => {
     recipients,
     title: `${label} added`,
     source: `class-post-${post._id}`,
-    link: `/#/class/${post.classId}`,
+    link: `/class/${post.classId}`,
     messageForUser: (recipient) => `Hey ${recipient.name || 'Student'}, ${label.toLowerCase()} ${classDoc?.name ? `for ${classDoc.name}` : ''} is ready. Dekho, phir smart study karo 😄`,
   })
 }
@@ -4810,7 +4810,7 @@ app.post('/api/daily-streak/milestone-100/claim', authRequired, async (req, res)
     })
     await streak.save()
     const claim = streak.rewardClaims[streak.rewardClaims.length - 1]
-    const rewardPageLink = '/#/daily-streak'
+    const rewardPageLink = '/daily-streak'
     const notification = await Notification.create({
       recipient: req.user._id,
       type: '100_DAY_REWARD_CLAIMED',
@@ -9216,7 +9216,7 @@ app.post('/api/push/subscribe', authRequired, async (req, res) => {
       const welcomePush = await sendWebPushToUsers([req.user._id], {
         title: welcome.title,
         body: welcome.message,
-        url: welcome.link || '/#/',
+        url: welcome.link || '/',
         tag: welcome.source,
       })
       if (welcomePush.sent) await Notification.updateOne({ _id: welcome._id }, { $set: { pushSentAt: new Date() } })
@@ -9236,7 +9236,7 @@ app.post('/api/push/device-message', authRequired, async (req, res) => {
     const endpoint = String(req.body?.endpoint || '').trim()
     const title = String(req.body?.title || '').trim().slice(0, 180)
     const body = String(req.body?.body || '').trim().slice(0, 2000)
-    const url = String(req.body?.url || '/#/').trim().slice(0, 500)
+    const url = String(req.body?.url || '/').trim().slice(0, 500)
     if (!endpoint || !title || !body) {
       return res.status(400).json({ message: 'A device endpoint, title, and message are required.' })
     }
@@ -9375,7 +9375,7 @@ app.post('/api/admin/notifications/ai-send', authRequired, adminRequired, async 
     const pushResult = await sendWebPushToUsers(recipients.map((recipient) => recipient._id), {
       title,
       body: template.replace(/\bStudent\b/g, 'there'),
-      url: '/#/notifications',
+      url: '/notifications',
       tag: 'content-update',
     })
     const popup = await Message.create({
@@ -9403,7 +9403,7 @@ app.post('/api/admin/push/send', authRequired, adminRequired, async (req, res) =
     const targetType = String(req.body?.targetType || 'all')
     const title = String(req.body?.title || '').trim().slice(0, 180)
     const body = String(req.body?.body || '').trim().slice(0, 2000)
-    const link = String(req.body?.link || '/#/').trim().slice(0, 500)
+    const link = String(req.body?.link || '/').trim().slice(0, 500)
     let recipients = []
 
     if (!title || !body) {
@@ -9614,14 +9614,14 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
       title: normalizedSubject || 'New message from Innovative Science 2',
       message: normalizedBody,
       bodyHtml: normalizedBodyHtml,
-      link: '/#/notifications',
+      link: '/notifications',
       source: `admin-popup-message-${messageDoc._id}`,
     })))
 
     const push = await sendWebPushToUsers(recipients.map((item) => item._id), {
       title: normalizedSubject || 'New message from Innovative Science 2',
       body: normalizedBody,
-      url: '/#/',
+      url: '/',
       tag: `admin-message-${messageDoc._id}`,
     })
 

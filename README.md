@@ -158,7 +158,7 @@ flowchart LR
 ### Frontend
 
 - Built with React 19 and Vite.
-- Uses `HashRouter` for client-side routing.
+- Uses `BrowserRouter` for client-side routing.
 - Uses `framer-motion` for transitions and polished UI behavior.
 - Uses `lucide-react` icons and Tailwind CSS v4 styling.
 - Stores authentication in browser `localStorage`.

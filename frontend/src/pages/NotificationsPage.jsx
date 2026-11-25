@@ -211,7 +211,7 @@ const NotificationsPage = () => {
     sessionStorage.setItem('open-100-day-reward', '1')
 
     window.location.assign(
-      notification.link || '/#/daily-streak'
+      notification.link || '/daily-streak'
     )
   }
 

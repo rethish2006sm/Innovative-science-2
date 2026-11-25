@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Footer from './components/Footer'
 import RankNotifier from './components/RankNotifier'
 import Navbar from './components/Navbar'
@@ -65,23 +65,6 @@ import { getActiveScience, SCIENCE_CHANGED_EVENT } from './science'
 
 const SITE_DESCRIPTION =
   'Innovative Science 2 helps students practice science chapters, solve objective questions, take tests, and track brain cell progress.'
-
-const normalizeToHashRoute = () => {
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  const { pathname, search, hash } = window.location
-
-  if (hash || pathname === '/' || pathname.startsWith('/api')) {
-    return false
-  }
-
-  const normalizedPath = pathname.replace(/\/+$/, '') || '/'
-  const nextUrl = `${window.location.origin}/#${normalizedPath}${search}`
-  window.location.replace(nextUrl)
-  return true
-}
 
 const getSeoFromPathname = (pathname) => {
   const normalizedPath = pathname.replace(/\/+$/, '') || '/'
@@ -992,16 +975,12 @@ const AppLayout = () => {
 }
 
 const App = () => {
-  if (normalizeToHashRoute()) {
-    return null
-  }
-
   return (
     <AuthProvider>
-      <HashRouter>
+      <BrowserRouter>
         <ScrollToTop />
         <AppLayout />
-      </HashRouter>
+      </BrowserRouter>
     </AuthProvider>
   )
 }

@@ -45,9 +45,9 @@ const buildCanonicalUrl = (canonicalPath) => {
   }
 
   const normalizedPath = `${canonicalPath || '/'}`.replace(/\/+$/, '') || '/'
-  const hashPath = normalizedPath === '/' ? '/' : normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
+  const routePath = normalizedPath === '/' ? '/' : normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
 
-  return `${window.location.origin}/#${hashPath}`
+  return `${window.location.origin}${routePath}`
 }
 
 const Seo = ({
@@ -60,7 +60,7 @@ const Seo = ({
   useEffect(() => {
     const previousTitle = document.title
     const fullTitle = title ? `${title} | ${SITE_NAME}` : SITE_NAME
-    const canonicalUrl = buildCanonicalUrl(canonicalPath || window.location.hash?.slice(1) || '/')
+    const canonicalUrl = buildCanonicalUrl(canonicalPath || window.location.pathname || '/')
     const robots = noindex ? 'noindex, nofollow' : 'index, follow'
 
     document.title = fullTitle

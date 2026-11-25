@@ -102,10 +102,10 @@ const StudentMessagePopup = () => {
     event.preventDefault()
     sessionStorage.setItem('open-100-day-reward', '1')
     dismissCurrentMessage()
-    if (window.location.hash === '#/daily-streak') {
+    if (window.location.pathname === '/daily-streak') {
       window.dispatchEvent(new Event('daily-streak:open-100-reward'))
     } else {
-      window.location.assign('/#/daily-streak')
+      window.location.assign('/daily-streak')
     }
   }
 
@@ -163,7 +163,7 @@ const StudentMessagePopup = () => {
                     className="student-rich-message mt-1.5 break-words text-sm leading-5 text-slate-600 [overflow-wrap:anywhere] [&_a]:text-cyan-700 [&_a]:underline [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:mb-1 [&_u]:underline [&_ul]:list-disc"
                     dangerouslySetInnerHTML={{ __html: activeMessage.bodyHtml || activeMessage.body || 'No announcement text was provided.' }}
                   />
-                  {(activeMessage.type === '100_DAY_REWARD_CLAIMED' || activeMessage.subject === '100-day reward claimed') && <a href="/#/daily-streak" onClick={openRewardMessageLink} className="mt-2 inline-flex font-bold text-cyan-700 underline underline-offset-2">Open and download your reward letter</a>}
+                  {(activeMessage.type === '100_DAY_REWARD_CLAIMED' || activeMessage.subject === '100-day reward claimed') && <a href="/daily-streak" onClick={openRewardMessageLink} className="mt-2 inline-flex font-bold text-cyan-700 underline underline-offset-2">Open and download your reward letter</a>}
                 </div>
 
                 <button

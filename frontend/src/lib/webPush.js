@@ -76,7 +76,7 @@ export const unregisterWebPush = async () => {
   return { subscribed: false }
 }
 
-export const sendCurrentDevicePush = async ({ title, body, url = '/#/' }) => {
+export const sendCurrentDevicePush = async ({ title, body, url = '/' }) => {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
     return { sent: false }
   }

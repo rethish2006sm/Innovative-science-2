@@ -279,7 +279,7 @@ const Topicspage = () => {
       sendCurrentDevicePush({
         title: 'Thank you for your feedback! ⭐',
         body: 'Your chapter rating was saved successfully.',
-        url: `/#/chapters/${chapterNumber}/topics`,
+        url: `/chapters/${chapterNumber}/topics`,
       }).catch(() => undefined)
       await refreshTopicFeedback()
       setIsFeedbackModalOpen(false)
